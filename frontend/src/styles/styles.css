@@ -1,0 +1,691 @@
+:root {
+  color-scheme: light;
+  --surface-primary: #f6f1e8;
+  --surface-secondary: #efe8dc;
+  --surface-elevated: #fffaf1;
+  --text-primary: #221d18;
+  --text-secondary: #62574c;
+  --text-tertiary: #8b7d6f;
+  --border-default: #d8cfc1;
+  --border-subtle: #e8dfd2;
+  --accent-primary: #6c4b2c;
+  --accent-hover: #8a5e36;
+  --status-success: #2f6a47;
+  --status-warning: #aa6a1f;
+  --status-error: #9e3f34;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --font-serif: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  --font-mono: "SFMono-Regular", "JetBrains Mono", Consolas, monospace;
+  font-family: var(--font-serif);
+  color: var(--text-primary);
+  background: var(--surface-primary);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--surface-primary);
+  overflow: hidden;
+}
+
+/* ---- 工作区外壳 ------------------------------------------------------- */
+
+.workspaceShell {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  background: var(--surface-primary);
+}
+
+/* ---- 顶部栏 ----------------------------------------------------------- */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 48px;
+  padding: 0 var(--space-5);
+  border-bottom: 1px solid var(--border-default);
+  background: var(--surface-secondary);
+  flex: 0 0 auto;
+}
+
+.topbarTitle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.topbarMark {
+  width: 10px;
+  height: 10px;
+  border: 1px solid var(--accent-primary);
+  background: var(--surface-elevated);
+}
+
+.topbarName {
+  font-size: 0.9375rem;
+  letter-spacing: 0.01em;
+}
+
+.topbarBadge {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+/* ---- 工作区网格 ------------------------------------------------------- */
+
+.workspace {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr) 340px;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ---- 共享面板 --------------------------------------------------------- */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 1px solid var(--border-default);
+  background: var(--surface-elevated);
+}
+
+.panelHeader {
+  padding: var(--space-4) var(--space-5) var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+  flex: 0 0 auto;
+}
+
+.panelLabel {
+  display: block;
+  margin-bottom: var(--space-1);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.panelTitle {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.panelBody {
+  padding: var(--space-4) var(--space-5);
+  overflow: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.panelHint {
+  margin: 0 0 var(--space-4);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
+
+/* 浏览器模式下的样片提示 */
+.panelHintBrowser {
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  opacity: 0.7;
+}
+
+/* ---- 队列面板 --------------------------------------------------------- */
+
+.queueList {
+  list-style: none;
+  margin: 0 0 var(--space-4);
+  padding: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+
+.queueItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-secondary);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.queueItem:hover {
+  border-color: var(--accent-primary);
+  background: var(--surface-elevated);
+}
+
+/* 缩略图：真实图片 */
+.queueThumbImg {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  border: 1px solid var(--border-default);
+  object-fit: cover;
+  border-radius: 2px;
+}
+
+/* 缩略图占位：加载失败时显示 */
+.queueThumbPlaceholder {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  border: 1px solid var(--border-default);
+  background: var(--surface-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 2px;
+}
+
+.queueThumbPlaceholderText {
+  font-family: var(--font-mono);
+  font-size: 0.5rem;
+  color: var(--text-tertiary);
+  letter-spacing: 0.02em;
+}
+
+.queueMeta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.queueName {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.queueSub {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.queueItem.isSelected {
+  border-color: var(--accent-primary);
+  background: var(--surface-elevated);
+}
+
+.queueSelectBadge {
+  flex: 0 0 auto;
+  padding: var(--space-1) var(--space-3);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+  pointer-events: none;
+}
+
+.queueItem.isSelected .queueSelectBadge {
+  color: var(--accent-primary);
+  font-weight: 600;
+}
+
+.queueActions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* ---- 预览面板 --------------------------------------------------------- */
+
+.previewPanel {
+  display: flex;
+  flex-direction: column;
+}
+
+.previewPanel .panelBody {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.previewFrame {
+  display: grid;
+  place-items: center;
+  flex: 1 1 auto;
+  min-height: 0;
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-secondary);
+  overflow: hidden;
+}
+
+.previewEmpty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-6);
+  text-align: center;
+  color: var(--text-tertiary);
+}
+
+.previewEmptyLabel {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.previewErrorLabel {
+  color: var(--status-error);
+}
+
+.previewEmptyHint {
+  font-size: 0.75rem;
+  max-width: 320px;
+  word-break: break-word;
+}
+
+.previewMetaRow {
+  margin-top: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+
+/* Canvas 即时预览容器 */
+.previewCanvasContainer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  height: 100%;
+}
+
+.previewCanvasWrapper {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.previewCanvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* 图片下方的元信息栏 */
+.previewMetaBar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-2) var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+  background: var(--surface-primary);
+  flex: 0 0 auto;
+}
+
+.previewMetaFileName {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+}
+
+/* 引擎同步状态标签 */
+.previewSyncBadge {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 1px var(--space-2);
+  border-radius: 2px;
+}
+
+.previewSyncSyncing {
+  color: var(--accent-primary);
+  border: 1px solid var(--accent-primary);
+}
+
+.previewSyncSynced {
+  color: var(--status-success);
+  border: 1px solid var(--status-success);
+}
+
+.previewSyncError {
+  color: var(--status-warning);
+  border: 1px solid var(--status-warning);
+}
+
+.previewSyncIdle {
+  display: none;
+}
+
+/* 导出按钮栏 */
+.previewExportBar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+  background: var(--surface-primary);
+  flex: 0 0 auto;
+}
+
+.previewExportButton {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.previewExportHint {
+  font-size: 0.6875rem;
+  line-height: 1.4;
+  color: var(--text-tertiary);
+}
+
+.previewExportSuccess {
+  color: var(--status-success);
+}
+
+.previewExportError {
+  color: var(--status-error);
+}
+
+/* ---- 设置面板 --------------------------------------------------------- */
+
+.settingGroup {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-subtle);
+}
+
+.settingLabel {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  padding: 0 var(--space-2);
+}
+
+.settingOption {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  font-size: 0.8125rem;
+  cursor: default;
+}
+
+.settingRow {
+  padding: var(--space-1) 0;
+}
+
+.settingFieldLabel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  cursor: default;
+}
+
+.settingCheckboxLabel {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  cursor: default;
+}
+
+.settingTextInput,
+.settingNumberInput,
+.settingSelect {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border-default);
+  background: var(--surface-elevated);
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+  outline: none;
+}
+
+.settingTextInput:focus,
+.settingNumberInput:focus,
+.settingSelect:focus {
+  border-color: var(--accent-primary);
+}
+
+.settingNumberInput {
+  width: 80px;
+}
+
+.settingColorInput {
+  width: 48px;
+  height: 28px;
+  padding: 1px;
+  border: 1px solid var(--border-default);
+  background: var(--surface-elevated);
+  cursor: default;
+}
+
+.settingsCapabilityHint {
+  margin: var(--space-2) 0 var(--space-3);
+  font-size: 0.6875rem;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
+
+/* ---- 按钮 ------------------------------------------------------------- */
+
+.ghostButton {
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--border-default);
+  background: var(--surface-elevated);
+  color: var(--text-secondary);
+  font-family: var(--font-serif);
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+
+.ghostButton:disabled {
+  color: var(--text-tertiary);
+  cursor: not-allowed;
+}
+
+/* ---- 状态栏 ----------------------------------------------------------- */
+
+.statusbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 30px;
+  padding: 0 var(--space-5);
+  border-top: 1px solid var(--border-default);
+  background: var(--surface-secondary);
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--text-secondary);
+}
+
+.statusbarGroup {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+}
+
+.statusbarItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.statusbarMeta {
+  letter-spacing: 0.04em;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid var(--border-default);
+  background: var(--surface-elevated);
+}
+
+.dotOk {
+  background: var(--status-success);
+  border-color: var(--status-success);
+}
+
+.dotErr {
+  background: var(--status-error);
+  border-color: var(--status-error);
+}
+
+.dotIdle {
+  background: var(--status-warning);
+  border-color: var(--status-warning);
+}
+
+/* ---- 模板列表 --------------------------------------------------------- */
+
+.templateList {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+
+.templateItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-secondary);
+  font-size: 0.75rem;
+}
+
+.templateName {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.templateDefaultBadge {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.04em;
+  color: var(--accent-primary);
+  border: 1px solid var(--accent-primary);
+  padding: 0 var(--space-1);
+  border-radius: 2px;
+}
+
+.templateActions {
+  display: flex;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+}
+
+.templateActions .ghostButton {
+  padding: var(--space-1) var(--space-2);
+  font-size: 0.6875rem;
+}
+
+.templateErrorRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: var(--status-error);
+}
+
+.templateErrorRow .ghostButton {
+  flex-shrink: 0;
+  margin-left: var(--space-2);
+}
+
+.templateNameRow {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.templateNameInput {
+  flex: 1;
+}
+
+/* ---- 队列文字覆盖标记 ------------------------------------------------ */
+
+.queueTextOverrideIndicator {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  color: var(--accent-primary);
+  vertical-align: super;
+}
+
+/* ---- 窄屏变体 --------------------------------------------------------- */
+
+@media (max-width: 1100px) {
+  .workspace {
+    grid-template-columns: 1fr;
+    overflow: auto;
+  }
+
+  .panel {
+    min-height: 320px;
+  }
+
+  .previewFrame {
+    min-height: 320px;
+  }
+}

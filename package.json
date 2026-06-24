@@ -1,0 +1,12 @@
+{
+  "name": "camera-border-app",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@9.0.0",
+  "scripts": {
+    "dev:frontend": "pnpm --filter frontend dev",
+    "dev:electron": "pnpm --filter electron dev",
+    "build:frontend": "pnpm --filter frontend build",
+    "typecheck": "pnpm --filter electron typecheck && pnpm --filter frontend typecheck"
+  }
+}
