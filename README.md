@@ -148,26 +148,7 @@ pnpm typecheck
 ```bash
 pnpm typecheck
 pnpm build:frontend
-```
-
-## 本地数据和忽略文件
-
-以下内容不会上传到 Git：
-
-- `photos/`：本地测试样片目录
-- `exports/`：本地导出结果目录
-- `node_modules/`
-- `dist/`
-- `target/`
-- `.idea/`
-- `.claude/`
-- `.github/modernize/`
-
-Electron 模式下，模板文件会保存在系统的 userData 目录中，例如 macOS 上通常位于：
-
-```text
-~/Library/Application Support/electron/templates.json
-```
+`````
 
 ## 当前边界
 
