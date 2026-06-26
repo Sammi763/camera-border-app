@@ -1,3 +1,4 @@
+import { registerAssetStorageIpc } from "./assetStorage.js"
 import { registerFileDialogIpc } from "./fileDialog.js"
 import { registerTemplateStorageIpc } from "./templateStorage.js"
 
@@ -9,4 +10,5 @@ import { registerTemplateStorageIpc } from "./templateStorage.js"
 export const registerAllIpc = (): void => {
   registerFileDialogIpc()
   registerTemplateStorageIpc()
+  registerAssetStorageIpc()
 }

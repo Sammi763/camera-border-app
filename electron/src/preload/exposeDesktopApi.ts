@@ -4,7 +4,8 @@ import { engineBaseUrl, engineManaged } from "../config/devMode.js"
 import {
   IPC_CHANNELS,
   type DesktopApi,
-  type DesktopRuntime
+  type DesktopRuntime,
+  type ImageSourceResult
 } from "../types/desktopApi.js"
 
 /**
@@ -29,6 +30,12 @@ export const exposeDesktopApi = (): void => {
   const api: DesktopApi = {
     selectImages: (): Promise<string[]> =>
       ipcRenderer.invoke(IPC_CHANNELS.SELECT_IMAGES),
+    selectImageSources: (): Promise<ImageSourceResult | null> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SELECT_IMAGE_SOURCES),
+    selectImageFiles: (): Promise<readonly string[]> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SELECT_IMAGE_FILES),
+    selectImageFolder: (): Promise<ImageSourceResult | null> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SELECT_IMAGE_FOLDER),
     selectExportPath: (defaultFileName: string): Promise<string | null> =>
       ipcRenderer.invoke(IPC_CHANNELS.SELECT_EXPORT_PATH, defaultFileName),
     selectExportDirectory: (): Promise<string | null> =>
@@ -36,7 +43,19 @@ export const exposeDesktopApi = (): void => {
     readTemplates: (): Promise<string> =>
       ipcRenderer.invoke(IPC_CHANNELS.READ_TEMPLATES),
     writeTemplates: (json: string): Promise<void> =>
-      ipcRenderer.invoke(IPC_CHANNELS.WRITE_TEMPLATES, json)
+      ipcRenderer.invoke(IPC_CHANNELS.WRITE_TEMPLATES, json),
+    readAssets: (): Promise<string> =>
+      ipcRenderer.invoke(IPC_CHANNELS.READ_ASSETS),
+    writeAssets: (json: string): Promise<void> =>
+      ipcRenderer.invoke(IPC_CHANNELS.WRITE_ASSETS, json),
+    readRolls: (): Promise<string> =>
+      ipcRenderer.invoke(IPC_CHANNELS.READ_ROLLS),
+    writeRolls: (json: string): Promise<void> =>
+      ipcRenderer.invoke(IPC_CHANNELS.WRITE_ROLLS, json),
+    exportTemplateJson: (defaultFileName: string, json: string): Promise<string | null> =>
+      ipcRenderer.invoke(IPC_CHANNELS.EXPORT_TEMPLATE_JSON, defaultFileName, json),
+    importTemplateJson: (): Promise<string | null> =>
+      ipcRenderer.invoke(IPC_CHANNELS.IMPORT_TEMPLATE_JSON)
   }
 
   contextBridge.exposeInMainWorld("desktopRuntime", runtime)

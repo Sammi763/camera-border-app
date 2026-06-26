@@ -3,6 +3,7 @@
   --surface-primary: #f6f1e8;
   --surface-secondary: #efe8dc;
   --surface-elevated: #fffaf1;
+  --surface-dark: #3a3530;
   --text-primary: #221d18;
   --text-secondary: #62574c;
   --text-tertiary: #8b7d6f;
@@ -94,16 +95,135 @@ body {
   color: var(--text-secondary);
 }
 
-/* ---- 工作区网格 ------------------------------------------------------- */
-
+/* ---- 工作区网格：左 / 中 / 右 ----------------------------------------- */
+/*
+ * 三栏用 flexbox + CSS 变量驱动宽度，便于拖拽手柄实时调整。
+ * --ws-left / --ws-right 由 WorkspacePage 以行内样式注入，并持久化到 sessionStorage。
+ * 右栏折叠时 --ws-right 收窄为竖条宽度，仍保留三栏轨道，避免布局跳动。
+ */
 .workspace {
-  display: grid;
-  grid-template-columns: 300px minmax(0, 1fr) 340px;
-  gap: var(--space-4);
-  padding: var(--space-4);
+  --ws-left: 280px;
+  --ws-right: 420px;
+  position: relative;
+  display: flex;
   flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
+}
+
+/* 左侧：源图片队列 */
+.workspaceLeft {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 var(--ws-left);
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid var(--border-default);
+  background: var(--surface-secondary);
+  overflow: hidden;
+}
+
+/* 中间：主预览（视觉中心，占据剩余空间） */
+.workspaceCenter {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* 右侧：检查器 */
+.workspaceRight {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 var(--ws-right);
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--border-default);
+  background: var(--surface-elevated);
+  overflow: hidden;
+}
+
+/* 拖拽分栏手柄：绝对定位覆盖在列边界上，不影响 flex 布局 */
+.resizeHandle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  z-index: 20;
+  cursor: col-resize;
+  background: transparent;
+  touch-action: none;
+}
+
+.resizeHandle::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  background: var(--border-default);
+  transition: background 0.15s;
+}
+
+.resizeHandle:hover,
+.resizeHandle:active {
+  background: rgba(108, 75, 44, 0.06);
+}
+
+.resizeHandle:hover::after,
+.resizeHandle:active::after {
+  background: var(--accent-primary);
+}
+
+/* 左手柄贴近左栏右边界 */
+.resizeHandleLeft {
+  left: calc(var(--ws-left) - 3.5px);
+}
+
+/* 右手柄贴近右栏左边界 */
+.resizeHandleRight {
+  right: calc(var(--ws-right) - 3.5px);
+}
+
+/* 右栏折叠后的竖条 */
+.collapsedRight {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  height: 100%;
+  padding: var(--space-3) 0;
+}
+
+.inspectorReopen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--text-tertiary);
+  writing-mode: vertical-rl;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  transition: color 0.15s;
+}
+
+.inspectorReopen:hover {
+  color: var(--accent-primary);
+}
+
+.inspectorReopenChevron {
+  writing-mode: horizontal-tb;
+  font-size: 0.75rem;
+  line-height: 1;
 }
 
 /* ---- 共享面板 --------------------------------------------------------- */
@@ -112,13 +232,12 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  border: 1px solid var(--border-default);
-  background: var(--surface-elevated);
+  border: none;
+  background: transparent;
 }
 
 .panelHeader {
-  padding: var(--space-4) var(--space-5) var(--space-3);
-  border-bottom: 1px solid var(--border-subtle);
+  padding: var(--space-3) var(--space-4) var(--space-2);
   flex: 0 0 auto;
 }
 
@@ -134,71 +253,331 @@ body {
 
 .panelTitle {
   margin: 0;
-  font-size: 1.125rem;
+  font-size: 0.9375rem;
   font-weight: 600;
 }
 
 .panelBody {
-  padding: var(--space-4) var(--space-5);
+  padding: var(--space-3) var(--space-4);
   overflow: auto;
   flex: 1 1 auto;
   min-height: 0;
 }
 
 .panelHint {
-  margin: 0 0 var(--space-4);
-  font-size: 0.8125rem;
+  margin: 0 0 var(--space-3);
+  font-size: 0.75rem;
   line-height: 1.5;
   color: var(--text-tertiary);
 }
 
-/* 浏览器模式下的样片提示 */
 .panelHintBrowser {
-  font-size: 0.75rem;
+  font-size: 0.6875rem;
   color: var(--text-tertiary);
   opacity: 0.7;
 }
 
+/* ---- 检查器面板 --------------------------------------------------------- */
+/*
+ * 检查器作为“工作面板”而非卡片堆叠：
+ * - 顶部固定标题条，承载“检查器”标识与折叠按钮。
+ * - 分组标题固定高度，点击整行切换展开，会话内记忆状态。
+ * - 分组之间仅用 1px 轻量分隔，无重边框、无强卡片化。
+ * - 分组标题层级用大写等宽小字，字段标签用正文字号，形成清晰层级。
+ */
+.inspectorPanel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+
+/* 顶部标题条：桌面应用风格，承载标题与折叠按钮 */
+.inspectorHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--space-4);
+  height: 40px;
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.inspectorHeaderTitle {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.inspectorHeaderLabel {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.inspectorHeaderName {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.inspectorCollapseButton {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border: 1px solid var(--border-default);
+  background: var(--surface-elevated);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.inspectorCollapseButton:hover {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}
+
+.inspectorBody {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* 轻量内边距，让分组分隔线更接近桌面应用 */
+  padding: var(--space-1) 0;
+}
+
+.inspectorSection {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.inspectorSection:last-child {
+  border-bottom: none;
+}
+
+/* 拖拽进行中：禁用文字选中，避免拖到 input 内误选文本 */
+.workspaceResizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+.workspaceResizing iframe,
+.workspaceResizing input,
+.workspaceResizing textarea,
+.workspaceResizing select {
+  pointer-events: none;
+}
+
+.inspectorSectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0 var(--space-4);
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  transition: background 0.15s, color 0.15s;
+  height: 34px;
+  flex-shrink: 0;
+}
+
+.inspectorSectionHeader:hover {
+  background: var(--surface-secondary);
+  color: var(--text-secondary);
+}
+
+.inspectorSectionHeader:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+
+.inspectorSectionLabel {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.inspectorSectionChevron {
+  font-size: 0.625rem;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+  line-height: 1;
+  transition: transform 0.18s ease;
+  transform: rotate(0deg);
+}
+
+.inspectorSectionOpen .inspectorSectionChevron {
+  transform: rotate(90deg);
+}
+
+/* 展开内容区用最大高度过渡，保证折叠/展开顺手且不跳布局 */
+.inspectorSectionBody {
+  padding: var(--space-2) var(--space-4) var(--space-4);
+  overflow: hidden;
+}
+
 /* ---- 队列面板 --------------------------------------------------------- */
+
+.queuePanel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.queuePanel .panelBody {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* 主导入区：两个等权主入口，紧凑分组 */
+.queueImportActions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* 主导入按钮：桌面感的主操作，hover 反转填色 */
+.queueImportButton {
+  width: 100%;
+  text-align: center;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  padding: var(--space-2) var(--space-4);
+  border: 1.5px solid var(--accent-primary);
+  background: var(--surface-elevated);
+  color: var(--accent-primary);
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.queueImportButton:hover {
+  background: var(--accent-primary);
+  color: var(--surface-elevated);
+}
+
+.queueImportButton:active {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+/* 浏览器降级按钮：弱化为次要操作 */
+.queueImportButtonFallback {
+  font-size: 0.6875rem;
+  font-weight: 400;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-tertiary);
+  opacity: 0.7;
+}
+
+.queueImportButtonFallback:hover {
+  opacity: 1;
+  border-color: var(--border-default);
+  color: var(--text-secondary);
+  background: var(--surface-elevated);
+}
+
+.queueEmptyHint {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6) var(--space-4);
+  text-align: center;
+}
+
+/* 浏览器降级：放在底部、弱化、明确是开发降级 */
+.queueBrowserFallback {
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px dashed var(--border-subtle);
+  background: var(--surface-primary);
+  flex: 0 0 auto;
+}
+
+.queueBrowserFallbackLabel {
+  font-family: var(--font-mono);
+  font-size: 0.5625rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  opacity: 0.6;
+  margin-bottom: var(--space-1);
+  display: block;
+}
+
+.queueFolderHint {
+  padding: var(--space-2) var(--space-4) 0;
+  font-size: 0.6875rem;
+  color: var(--status-warning);
+}
 
 .queueList {
   list-style: none;
-  margin: 0 0 var(--space-4);
-  padding: 0;
-  display: grid;
-  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .queueItem {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--border-subtle);
-  background: var(--surface-secondary);
+  padding: var(--space-2);
+  border: 1px solid transparent;
+  border-left: 3px solid transparent;
+  background: transparent;
   cursor: pointer;
-  transition: border-color 0.15s, background 0.15s;
+  transition: border-color 0.12s, background 0.12s;
+  border-radius: 2px;
 }
 
 .queueItem:hover {
-  border-color: var(--accent-primary);
-  background: var(--surface-elevated);
+  border-color: var(--border-default);
+  border-left-color: var(--border-default);
+  background: var(--surface-primary);
 }
 
-/* 缩略图：真实图片 */
+.queueItem:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+
 .queueThumbImg {
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  height: 44px;
   flex: 0 0 auto;
   border: 1px solid var(--border-default);
   object-fit: cover;
   border-radius: 2px;
+  background: var(--surface-primary);
 }
 
-/* 缩略图占位：加载失败时显示 */
 .queueThumbPlaceholder {
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  height: 44px;
   flex: 0 0 auto;
   border: 1px solid var(--border-default);
   background: var(--surface-primary);
@@ -224,15 +603,16 @@ body {
 
 .queueName {
   font-family: var(--font-mono);
-  font-size: 0.8125rem;
+  font-size: 0.75rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  color: var(--text-primary);
 }
 
 .queueSub {
   font-family: var(--font-mono);
-  font-size: 0.6875rem;
+  font-size: 0.625rem;
   letter-spacing: 0.04em;
   color: var(--text-tertiary);
   white-space: nowrap;
@@ -240,29 +620,44 @@ body {
   text-overflow: ellipsis;
 }
 
+/* 选中态：左侧粗条 + 轻底色，更明显 */
 .queueItem.isSelected {
   border-color: var(--accent-primary);
+  border-left: 3px solid var(--accent-primary);
   background: var(--surface-elevated);
 }
 
 .queueSelectBadge {
   flex: 0 0 auto;
-  padding: var(--space-1) var(--space-3);
+  padding: var(--space-1) var(--space-2);
   font-family: var(--font-mono);
-  font-size: 0.6875rem;
+  font-size: 0.625rem;
   letter-spacing: 0.04em;
   color: var(--text-tertiary);
   pointer-events: none;
+  opacity: 0.5;
 }
 
 .queueItem.isSelected .queueSelectBadge {
   color: var(--accent-primary);
   font-weight: 600;
+  opacity: 1;
 }
 
 .queueActions {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+  flex: 0 0 auto;
+}
+
+.queueCount {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--text-tertiary);
 }
 
 /* ---- 预览面板 --------------------------------------------------------- */
@@ -270,6 +665,7 @@ body {
 .previewPanel {
   display: flex;
   flex-direction: column;
+  height: 100%;
 }
 
 .previewPanel .panelBody {
@@ -277,6 +673,7 @@ body {
   flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
+  padding: 0;
 }
 
 .previewFrame {
@@ -284,8 +681,7 @@ body {
   place-items: center;
   flex: 1 1 auto;
   min-height: 0;
-  border: 1px solid var(--border-subtle);
-  background: var(--surface-secondary);
+  background: var(--surface-dark);
   overflow: hidden;
 }
 
@@ -293,8 +689,8 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-6);
+  gap: var(--space-3);
+  padding: var(--space-16);
   text-align: center;
   color: var(--text-tertiary);
 }
@@ -304,6 +700,8 @@ body {
   font-size: 0.8125rem;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+  color: var(--surface-primary);
+  opacity: 0.6;
 }
 
 .previewErrorLabel {
@@ -314,6 +712,7 @@ body {
   font-size: 0.75rem;
   max-width: 320px;
   word-break: break-word;
+  opacity: 0.5;
 }
 
 .previewMetaRow {
@@ -357,8 +756,7 @@ body {
   gap: var(--space-3);
   width: 100%;
   padding: var(--space-2) var(--space-4);
-  border-top: 1px solid var(--border-subtle);
-  background: var(--surface-primary);
+  background: var(--surface-dark);
   flex: 0 0 auto;
 }
 
@@ -366,11 +764,12 @@ body {
   font-family: var(--font-mono);
   font-size: 0.6875rem;
   letter-spacing: 0.04em;
-  color: var(--text-secondary);
+  color: var(--surface-primary);
+  opacity: 0.7;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 200px;
+  max-width: 300px;
 }
 
 /* 引擎同步状态标签 */
@@ -408,14 +807,24 @@ body {
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
-  border-top: 1px solid var(--border-subtle);
-  background: var(--surface-primary);
+  border-top: 1px solid var(--border-default);
+  background: var(--surface-secondary);
   flex: 0 0 auto;
+  flex-wrap: wrap;
 }
 
 .previewExportButton {
   flex: 0 0 auto;
   white-space: nowrap;
+}
+
+/* 导出状态文字：占据剩余空间，左对齐 */
+.previewExportStatus {
+  flex: 1 1 auto;
+  min-width: 120px;
+  font-size: 0.6875rem;
+  line-height: 1.4;
+  color: var(--text-tertiary);
 }
 
 .previewExportHint {
@@ -433,20 +842,39 @@ body {
 }
 
 /* ---- 设置面板 --------------------------------------------------------- */
+/*
+ * 检查器内字段不再用边框卡片堆叠。settingGroup 保留 fieldset/legend 语义，
+ * 但去掉边框，子标题用等宽小字 + 轻量下边线，字段行收紧间距。
+ */
+
+/* 设置面板内部容器：提供 padding 和滚动 */
+.settingsPanelInner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
 
 .settingGroup {
   margin: 0 0 var(--space-3);
-  padding: var(--space-3) var(--space-4);
-  border: 1px solid var(--border-subtle);
+  padding: 0;
+  border: none;
+}
+
+.settingGroup:last-child {
+  margin-bottom: 0;
 }
 
 .settingLabel {
+  display: block;
+  margin-bottom: var(--space-2);
+  padding-bottom: var(--space-1);
+  border-bottom: 1px solid var(--border-subtle);
   font-family: var(--font-mono);
-  font-size: 0.6875rem;
+  font-size: 0.625rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-tertiary);
-  padding: 0 var(--space-2);
+  padding-left: 0;
 }
 
 .settingOption {
@@ -462,6 +890,11 @@ body {
   padding: var(--space-1) 0;
 }
 
+/* 字段行：标签与输入可在同一行紧凑排列 */
+.settingRow.formInlineRow {
+  align-items: center;
+}
+
 .settingFieldLabel {
   display: flex;
   flex-direction: column;
@@ -475,6 +908,7 @@ body {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  padding: var(--space-1) 0;
   font-size: 0.8125rem;
   color: var(--text-secondary);
   cursor: default;
@@ -483,6 +917,7 @@ body {
 .settingTextInput,
 .settingNumberInput,
 .settingSelect {
+  width: 100%;
   padding: var(--space-1) var(--space-2);
   border: 1px solid var(--border-default);
   background: var(--surface-elevated);
@@ -490,6 +925,7 @@ body {
   font-size: 0.8125rem;
   color: var(--text-primary);
   outline: none;
+  transition: border-color 0.15s;
 }
 
 .settingTextInput:focus,
@@ -498,13 +934,14 @@ body {
   border-color: var(--accent-primary);
 }
 
+/* 数字输入收窄，避免独占整行 */
 .settingNumberInput {
-  width: 80px;
+  width: 96px;
 }
 
 .settingColorInput {
-  width: 48px;
-  height: 28px;
+  width: 100%;
+  height: 30px;
   padding: 1px;
   border: 1px solid var(--border-default);
   background: var(--surface-elevated);
@@ -512,7 +949,7 @@ body {
 }
 
 .settingsCapabilityHint {
-  margin: var(--space-2) 0 var(--space-3);
+  margin: var(--space-1) 0 var(--space-2);
   font-size: 0.6875rem;
   line-height: 1.5;
   color: var(--text-tertiary);
@@ -528,11 +965,17 @@ body {
   font-family: var(--font-serif);
   font-size: 0.8125rem;
   cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.ghostButton:hover {
+  border-color: var(--accent-primary);
 }
 
 .ghostButton:disabled {
   color: var(--text-tertiary);
   cursor: not-allowed;
+  border-color: var(--border-subtle);
 }
 
 /* ---- 状态栏 ----------------------------------------------------------- */
@@ -673,12 +1116,46 @@ body {
   vertical-align: super;
 }
 
-/* ---- 窄屏变体 --------------------------------------------------------- */
+/* ---- 响应式：窄屏堆叠 ------------------------------------------------- */
 
+/*
+ * 宽屏：三栏全部可用，右栏已默认 420px，可通过拖拽加宽到 560px。
+ * 中等宽度（≤1400px）：左栏略收窄、拖拽手柄仍可把右栏调宽，不强制折叠。
+ */
+
+/* 窄屏：单列堆叠，优先保证预览，其次队列，再其次检查器 */
 @media (max-width: 1100px) {
   .workspace {
-    grid-template-columns: 1fr;
+    flex-direction: column;
     overflow: auto;
+  }
+
+  .workspaceLeft,
+  .workspaceCenter,
+  .workspaceRight {
+    flex: 0 0 auto;
+  }
+
+  .workspaceLeft {
+    order: 2;
+    border-right: none;
+    border-bottom: 1px solid var(--border-default);
+  }
+
+  .workspaceCenter {
+    order: 1;
+    min-height: 60vh;
+  }
+
+  .workspaceRight {
+    order: 3;
+    border-left: none;
+    border-top: 1px solid var(--border-default);
+  }
+
+  /* 窄屏下禁用拖拽手柄，列宽由内容决定 */
+  .resizeHandle {
+    display: none;
   }
 
   .panel {
@@ -688,4 +1165,572 @@ body {
   .previewFrame {
     min-height: 320px;
   }
+}
+
+/* ---- 设置列（兼容旧样式引用） ----------------------------------------- */
+
+.settingsColumn {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-height: 0;
+  overflow: auto;
+}
+
+/* ---- Roll 面板 ---------------------------------------------------------- */
+
+.rollPanel {
+  flex: 0 0 auto;
+}
+
+.rollPanelInner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.rollList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.rollItem {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--surface-primary);
+}
+
+.rollItemInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.rollItemName {
+  font-weight: 600;
+  font-size: 0.9rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rollItemDetail {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rollItemActions {
+  display: flex;
+  gap: var(--space-1);
+  flex-shrink: 0;
+}
+
+.rollActions {
+  margin-bottom: var(--space-3);
+}
+
+.rollEditor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.rollEditorActions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.rollApplyRow {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.rollApplySelect {
+  min-width: 120px;
+}
+
+.rollFilmQuickPick {
+  display: flex;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+  margin-top: var(--space-1);
+}
+
+.rollFilmChip {
+  font-size: 0.7rem;
+  padding: 2px var(--space-2);
+}
+
+.rollFilmChipActive {
+  background: var(--accent-primary);
+  color: var(--surface-elevated);
+  border-color: var(--accent-primary);
+}
+
+/* ---- 变量插入面板 ------------------------------------------------------- */
+
+.variableButtons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-bottom: var(--space-2);
+}
+
+.variableChip {
+  font-size: 0.7rem;
+  padding: 2px var(--space-2);
+  font-family: var(--font-mono);
+}
+
+.variableQuickTemplates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-bottom: var(--space-2);
+}
+
+/* ---- 队列 Roll / 身份覆盖标记 ----------------------------------------- */
+
+.queueRollIndicator {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  color: var(--status-success);
+  vertical-align: super;
+  font-weight: 600;
+}
+
+.queueIdentityIndicator {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  color: var(--status-warning);
+  vertical-align: super;
+  font-weight: 600;
+}
+
+/* ---- 摄影资产库面板 ------------------------------------------------------- */
+
+.assetPanel {
+  flex: 0 0 auto;
+}
+
+.assetPanelInner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.assetTabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-bottom: var(--space-3);
+}
+
+.assetTab {
+  font-size: 0.7rem;
+  padding: 2px var(--space-2);
+}
+
+.assetTabActive {
+  background: var(--accent-primary);
+  color: var(--surface-elevated);
+  border-color: var(--accent-primary);
+}
+
+.assetContent {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.assetItem {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-primary);
+  font-size: 0.75rem;
+}
+
+.assetItemInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.assetItemLabel {
+  font-weight: 600;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.assetItemDetail {
+  font-size: 0.6875rem;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.assetItemActions {
+  display: flex;
+  gap: var(--space-1);
+  flex-shrink: 0;
+}
+
+.assetItemActions .ghostButton {
+  padding: 1px var(--space-2);
+  font-size: 0.6875rem;
+}
+
+.assetEditor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.assetEditorActions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.assetActions {
+  margin-top: var(--space-2);
+}
+
+.assetStockGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.assetStockChip {
+  font-size: 0.6875rem;
+  padding: 2px var(--space-2);
+}
+
+.assetStockChipImported {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.assetStockDiscontinued {
+  color: var(--text-tertiary);
+  font-size: 0.625rem;
+}
+
+/* ---- 图片摄影信息面板 ----------------------------------------------------- */
+
+.photoIdentityPanel {
+  flex: 0 0 auto;
+}
+
+.photoIdentityPanelInner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.identitySummary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-primary);
+  cursor: pointer;
+  transition: border-color 0.15s;
+  border-radius: 2px;
+}
+
+.identitySummary:hover {
+  border-color: var(--accent-primary);
+}
+
+.identitySummaryContent {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.identityRollBadge {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  color: var(--status-success);
+  border: 1px solid var(--status-success);
+  padding: 0 var(--space-1);
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.identityOverrideBadge {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  color: var(--status-warning);
+  border: 1px solid var(--status-warning);
+  padding: 0 var(--space-1);
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.identitySummaryText {
+  font-size: 0.75rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.identityExpandToggle {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.identityEditor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+}
+
+.identityFieldOverride {
+  font-size: 0.625rem;
+  color: var(--status-warning);
+  font-weight: 400;
+}
+
+.identityFieldInherited {
+  font-size: 0.625rem;
+  color: var(--text-tertiary);
+  font-weight: 400;
+}
+
+/* ---- 通用辅助样式 ------------------------------------------------------- */
+
+.panelErrorText {
+  color: var(--status-error);
+  font-size: 0.75rem;
+}
+
+.fieldHintError {
+  color: var(--status-error);
+}
+
+.formInlineRow {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.gradientStopRow {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-end;
+}
+
+.gradientStopControls {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.settingRestoreButton {
+  margin-top: var(--space-1);
+}
+
+.assetDeleteHint {
+  margin: 0 0 var(--space-2);
+  font-size: 0.6875rem;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
+
+/* ---- 内置视觉模板面板 --------------------------------------------------- */
+
+.builtInTemplatePanel {
+  margin-bottom: var(--space-4);
+}
+
+.templatePresetCategory {
+  display: flex;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-3);
+}
+
+.templatePresetCategory .ghostButton {
+  font-size: 0.75rem;
+  padding: var(--space-1) var(--space-3);
+  border-radius: 2px;
+}
+
+.templatePresetCategoryActive {
+  background: var(--accent-primary) !important;
+  color: var(--surface-elevated) !important;
+  border-color: var(--accent-primary) !important;
+}
+
+.templatePresetGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--space-3);
+}
+
+.templatePresetCard {
+  border: 1px solid var(--border-default);
+  background: var(--surface-elevated);
+  overflow: hidden;
+  cursor: default;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.templatePresetCard:hover {
+  border-color: var(--accent-primary);
+}
+
+.templatePresetCardActive {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 1px var(--accent-primary);
+}
+
+.templatePresetThumb {
+  width: 100%;
+  display: block;
+}
+
+/* ---- 模板缩略图（CSS custom properties 驱动） ---------------------------- */
+
+.templatePresetThumbFrame {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  background: var(--preset-border-color);
+  display: flex;
+  align-items: stretch;
+  justify-content: stretch;
+  padding: 4px 4px var(--preset-pad-bottom, 12px);
+  position: relative;
+  overflow: hidden;
+}
+
+.templatePresetThumbPhoto {
+  flex: 1;
+  background: linear-gradient(135deg, var(--preset-photo-color) 0%, var(--preset-photo-color-dark) 100%);
+  border-radius: 1px;
+}
+
+.templatePresetThumbTextLine {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: calc(var(--preset-pad-bottom, 12px) * 0.3);
+  height: 2px;
+  background: var(--preset-text-color);
+  opacity: 0.4;
+  border-radius: 1px;
+}
+
+/* ---- 模板拖拽覆盖层 ------------------------------------------------------ */
+
+.templateDropOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(246, 241, 232, 0.92);
+  border: 3px dashed var(--accent-primary);
+}
+
+.templateDropCard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-8);
+  border: 1px solid var(--border-default);
+  background: var(--surface-elevated);
+  max-width: 400px;
+  text-align: center;
+}
+
+.templateDropTitle {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.templateDropName {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  color: var(--accent-primary);
+}
+
+.templateDropError {
+  font-size: 0.75rem;
+  color: var(--status-error);
+  line-height: 1.5;
+}
+
+.templateDropActions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.templatePresetCaption {
+  padding: var(--space-2) var(--space-2) 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.templatePresetName {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.3;
+}
+
+.templatePresetDesc {
+  font-size: 0.625rem;
+  color: var(--text-tertiary);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.templatePresetMeta {
+  padding: var(--space-2);
+  display: flex;
+  justify-content: flex-end;
+}
+
+.templatePresetMeta .ghostButton {
+  font-size: 0.6875rem;
+  padding: var(--space-1) var(--space-3);
 }

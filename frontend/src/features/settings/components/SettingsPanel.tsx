@@ -1,17 +1,14 @@
 import { useCallback, useEffect, useState } from "react"
 import { NumberInput } from "../../../components/form/NumberInput"
-import { Panel } from "../../../components/layout/Panel"
 import { fetchFilmFormats } from "../../../services/engine/filmFormatsApi"
 import { fetchPhotoMetadata } from "../../../services/engine/photoMetadataApi"
 import { FONT_OPTIONS } from "../hooks/useSettings"
 import type { NumberSettingKey, RenderSettings, SettingsController } from "../types"
-import type { TemplateController } from "../../template/types"
-import { TemplatePanel } from "../../template/components/TemplatePanel"
+import { VariableHelpPanel } from "../../metadata/components/VariableHelpPanel"
 import type { FilmFormatInfo } from "../../../types/preview"
 
 type SettingsPanelProps = {
   readonly controller: SettingsController
-  readonly templateController: TemplateController
   /** 当前是否有选中的图片。无选图时显示提示。 */
   readonly hasSelectedImage: boolean
   /** 当前选中的图片路径（用于 EXIF 查询）。 */
@@ -20,8 +17,6 @@ type SettingsPanelProps = {
   readonly textOverride: string | null
   /** 设置当前图片的文字覆盖。 */
   readonly setTextOverride: (text: string | null) => void
-  /** 加载模板设置到当前设置。 */
-  readonly onLoadTemplate: (settings: RenderSettings) => void
 }
 
 /** 内置画幅选项（后端不可用时的回退）。 */
@@ -61,12 +56,10 @@ const formatMetadataText = (meta: {
 
 export const SettingsPanel = ({
   controller,
-  templateController,
   hasSelectedImage,
   selectedFilePath,
   textOverride,
   setTextOverride,
-  onLoadTemplate
 }: SettingsPanelProps): JSX.Element => {
   const { settings, update, updateNumber } = controller
   const [filmFormats, setFilmFormats] = useState<readonly FilmFormatInfo[]>(FALLBACK_FORMATS)
@@ -132,7 +125,7 @@ export const SettingsPanel = ({
   const isTextOverridden = textOverride !== null
 
   return (
-    <Panel label="设置" title="渲染设置" className="settingsPanel">
+    <div className="settingsPanelInner">
       {!hasSelectedImage && (
         <p className="settingsCapabilityHint">
           请先加载并选择一张图片，设置将自动生效。
@@ -284,10 +277,10 @@ export const SettingsPanel = ({
             )}
 
             {settings.gradient.stops.map((stop, index) => (
-              <div key={index} className="settingRow" style={{ display: "flex", gap: "var(--space-2)", alignItems: "flex-end" }}>
+              <div key={index} className="settingRow gradientStopRow">
                 <label className="settingFieldLabel">
                   停靠点 {index + 1}
-                  <div style={{ display: "flex", gap: "var(--space-2)", alignItems: "center" }}>
+                  <div className="gradientStopControls">
                     <input
                       type="color"
                       className="settingColorInput"
@@ -315,7 +308,7 @@ export const SettingsPanel = ({
               </div>
             ))}
 
-            <div className="settingRow" style={{ display: "flex", gap: "var(--space-2)" }}>
+            <div className="settingRow formInlineRow">
               <button
                 type="button"
                 className="ghostButton"
@@ -396,9 +389,8 @@ export const SettingsPanel = ({
           {isTextOverridden && (
             <button
               type="button"
-              className="ghostButton"
+              className="ghostButton settingRestoreButton"
               onClick={() => setTextOverride(null)}
-              style={{ marginTop: "var(--space-1)" }}
             >
               恢复使用全局文字
             </button>
@@ -461,11 +453,23 @@ export const SettingsPanel = ({
             <p className="settingsCapabilityHint">该图片未包含可读取的 EXIF 信息。</p>
           )}
           {exifStatus === "error" && (
-            <p className="settingsCapabilityHint" style={{ color: "var(--status-error)" }}>
+            <p className="settingsCapabilityHint fieldHintError">
               EXIF 读取失败，请确认引擎正在运行。
             </p>
           )}
         </div>
+
+        {/* 变量插入 */}
+        <VariableHelpPanel
+          currentText={currentTextValue}
+          onTextChange={(text) => {
+            if (isTextOverridden) {
+              setTextOverride(text.length > 0 ? text : null)
+            } else {
+              update({ textContent: text })
+            }
+          }}
+        />
       </fieldset>
 
       {/* 裁剪 */}
@@ -514,13 +518,6 @@ export const SettingsPanel = ({
           </div>
         )}
       </fieldset>
-
-      {/* 模板 */}
-      <TemplatePanel
-        templateController={templateController}
-        currentSettings={settings}
-        onLoad={onLoadTemplate}
-      />
-    </Panel>
+    </div>
   )
 }

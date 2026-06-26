@@ -276,7 +276,7 @@ export const PreviewPanel = ({
       if (outputPath === null) {
         setExportJob({
           kind: "error",
-          message: "浏览器试用模式无法选择保存位置，请使用桌面模式导出。"
+          message: "浏览器降级模式无法选择保存位置，请启动桌面应用导出。"
         })
         return
       }
@@ -403,7 +403,7 @@ export const PreviewPanel = ({
           disabled={!canExport || isExporting}
           onClick={() => void handleHighQualityExport()}
         >
-          {isExporting ? "导出中…" : "导出原图成品"}
+          {isExporting ? "导出中…" : "导出原图"}
         </button>
         {hasBatchItems && (
           <button
@@ -414,42 +414,35 @@ export const PreviewPanel = ({
           >
             {isBatchExporting
               ? `批量导出中 ${batchExport.current}/${batchExport.total}…`
-              : `批量导出 (${queueFilePaths.length} 张)`}
+              : `批量导出 ${queueFilePaths.length} 张`}
           </button>
         )}
-        {!hasSelectedImage && (
-          <span className="previewExportHint">请先选择一张图片</span>
-        )}
-        {hasSelectedImage && exportJob.kind === "idle" && batchExport.kind === "idle" && (
-          <span className="previewExportHint">
-            高质量导出：使用原图尺寸，由引擎渲染。
-          </span>
-        )}
-        {exportJob.kind === "completed" && (
-          <span className="previewExportHint previewExportSuccess">
-            导出完成：{exportJob.outputPath}
-          </span>
-        )}
-        {exportJob.kind === "error" && (
-          <span className="previewExportHint previewExportError">
-            {exportJob.message}
-          </span>
-        )}
-        {batchExport.kind === "running" && (
-          <span className="previewExportHint">
-            进度：{batchExport.current}/{batchExport.total}，成功 {batchExport.success}，失败 {batchExport.failed}
-          </span>
-        )}
-        {batchExport.kind === "completed" && (
-          <span className={`previewExportHint ${batchExport.failed > 0 ? "previewExportError" : "previewExportSuccess"}`}>
-            批量导出完成：共 {batchExport.total} 张，成功 {batchExport.success}，失败 {batchExport.failed}
-          </span>
-        )}
-        {batchExport.kind === "error" && (
-          <span className="previewExportHint previewExportError">
-            {batchExport.message}
-          </span>
-        )}
+
+        <span className="previewExportStatus">
+          {!hasSelectedImage && "请先选择一张图片"}
+          {hasSelectedImage && exportJob.kind === "idle" && batchExport.kind === "idle" && (
+            window.desktop === undefined
+              ? "浏览器降级模式：导出能力受限，建议启动桌面应用。"
+              : "导出使用原图尺寸，由引擎渲染。"
+          )}
+          {exportJob.kind === "completed" && (
+            <span className="previewExportSuccess">导出完成：{exportJob.outputPath}</span>
+          )}
+          {exportJob.kind === "error" && (
+            <span className="previewExportError">{exportJob.message}</span>
+          )}
+          {batchExport.kind === "running" && (
+            `进度 ${batchExport.current}/${batchExport.total}　成功 ${batchExport.success}　失败 ${batchExport.failed}`
+          )}
+          {batchExport.kind === "completed" && (
+            <span className={batchExport.failed > 0 ? "previewExportError" : "previewExportSuccess"}>
+              批量导出完成：共 {batchExport.total} 张，成功 {batchExport.success}，失败 {batchExport.failed}
+            </span>
+          )}
+          {batchExport.kind === "error" && (
+            <span className="previewExportError">{batchExport.message}</span>
+          )}
+        </span>
       </div>
     </Panel>
   )

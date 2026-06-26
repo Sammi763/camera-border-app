@@ -1,6 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
-import { app, ipcMain } from "electron"
+import { app, dialog, ipcMain } from "electron"
 import { IPC_CHANNELS } from "../types/desktopApi.js"
 
 /** 模板文件存储路径：userData/templates.json */
@@ -44,6 +44,61 @@ export const registerTemplateStorageIpc = (): void => {
         await writeFile(filePath, json, "utf-8")
       } catch (err: unknown) {
         console.error(`[模板存储] 写入模板文件失败：${filePath}`, err)
+        throw err
+      }
+    }
+  )
+
+  // ---- 模板导出：保存对话框 ------------------------------------------------
+
+  ipcMain.handle(
+    IPC_CHANNELS.EXPORT_TEMPLATE_JSON,
+    async (_event, defaultFileName: string, json: string): Promise<string | null> => {
+      const { canceled, filePath } = await dialog.showSaveDialog({
+        title: "导出模板",
+        defaultPath: defaultFileName,
+        filters: [{ name: "相机边框模板", extensions: ["camborder-template.json", "json"] }],
+      })
+
+      if (canceled || filePath === undefined) {
+        return null
+      }
+
+      try {
+        await writeFile(filePath, json, "utf-8")
+        return filePath
+      } catch (err: unknown) {
+        console.error(`[模板导出] 写入模板文件失败：${filePath}`, err)
+        throw err
+      }
+    }
+  )
+
+  // ---- 模板导入：打开对话框 ------------------------------------------------
+
+  ipcMain.handle(
+    IPC_CHANNELS.IMPORT_TEMPLATE_JSON,
+    async (): Promise<string | null> => {
+      const { canceled, filePaths } = await dialog.showOpenDialog({
+        title: "导入模板",
+        filters: [{ name: "相机边框模板", extensions: ["camborder-template.json", "json"] }],
+        properties: ["openFile"],
+      })
+
+      if (canceled || filePaths.length === 0) {
+        return null
+      }
+
+      const filePath = filePaths[0]
+      if (filePath === undefined) {
+        return null
+      }
+
+      try {
+        const content = await readFile(filePath, "utf-8")
+        return content
+      } catch (err: unknown) {
+        console.error(`[模板导入] 读取模板文件失败：${filePath}`, err)
         throw err
       }
     }

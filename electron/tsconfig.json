@@ -3,6 +3,9 @@
   "compilerOptions": {
     "types": ["node"],
     "moduleDetection": "force",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "verbatimModuleSyntax": false,
     "rootDir": "src",
     "outDir": "dist",
     "declaration": true,

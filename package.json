@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "packageManager": "pnpm@9.0.0",
   "scripts": {
+    "dev": "bash scripts/dev.sh",
     "dev:frontend": "pnpm --filter frontend dev",
     "dev:electron": "pnpm --filter electron dev",
     "build:frontend": "pnpm --filter frontend build",

@@ -14,14 +14,19 @@ const isElectronMode = (): boolean => window.desktop !== undefined
 const storageLoad = async (): Promise<{ templates: readonly Template[]; defaultId: string | null }> => {
   if (isElectronMode()) {
     const json = await window.desktop!.readTemplates()
-    const parsed = JSON.parse(json) as unknown
-    if (!Array.isArray(parsed)) {
+    try {
+      const parsed = JSON.parse(json) as unknown
+      if (!Array.isArray(parsed)) {
+        return { templates: [], defaultId: null }
+      }
+      // Electron 端把 defaultId 存在数组第一个元素的 __defaultId 字段中（约定）
+      // 或者单独存储。为简单起见，仍用 localStorage 存 defaultId。
+      const defaultId = loadDefaultFromLS()
+      return { templates: parsed as readonly Template[], defaultId }
+    } catch {
+      console.warn("[模板存储] Electron 模板 JSON 解析失败，已忽略。")
       return { templates: [], defaultId: null }
     }
-    // Electron 端把 defaultId 存在数组第一个元素的 __defaultId 字段中（约定）
-    // 或者单独存储。为简单起见，仍用 localStorage 存 defaultId。
-    const defaultId = loadDefaultFromLS()
-    return { templates: parsed as readonly Template[], defaultId }
   }
 
   // 浏览器模式：localStorage
@@ -42,11 +47,17 @@ const loadFromLS = (): readonly Template[] => {
   if (raw === null) {
     return []
   }
-  const parsed = JSON.parse(raw) as unknown
-  if (!Array.isArray(parsed)) {
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) {
+      return []
+    }
+    return parsed as readonly Template[]
+  } catch {
+    // JSON 损坏时返回空数组，不覆盖损坏数据
+    console.warn("[模板存储] localStorage 中的模板 JSON 解析失败，已忽略。")
     return []
   }
-  return parsed as readonly Template[]
 }
 
 const saveToLS = (templates: readonly Template[]): void => {
