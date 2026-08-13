@@ -1,0 +1,66 @@
+# CI：每次推送/PR 自动跑全量回归
+#
+# 两个并行 job：
+# - frontend：前端 + Electron 的 typecheck 与前端 236 个测试
+# - java：Java 引擎 122 个测试（Maven，JDK 11 与 pom.xml 声明一致）
+#
+# 本地等价命令：
+#   pnpm --filter frontend typecheck && pnpm --filter frontend test
+#   pnpm --filter electron typecheck
+#   cd java-engine && mvn test
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  frontend:
+    name: Frontend · typecheck + tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.0.0
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: 安装依赖（frozen lockfile）
+        run: pnpm install --frozen-lockfile
+
+      - name: 前端 typecheck
+        run: pnpm --filter frontend typecheck
+
+      - name: 前端测试
+        run: pnpm --filter frontend test
+
+      - name: Electron typecheck
+        run: pnpm --filter electron typecheck
+
+  java:
+    name: Java Engine · tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 JDK 11（含 Maven 缓存）
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 11
+          cache: maven
+
+      - name: 引擎测试
+        run: mvn -B test
+        working-directory: java-engine
