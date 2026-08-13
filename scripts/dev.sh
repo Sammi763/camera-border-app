@@ -2,9 +2,12 @@
 # 启动开发环境：先启动 Vite，等就绪后再启动 Electron
 set -e
 
-cd "$(dirname "$0")/frontend"
+# 脚本位于 scripts/ 下，仓库根目录为脚本目录的上一级
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+cd "$ROOT/frontend"
 echo "[dev] 正在启动 Vite..."
-npm run dev &
+pnpm dev &
 VITE_PID=$!
 
 # 等待 Vite 就绪（最多 20 秒），用 127.0.0.1 探测
@@ -20,7 +23,7 @@ for i in $(seq 1 40); do
   sleep 0.5
 done
 
-cd "$(dirname "$0")/electron"
+cd "$ROOT/electron"
 ELECTRON_RENDERER_URL=http://127.0.0.1:5173 npx tsc -p tsconfig.json && ELECTRON_RENDERER_URL=http://127.0.0.1:5173 npx electron dist/main/main.js
 
 kill $VITE_PID 2>/dev/null || true

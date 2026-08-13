@@ -1,9 +1,12 @@
 import { useCallback, useState } from "react"
 import { fetchDevPhotos } from "../../../services/engine/devPhotosApi"
+import { resolveHeicPaths } from "../../../services/desktop/heicConvert"
+import { isHeicFile } from "../../metadata/constants/imageFormats"
 import { toFileName } from "../../../utils/fileName"
 import { createEmptyIdentity } from "../../metadata/types"
 import type { PhotoIdentity, Roll } from "../../metadata/types"
-import type { QueueController, QueueItem } from "../types"
+import type { PhotoMetadata } from "../../../types/preview"
+import type { ImportResult, QueueController, QueueItem } from "../types"
 
 /**
  * 维护图片队列及其选中状态。
@@ -16,19 +19,54 @@ import type { QueueController, QueueItem } from "../types"
  */
 export const useQueue = (): QueueController => {
   const [items, setItems] = useState<readonly QueueItem[]>([])
+  const [lastImportResult, setLastImportResult] = useState<ImportResult | null>(null)
   const isBrowserMode = window.desktop === undefined
 
-  /** 将路径列表追加到队列，首张自动选中。 */
-  const appendPaths = useCallback((paths: readonly string[]): void => {
+  /** 从文件路径提取格式扩展名（不含点，小写）。 */
+  const extractFormat = (filePath: string): string => {
+    const dotIndex = filePath.lastIndexOf(".")
+    return dotIndex > 0 ? filePath.slice(dotIndex + 1).toLowerCase() : ""
+  }
+
+  /** 将路径列表追加到队列，首张自动选中。HEIC 文件自动转换。 */
+  const appendPaths = useCallback(async (paths: readonly string[]): Promise<void> => {
     if (paths.length === 0) {
       return
     }
+
+    // 转换 HEIC 文件为临时 JPEG（桌面模式）
+    const converted = await resolveHeicPaths(paths)
+
+    const validItems = converted.filter((item) => item.resolved !== null)
+    const failedFiles = converted
+      .filter((item) => item.resolved === null)
+      .map((item) => toFileName(item.original))
+    const convertedFiles = converted
+      .filter((item) => item.converted)
+      .map((item) => toFileName(item.original))
+    const hasHeicUnsupported = paths.some(isHeicFile) && converted.some((item) => item.resolved === null && isHeicFile(item.original))
+
+    setLastImportResult({
+      successCount: validItems.length,
+      failedFiles,
+      convertedFiles,
+      heicUnsupported: hasHeicUnsupported
+    })
+
+    if (validItems.length === 0) {
+      return
+    }
+
     setItems((previous) => {
       const isFirstSelection = previous.length === 0
-      const added = paths.map((filePath, index) => ({
+      const added = validItems.map((item, index) => ({
         id: crypto.randomUUID(),
-        filePath,
-        fileName: toFileName(filePath),
+        filePath: item.resolved!,
+        fileName: toFileName(item.original),
+        sourcePath: item.original,
+        sourceFormat: extractFormat(item.original),
+        converted: item.converted,
+        workingFormat: item.converted ? "jpg" : extractFormat(item.original),
         isSelected: isFirstSelection && index === 0,
         textOverride: null,
         rollId: null,
@@ -198,23 +236,28 @@ export const useQueue = (): QueueController => {
     )
   }, [])
 
-  const getEffectiveIdentity = useCallback((itemId: string, rolls: readonly Roll[]): PhotoIdentity => {
+  const getEffectiveIdentity = useCallback((
+    itemId: string,
+    rolls: readonly Roll[],
+    exifByPath?: ReadonlyMap<string, PhotoMetadata>
+  ): PhotoIdentity => {
     const item = items.find((i) => i.id === itemId)
     if (item === undefined) {
       return createEmptyIdentity()
     }
 
-    // 优先级：每图覆盖 > Roll > 空默认
+    // 优先级：每图覆盖 > Roll > EXIF > 空默认
     const empty = createEmptyIdentity()
     const roll = item.rollId !== null
       ? rolls.find((r) => r.id === item.rollId) ?? null
       : null
+    const exif = exifByPath?.get(item.filePath) ?? null
 
     const override = item.identityOverride ?? {}
 
     return {
-      camera: override.camera ?? roll?.camera ?? empty.camera,
-      lens: override.lens ?? roll?.lens ?? empty.lens,
+      camera: override.camera ?? roll?.camera ?? exif?.cameraModel ?? empty.camera,
+      lens: override.lens ?? roll?.lens ?? exif?.lensModel ?? empty.lens,
       film: override.film ?? roll?.film ?? empty.film,
       developer: override.developer ?? roll?.developer ?? empty.developer,
       scanner: override.scanner ?? roll?.scanner ?? empty.scanner,
@@ -234,6 +277,7 @@ export const useQueue = (): QueueController => {
     selectedFilePath,
     selectedTextOverride,
     isBrowserMode,
+    lastImportResult,
     addImages,
     addImageFiles,
     addImageFolder,

@@ -1,5 +1,6 @@
 import { registerAssetStorageIpc } from "./assetStorage.js"
 import { registerFileDialogIpc } from "./fileDialog.js"
+import { registerImageConvertIpc } from "./imageConvert.js"
 import { registerTemplateStorageIpc } from "./templateStorage.js"
 
 /**
@@ -11,4 +12,5 @@ export const registerAllIpc = (): void => {
   registerFileDialogIpc()
   registerTemplateStorageIpc()
   registerAssetStorageIpc()
+  registerImageConvertIpc()
 }

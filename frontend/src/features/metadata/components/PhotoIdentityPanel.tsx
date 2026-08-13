@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react"
 import type { PhotoAssetStore, PhotoIdentity, Roll } from "../types"
+import { BUILT_IN_CAMERA_MODELS } from "../constants/cameraModels"
 
 type PhotoIdentityPanelProps = {
   /** 当前选中图片的有效摄影身份（已合并覆盖 > Roll > 空默认）。 */
@@ -25,6 +26,7 @@ type PhotoIdentityPanelProps = {
  *
  * 显示当前图片的有效身份（合并结果），允许用户对单张图片设置覆盖。
  * 覆盖字段留空表示继承 Roll。
+ * 相机字段支持内置机型快速选择。
  */
 export const PhotoIdentityPanel = ({
   effectiveIdentity,
@@ -43,6 +45,16 @@ export const PhotoIdentityPanel = ({
     onUpdateOverride({ [field]: value })
   }, [onUpdateOverride])
 
+  /** 选择内置机型时，把 label 写入 camera 覆盖。 */
+  const handleCameraModelSelect = useCallback((label: string): void => {
+    if (label === "") {
+      // 选空选项时清除相机覆盖
+      handleChange("camera", "")
+      return
+    }
+    handleChange("camera", label)
+  }, [handleChange])
+
   const boundRoll = rollId !== null ? rolls.find((r) => r.id === rollId) ?? null : null
 
   if (!hasSelectedImage) {
@@ -54,6 +66,10 @@ export const PhotoIdentityPanel = ({
   }
 
   const hasOverride = identityOverride !== null && Object.values(identityOverride).some((v) => v !== "")
+
+  // 内置机型下拉当前选中值：如果相机覆盖值与某个内置机型 label 一致则选中它
+  const cameraOverrideValue = identityOverride?.camera ?? ""
+  const builtInSelected = BUILT_IN_CAMERA_MODELS.find((m) => m.label === cameraOverrideValue)?.id ?? ""
 
   return (
     <div className="photoIdentityPanelInner">
@@ -95,6 +111,34 @@ export const PhotoIdentityPanel = ({
             onChange={(v) => handleChange("frameNumber", v)}
             assetSuggestions={[]}
           />
+
+          {/* 内置机型快速选择 */}
+          <div className="settingRow">
+            <label className="settingFieldLabel">
+              <span>内置机型</span>
+              <select
+                className="settingSelect"
+                value={builtInSelected}
+                onChange={(e) => {
+                  const id = e.target.value
+                  if (id === "") {
+                    handleCameraModelSelect("")
+                    return
+                  }
+                  const model = BUILT_IN_CAMERA_MODELS.find((m) => m.id === id)
+                  if (model !== undefined) {
+                    handleCameraModelSelect(model.label)
+                  }
+                }}
+              >
+                <option value="">— 手动输入或清空 —</option>
+                {BUILT_IN_CAMERA_MODELS.map((m) => (
+                  <option key={m.id} value={m.id}>{m.label}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+
           <IdentityField
             label="相机"
             value={identityOverride?.camera ?? ""}

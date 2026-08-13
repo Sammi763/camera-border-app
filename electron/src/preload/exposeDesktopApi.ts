@@ -55,7 +55,11 @@ export const exposeDesktopApi = (): void => {
     exportTemplateJson: (defaultFileName: string, json: string): Promise<string | null> =>
       ipcRenderer.invoke(IPC_CHANNELS.EXPORT_TEMPLATE_JSON, defaultFileName, json),
     importTemplateJson: (): Promise<string | null> =>
-      ipcRenderer.invoke(IPC_CHANNELS.IMPORT_TEMPLATE_JSON)
+      ipcRenderer.invoke(IPC_CHANNELS.IMPORT_TEMPLATE_JSON),
+    convertHeicFiles: (paths: readonly string[]): Promise<readonly (string | null)[]> =>
+      ipcRenderer.invoke(IPC_CHANNELS.CONVERT_HEIC_FILES, paths),
+    listSystemFonts: (): Promise<readonly string[]> =>
+      ipcRenderer.invoke(IPC_CHANNELS.LIST_SYSTEM_FONTS)
   }
 
   contextBridge.exposeInMainWorld("desktopRuntime", runtime)

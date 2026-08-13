@@ -16,6 +16,7 @@ public final class RenderRecipe {
     private List<TextItem> texts;
     private String filmFormat;
     private boolean autoCrop;
+    private LogoConfig logo;
 
     public RenderRecipe() {
     }
@@ -39,6 +40,20 @@ public final class RenderRecipe {
         this.texts = texts;
         this.filmFormat = filmFormat;
         this.autoCrop = autoCrop;
+        this.logo = null;
+    }
+
+    public RenderRecipe(final String imagePath, final BorderConfig border,
+                        final GradientConfig gradient,
+                        final List<TextItem> texts, final String filmFormat,
+                        final boolean autoCrop, final LogoConfig logo) {
+        this.imagePath = imagePath;
+        this.border = border;
+        this.gradient = gradient;
+        this.texts = texts;
+        this.filmFormat = filmFormat;
+        this.autoCrop = autoCrop;
+        this.logo = logo;
     }
 
     public String getImagePath() {
@@ -87,5 +102,13 @@ public final class RenderRecipe {
 
     public void setAutoCrop(final boolean autoCrop) {
         this.autoCrop = autoCrop;
+    }
+
+    public LogoConfig getLogo() {
+        return logo;
+    }
+
+    public void setLogo(final LogoConfig logo) {
+        this.logo = logo;
     }
 }

@@ -5,9 +5,15 @@
  * - 用户修改设置时，画面应立即变化，不等待后端
  * - 后端预览用于校验真实引擎输出，Canvas 用于即时反馈
  * - 同一套渲染逻辑同时服务于预览展示和导出下载
+ *
+ * 阶段 2 升级：
+ * - 支持多段文字图层（textLayers[]），不再只画单段
+ * - 每段支持背景条、阴影、描边样式
+ * - textLayers 是唯一的文字来源（normalizeTemplateSettings 已确保旧设置迁移）
  */
 
-import type { RenderSettings, TextArea } from "../../settings/types"
+import type { RenderSettings, TextArea, TextLayerSettings } from "../../settings/types"
+import { autoContrastColor } from "../../settings/utils/colorContrast"
 
 /** 将 CSS 颜色字符串解析为 Canvas 可用的颜色值。 */
 const ensureColor = (color: string): string => {
@@ -27,34 +33,36 @@ const computeTextPosition = (
   canvasW: number,
   canvasH: number,
   borderTop: number,
-  borderBottom: number
-): { x: number; y: number; baseline: "top" | "middle" | "alphabetic" } => {
+  borderBottom: number,
+  marginY: number
+): { x: number; y: number; baseline: CanvasTextBaseline } => {
   const imageCenterX = imgX + imgW / 2
   const canvasCenterX = canvasW / 2
+  const mY = Math.max(0, marginY)
 
   if (textArea === "border") {
     switch (placement) {
       case "border-top-center":
       case "top-center":
-        return { x: canvasCenterX, y: borderTop / 2, baseline: "middle" }
+        return { x: canvasCenterX, y: borderTop / 2 + mY, baseline: "middle" }
       case "border-bottom-center":
       case "bottom-center":
       default:
-        return { x: canvasCenterX, y: canvasH - borderBottom / 2, baseline: "middle" }
+        return { x: canvasCenterX, y: canvasH - borderBottom / 2 + mY, baseline: "middle" }
     }
   }
 
   switch (placement) {
     case "image-top-center":
     case "top-center":
-      return { x: imageCenterX, y: imgY + 16, baseline: "top" }
+      return { x: imageCenterX, y: imgY + 16 + mY, baseline: "top" }
     case "image-center":
     case "center":
-      return { x: imageCenterX, y: imgY + imgH / 2, baseline: "middle" }
+      return { x: imageCenterX, y: imgY + imgH / 2 + mY, baseline: "middle" }
     case "image-bottom-center":
     case "bottom-center":
     default:
-      return { x: imageCenterX, y: imgY + imgH - 16, baseline: "alphabetic" }
+      return { x: imageCenterX, y: imgY + imgH - 16 - mY, baseline: "alphabetic" }
   }
 }
 
@@ -91,10 +99,93 @@ const angleToCoords = (
 }
 
 /**
- * 在 Canvas 上绘制图片 + 边框（纯色或渐变） + 文字。
+ * 绘制单个文字图层（含背景条 / 阴影 / 描边 / 正文）。
+ */
+const drawTextLayer = (
+  ctx: CanvasRenderingContext2D,
+  layer: TextLayerSettings,
+  content: string,
+  imgX: number,
+  imgY: number,
+  imgW: number,
+  imgH: number,
+  cw: number,
+  ch: number,
+  bt: number,
+  bb: number,
+  scale: number
+): void => {
+  const fontSize = Math.max(8, layer.fontSize) * scale
+  ctx.font = `${fontSize}px ${layer.fontFamily}`
+  ctx.textAlign = "center"
+
+  const { position } = parsePlacement(layer.placement)
+  const pos = computeTextPosition(
+    layer.textArea, position,
+    imgX, imgY, imgW, imgH,
+    cw, ch, bt, bb,
+    layer.marginY
+  )
+
+  ctx.textBaseline = pos.baseline
+
+  // 测量文字尺寸
+  const metrics = ctx.measureText(content)
+  const textWidth = metrics.width
+  const textHeight = fontSize
+  const ascent = metrics.actualBoundingBoxAscent || fontSize * 0.75
+  const descent = metrics.actualBoundingBoxDescent || fontSize * 0.25
+
+  // 文字区域左上角
+  const textLeft = pos.x - textWidth / 2
+  const textTop = pos.y - ascent
+
+  // 1. 背景条
+  if (layer.backgroundEnabled) {
+    const padX = (layer.backgroundPaddingX || 4) * scale
+    const padY = (layer.backgroundPaddingY || 3) * scale
+    ctx.fillStyle = ensureColor(layer.backgroundColor)
+    ctx.fillRect(
+      textLeft - padX,
+      textTop - padY,
+      textWidth + padX * 2,
+      textHeight + padY * 2
+    )
+  }
+
+  // 2. 阴影
+  if (layer.shadowEnabled) {
+    ctx.save()
+    ctx.shadowColor = ensureColor(layer.shadowColor)
+    ctx.shadowBlur = (layer.shadowBlur || 0) * scale
+    ctx.shadowOffsetX = (layer.shadowOffsetX || 0) * scale
+    ctx.shadowOffsetY = (layer.shadowOffsetY || 0) * scale
+    ctx.fillStyle = ensureColor(layer.color)
+    ctx.fillText(content, pos.x, pos.y)
+    ctx.restore()
+  }
+
+  // 3. 描边
+  if (layer.strokeEnabled && (layer.strokeWidth || 0) > 0) {
+    ctx.save()
+    ctx.strokeStyle = ensureColor(layer.strokeColor)
+    ctx.lineWidth = (layer.strokeWidth || 1) * scale
+    ctx.lineJoin = "round"
+    ctx.strokeText(content, pos.x, pos.y)
+    ctx.restore()
+  }
+
+  // 4. 正文（阴影已在上面的 save/restore 块内处理，这里正常绘制）
+  if (!layer.shadowEnabled) {
+    ctx.fillStyle = ensureColor(layer.color)
+    ctx.fillText(content, pos.x, pos.y)
+  }
+}
+
+/**
+ * 在 Canvas 上绘制图片 + 边框（纯色或渐变） + 多段文字。
  *
- * 渲染顺序：边框底色/渐变 → 图片居中绘制 → 文字叠加
- * 这样边框自然"包裹"在图片外围，文字浮在图片上方。
+ * 渲染顺序：边框底色/渐变 → 图片居中绘制 → 多段文字依次叠加
  */
 export const drawPreviewToCanvas = (
   canvas: HTMLCanvasElement,
@@ -164,24 +255,104 @@ export const drawPreviewToCanvas = (
   const imgY = bt + (availH - drawH) / 2
   ctx.drawImage(image, imgX, imgY, drawW, drawH)
 
-  // 绘制文字（仅当文字内容非空时）
-  const text = settings.textContent.trim()
-  if (text.length > 0) {
-    const fontSize = Math.max(8, settings.textFontSize) * (cw / 800)
-    ctx.font = `${fontSize}px ${settings.fontFamily}`
-    ctx.fillStyle = ensureColor(settings.textColor)
-    ctx.textAlign = "center"
+  // 缩放比例：Canvas 宽度 / 800（基准宽度）
+  const scale = cw / 800
 
-    const { position } = parsePlacement(settings.textPlacement)
-    const pos = computeTextPosition(
-      settings.textArea,
-      position,
-      imgX, imgY, drawW, drawH,
-      cw, ch, bt, bb
-    )
-    ctx.textBaseline = pos.baseline
-    ctx.fillText(text, pos.x, pos.y)
+  // 遍历 textLayers，每段独立绘制。
+  // textLayers 是唯一的文字来源（normalizeTemplateSettings 已确保旧设置迁移）。
+  // 如果 textLayers 为空数组，则不绘制任何文字。
+  for (const layer of settings.textLayers) {
+    if (!layer.enabled) {
+      continue
+    }
+    const content = layer.content.trim()
+    if (content.length === 0) {
+      continue
+    }
+    drawTextLayer(ctx, layer, content, imgX, imgY, drawW, drawH, cw, ch, bt, bb, scale)
   }
+
+  // 绘制品牌标识（Logo）
+  if (settings.logo?.enabled) {
+    let logoText: string
+    if (settings.logo.mode === "brand-text") {
+      logoText = (settings.logo.brand ?? "")
+    } else {
+      // auto-brand 模式：brand 已由 buildResolvedRenderSettings 解析后填入
+      logoText = (settings.logo.brand ?? "")
+    }
+    if (logoText.trim().length > 0) {
+      drawLogo(ctx, logoText.trim(), settings, cw, ch, bt, bb, bl, br, scale)
+    }
+  }
+}
+
+/**
+ * 绘制品牌标识文字到边框区域。
+ * 仅支持 6 种 border-* placement，未知 placement 跳过不绘制。
+ */
+const drawLogo = (
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  settings: RenderSettings,
+  cw: number,
+  ch: number,
+  bt: number,
+  bb: number,
+  bl: number,
+  br: number,
+  scale: number
+): void => {
+  const placement = settings.logo.placement
+  // 校验 placement 是否为已识别的 6 种边框位置之一
+  const validPlacements = [
+    "border-top-left", "border-top-center", "border-top-right",
+    "border-bottom-left", "border-bottom-center", "border-bottom-right"
+  ]
+  if (!validPlacements.includes(placement)) {
+    return
+  }
+
+  const fontSize = Math.max(8, settings.logo.size) * scale
+  ctx.font = `bold ${fontSize}px sans-serif`
+  ctx.textAlign = "left"
+  ctx.textBaseline = "middle"
+
+  // 确定颜色
+  let color: string
+  if (settings.logo.colorMode === "auto-contrast") {
+    color = autoContrastColor(settings.borderColor)
+  } else if (settings.logo.colorMode === "light") {
+    color = "#f0f0f0"
+  } else {
+    color = "#222222"
+  }
+
+  // 计算 x 坐标（left / center / right）
+  const margin = 12 * scale
+  const metrics = ctx.measureText(text)
+  const textWidth = metrics.width
+
+  let x: number
+  let y: number
+
+  if (placement.includes("left")) {
+    x = bl + margin
+  } else if (placement.includes("right")) {
+    x = cw - br - margin - textWidth
+  } else {
+    x = (cw - textWidth) / 2
+  }
+
+  // 计算 y 坐标（top / bottom）
+  if (placement.includes("top")) {
+    y = bt / 2
+  } else {
+    y = ch - bb / 2
+  }
+
+  ctx.fillStyle = ensureColor(color)
+  ctx.fillText(text, x, y)
 }
 
 /**

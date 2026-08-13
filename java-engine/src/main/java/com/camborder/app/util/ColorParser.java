@@ -6,9 +6,9 @@ import java.awt.Color;
 
 /**
  * 颜色解析器（无状态纯函数工具）。
- * 仅接受四种格式：#RGB、RGB、#RRGGBB、RRGGBB。
+ * 接受五种格式：#RGB、RGB、#RRGGBB、RRGGBB、rgba(r,g,b,a)。
  * 为空时返回 fallback（表示「未指定颜色，用默认值」，不属于格式非法）。
- * 其它长度（如 1、4、5、7 位）或包含非 hex 字符一律视为非法，抛出受控异常。
+ * 其它格式一律视为非法，抛出受控异常。
  */
 public final class ColorParser {
 
@@ -18,7 +18,7 @@ public final class ColorParser {
     /**
      * 解析颜色字符串。
      *
-     * @param hex      颜色字符串
+     * @param hex      颜色字符串（#RRGGBB 或 rgba(r,g,b,a)）
      * @param fallback 为空时的回退颜色
      * @throws PreviewGenerationException 颜色格式非法时抛出
      */
@@ -28,6 +28,12 @@ public final class ColorParser {
             value = fallback;
         }
         String stripped = value.trim();
+
+        // 支持 rgba(r,g,b,a) 格式
+        if (stripped.startsWith("rgba(") && stripped.endsWith(")")) {
+            return parseRgba(stripped);
+        }
+
         if (stripped.startsWith("#")) {
             stripped = stripped.substring(1);
         }
@@ -49,6 +55,33 @@ public final class ColorParser {
                     + stripped.charAt(2) + stripped.charAt(2);
         }
         return new Color(Integer.parseInt(stripped, 16));
+    }
+
+    /**
+     * 解析 rgba(r,g,b,a) 格式，a 范围 0-1。
+     */
+    private static Color parseRgba(final String rgba) {
+        String inner = rgba.substring(5, rgba.length() - 1); // 去掉 "rgba(" 和 ")"
+        String[] parts = inner.split(",");
+        if (parts.length != 4) {
+            throw new PreviewGenerationException("invalid rgba color: " + rgba);
+        }
+        try {
+            int r = clamp(Integer.parseInt(parts[0].trim()), 0, 255);
+            int g = clamp(Integer.parseInt(parts[1].trim()), 0, 255);
+            int b = clamp(Integer.parseInt(parts[2].trim()), 0, 255);
+            float a = (float) Math.max(0.0, Math.min(1.0, Double.parseDouble(parts[3].trim())));
+            return new Color(r, g, b, a);
+        } catch (NumberFormatException e) {
+            throw new PreviewGenerationException("invalid rgba color: " + rgba);
+        }
+    }
+
+    /**
+     * 将数值钳制到 [min, max] 范围。
+     */
+    private static int clamp(final int value, final int min, final int max) {
+        return Math.min(max, Math.max(min, value));
     }
 
     /**

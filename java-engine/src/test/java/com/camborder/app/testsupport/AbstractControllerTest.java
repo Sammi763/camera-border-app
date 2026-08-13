@@ -23,6 +23,7 @@ import java.util.List;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -141,22 +142,17 @@ public abstract class AbstractControllerTest {
 
     /**
      * 提交一个导出任务，返回状态响应里的 outputPath（指向真实文件）。
-     * 复用 POST /api/render-jobs + GET /api/render-jobs/{jobId} 的标准链路。
+     * POST /api/render-jobs 同步返回最终状态（completed），直接读取 outputPath。
      */
     protected String submitExport(final com.camborder.app.dto.RenderJobRequest request)
             throws Exception {
         String responseBody = mockMvc.perform(post("/api/render-jobs")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isAccepted())
-                .andReturn().getResponse().getContentAsString();
-
-        String jobId = objectMapper.readTree(responseBody).get("jobId").asText();
-
-        String statusBody = mockMvc.perform(get("/api/render-jobs/" + jobId))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("completed"))
                 .andReturn().getResponse().getContentAsString();
 
-        return objectMapper.readTree(statusBody).get("outputPath").asText();
+        return objectMapper.readTree(responseBody).get("outputPath").asText();
     }
 }

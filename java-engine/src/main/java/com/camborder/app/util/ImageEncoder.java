@@ -1,5 +1,6 @@
 package com.camborder.app.util;
 
+import com.camborder.app.dto.ExportSettings;
 import com.camborder.app.exception.RenderExportException;
 import org.springframework.stereotype.Component;
 
@@ -18,30 +19,25 @@ import java.util.Iterator;
 
 /**
  * 图像编码器（无状态组件）。
- * 单一职责：把 BufferedImage 编码为 PNG 字节或按导出设置写入 PNG/JPEG 文件，
- * 不读取文件、不缩放、不合成边框、不绘制文字。
+ * 单一职责：把 BufferedImage 编码为 PNG 字节或按导出设置写入 PNG/JPEG/TIFF 文件。
  *
  * JPEG 质量控制：jpegQuality 收敛到 [1,100] 再映射为 [0.01,1.0] 压缩质量；
- * 未传（<=0）时使用默认高质量 95，避免默认质量过低导致导出模糊。
- * JPEG 不支持透明通道，统一拍平到白底 RGB 画布。
+ * 未传（<=0）时使用默认高质量 95。JPEG 不支持透明通道，统一拍平到白底 RGB 画布。
  *
- * 注意：本类只收基本类型（outputPath/format/jpegQuality），不依赖 dto，保持 util 低层定位。
+ * 专业导出能力当前真实状态（诚实声明）：
+ * - preserveMetadata：当前版本暂未实现 EXIF 保留，标记为 SKIPPED
+ * - preserveColorProfile：当前版本暂未实现 ICC 嵌入，标记为 SKIPPED
+ * - preferHighBitDepth：当前版本暂未实现真实 16bit 通道输出，标记为 SKIPPED
+ * 所有能力通过 ExportResult 结构化返回，前端据此展示真实结果。
  */
 @Component
 public final class ImageEncoder {
 
-    /** JPEG 压缩质量下限，避免传入 0 时编码器拒绝或产出空图。 */
     private static final int MIN_JPEG_QUALITY = 1;
-    /** JPEG 压缩质量上限。 */
     private static final int MAX_JPEG_QUALITY = 100;
-    /** 未指定 jpegQuality 时的默认压缩质量，避免默认质量过低导致导出模糊。 */
     private static final int DEFAULT_JPEG_QUALITY = 95;
-    /** 未指定 format 时的默认导出格式。 */
     private static final String DEFAULT_FORMAT = "png";
 
-    /**
-     * 把合成图编码为 PNG 字节，供预览注册表存储。
-     */
     public byte[] toPng(final BufferedImage image) {
         try {
             ByteArrayOutputStream output = new ByteArrayOutputStream();
@@ -55,32 +51,48 @@ public final class ImageEncoder {
     }
 
     /**
-     * 把合成图按导出设置编码并写入 outputPath 指定的文件。
-     * 父目录不存在或不可写时抛出受控异常，由控制器映射为 4xx。
+     * 把合成图按导出设置编码并写入文件。
      *
-     * @param image       合成后的图像
-     * @param outputPath  输出路径（由 OutputPathValidator 校验/准备父目录）
-     * @param format      导出格式，null/blank 默认 png
-     * @param jpegQuality JPEG 压缩质量，<=0 时默认 95
-     * @return 实际写入的文件绝对路径
+     * @return 导出结果，包含路径、实际格式、各项能力应用状态
      * @throws RenderExportException 当输出路径非法或写入失败时抛出
      */
-    public String writeToFile(final BufferedImage image, final String outputPath,
-                              final String format, final int jpegQuality) {
-        String resolvedFormat = resolveFormat(format);
+    public ExportResult writeToFile(final BufferedImage image, final String outputPath,
+                                    final ExportSettings export) {
+        String resolvedFormat = resolveFormat(export.getFormat());
         File outputFile = OutputPathValidator.resolveAndPrepare(outputPath);
 
         if ("jpeg".equals(resolvedFormat)) {
-            writeJpeg(image, outputFile, jpegQuality);
+            writeJpeg(image, outputFile, export.getJpegQuality());
+        } else if ("tiff".equals(resolvedFormat)) {
+            writeTiff(image, outputFile);
         } else {
             writePng(image, outputFile);
         }
-        return outputFile.getAbsolutePath();
+
+        return buildExportResult(outputFile.getAbsolutePath(), resolvedFormat, export);
     }
 
     /**
-     * 解析导出格式。未指定时默认 png，并统一小写。
+     * 构建导出结果，包含各项专业能力的真实应用状态。
+     * 当前版本三项能力均未实现，用户开启时标记为 SKIPPED。
      */
+    private ExportResult buildExportResult(final String outputPath, final String format,
+                                           final ExportSettings export) {
+        FeatureResult metadata = export.isPreserveMetadata()
+                ? new FeatureResult(FeatureStatus.SKIPPED, "当前版本暂不支持 EXIF 元数据保留，已跳过")
+                : new FeatureResult(FeatureStatus.NOT_REQUESTED, null);
+
+        FeatureResult colorProfile = export.isPreserveColorProfile()
+                ? new FeatureResult(FeatureStatus.SKIPPED, "当前版本暂不支持 ICC 色彩配置文件嵌入，已跳过")
+                : new FeatureResult(FeatureStatus.NOT_REQUESTED, null);
+
+        FeatureResult highBitDepth = export.isPreferHighBitDepth()
+                ? new FeatureResult(FeatureStatus.SKIPPED, "当前版本暂不支持高位深输出，已使用 8bit")
+                : new FeatureResult(FeatureStatus.NOT_REQUESTED, null);
+
+        return new ExportResult(outputPath, format, metadata, colorProfile, highBitDepth);
+    }
+
     private String resolveFormat(final String format) {
         if (format == null || format.isBlank()) {
             return DEFAULT_FORMAT;
@@ -88,9 +100,6 @@ public final class ImageEncoder {
         return format.trim().toLowerCase();
     }
 
-    /**
-     * 用 ImageIO 把 PNG 写入文件。
-     */
     private void writePng(final BufferedImage image, final File outputFile) {
         try {
             if (!ImageIO.write(image, "png", outputFile)) {
@@ -101,13 +110,8 @@ public final class ImageEncoder {
         }
     }
 
-    /**
-     * 用 ImageWriter 按 jpegQuality 控制压缩质量写入 JPEG。
-     */
     private void writeJpeg(final BufferedImage image, final File outputFile, final int jpegQuality) {
-        // JPEG 不支持透明通道，统一绘制到不透明 RGB 画布上，避免黑底
         BufferedImage rgb = flattenToRgb(image);
-        // jpegQuality <= 0 视为未指定，使用默认高质量 95，避免默认质量过低导致导出模糊
         int requested = jpegQuality <= 0 ? DEFAULT_JPEG_QUALITY : jpegQuality;
         int clamped = Math.max(MIN_JPEG_QUALITY, Math.min(MAX_JPEG_QUALITY, requested));
         float quality = clamped / (float) MAX_JPEG_QUALITY;
@@ -127,10 +131,21 @@ public final class ImageEncoder {
         }
     }
 
-    /**
-     * 把可能带透明通道的图像绘制到不透明 RGB 画布，背景为白色。
-     * 仅用于 JPEG 导出，PNG 保留原始通道。
-     */
+    private void writeTiff(final BufferedImage image, final File outputFile) {
+        ImageWriter writer = lookupWriter("tiff");
+        ImageWriteParam param = writer.getDefaultWriteParam();
+        param.setCompressionMode(ImageWriteParam.MODE_DISABLED);
+
+        try (FileImageOutputStream output = new FileImageOutputStream(outputFile)) {
+            writer.setOutput(output);
+            writer.write(null, new IIOImage(image, null, null), param);
+        } catch (IOException e) {
+            throw new RenderExportException("failed to write TIFF output file");
+        } finally {
+            writer.dispose();
+        }
+    }
+
     private BufferedImage flattenToRgb(final BufferedImage image) {
         if (!image.getColorModel().hasAlpha()) {
             return image;
@@ -147,14 +162,61 @@ public final class ImageEncoder {
         return rgb;
     }
 
-    /**
-     * 按格式名查找 ImageWriter，找不到时抛受控异常。
-     */
     private ImageWriter lookupWriter(final String formatName) {
         Iterator<ImageWriter> writers = ImageIO.getImageWritersByFormatName(formatName);
         if (!writers.hasNext()) {
             throw new RenderExportException("no " + formatName + " writer available");
         }
         return writers.next();
+    }
+
+    // ---- 结构化导出结果 --------------------------------------------------------
+
+    /** 单项专业能力的应用状态。 */
+    public enum FeatureStatus {
+        NOT_REQUESTED,
+        APPLIED,
+        SKIPPED,
+        DOWNGRADED
+    }
+
+    /** 单项能力的应用结果。 */
+    public static final class FeatureResult {
+        private final FeatureStatus status;
+        private final String message;
+
+        public FeatureResult(final FeatureStatus status, final String message) {
+            this.status = status;
+            this.message = message;
+        }
+
+        public FeatureStatus getStatus() { return status; }
+        public String getMessage() { return message; }
+    }
+
+    /** 导出结果：包含路径、实际格式、各项能力应用状态。 */
+    public static final class ExportResult {
+        private final String outputPath;
+        private final String actualFormat;
+        private final FeatureResult metadataPreservation;
+        private final FeatureResult colorProfilePreservation;
+        private final FeatureResult highBitDepth;
+
+        public ExportResult(final String outputPath, final String actualFormat,
+                            final FeatureResult metadataPreservation,
+                            final FeatureResult colorProfilePreservation,
+                            final FeatureResult highBitDepth) {
+            this.outputPath = outputPath;
+            this.actualFormat = actualFormat;
+            this.metadataPreservation = metadataPreservation;
+            this.colorProfilePreservation = colorProfilePreservation;
+            this.highBitDepth = highBitDepth;
+        }
+
+        public String getOutputPath() { return outputPath; }
+        public String getActualFormat() { return actualFormat; }
+        public FeatureResult getMetadataPreservation() { return metadataPreservation; }
+        public FeatureResult getColorProfilePreservation() { return colorProfilePreservation; }
+        public FeatureResult getHighBitDepth() { return highBitDepth; }
     }
 }

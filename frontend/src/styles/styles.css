@@ -431,10 +431,23 @@ body {
 
 /* ---- 队列面板 --------------------------------------------------------- */
 
+/* 拖拽导入：包裹层占满高度，拖入时高亮面板 */
+.queueDropZone {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
 .queuePanel {
   display: flex;
   flex-direction: column;
   height: 100%;
+}
+
+/* 拖入文件时的高亮反馈（纯边框 + 内阴影，符合 DESIGN.md 仅边框语言） */
+.queueDropActive.queuePanel {
+  border-color: var(--accent-primary);
+  box-shadow: inset 0 0 0 1.5px var(--accent-primary);
 }
 
 .queuePanel .panelBody {
@@ -1320,6 +1333,14 @@ body {
   font-weight: 600;
 }
 
+.queueRawBadge {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  color: var(--status-info, #5b9bd5);
+  vertical-align: super;
+  font-weight: 600;
+}
+
 /* ---- 摄影资产库面板 ------------------------------------------------------- */
 
 .assetPanel {
@@ -1733,4 +1754,116 @@ body {
 .templatePresetMeta .ghostButton {
   font-size: 0.6875rem;
   padding: var(--space-1) var(--space-3);
+}
+
+/* ---- 文字图层编辑器 -------------------------------------------------------- */
+
+.textLayerEditor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.textLayerEmpty {
+  padding: var(--space-3);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.textLayerCard {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm, 4px);
+  overflow: hidden;
+}
+
+.textLayerCardDisabled {
+  opacity: 0.55;
+}
+
+.textLayerCardHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-elevated, rgba(0, 0, 0, 0.03));
+  cursor: pointer;
+  user-select: none;
+}
+
+.textLayerCardHeader:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.textLayerCardSummary {
+  flex: 1;
+  font-size: 0.75rem;
+  color: var(--text-muted, #888);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.textLayerCardToggle {
+  font-size: 0.6875rem;
+  color: var(--text-muted, #888);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.textLayerCardBody {
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.textLayerStyleGroup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) 0;
+  border-top: 1px dashed var(--border-subtle);
+}
+
+.textLayerStyleGroup .settingCheckboxLabel {
+  margin-bottom: var(--space-1);
+}
+
+/* ---- 专业导出提示 ---- */
+.settingHint {
+  font-size: 0.6875rem;
+  color: var(--text-muted, #888);
+  margin: var(--space-1) 0 0;
+  line-height: 1.4;
+}
+
+/* ---- 导出摘要警告 ---- */
+.previewExportWarnings {
+  color: var(--accent-warm, #c47c2a);
+  font-size: 0.75rem;
+}
+
+/* ---- 预览缩放控件 ---- */
+.previewViewportControls {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.previewViewportBtn {
+  font-size: 0.6875rem;
+  padding: 1px 6px;
+  min-width: auto;
+}
+
+.previewZoomLabel {
+  font-size: 0.6875rem;
+  color: var(--text-muted, #888);
+  font-family: var(--font-mono);
+  min-width: 3em;
+  text-align: center;
 }

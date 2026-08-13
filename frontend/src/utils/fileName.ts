@@ -19,9 +19,9 @@ export const toDirPath = (filePath: string): string => {
 }
 
 /** 从文件名生成导出文件名：去掉扩展名，加 -border.{ext}。 */
-export const toExportFileName = (fileName: string, format: "png" | "jpeg"): string => {
+export const toExportFileName = (fileName: string, format: "png" | "jpeg" | "tiff"): string => {
   const dotIndex = fileName.lastIndexOf(".")
   const baseName = dotIndex > 0 ? fileName.slice(0, dotIndex) : fileName
-  const ext = format === "jpeg" ? "jpg" : "png"
+  const ext = format === "jpeg" ? "jpg" : format === "tiff" ? "tif" : "png"
   return `${baseName}-border.${ext}`
 }

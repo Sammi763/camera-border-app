@@ -19,11 +19,18 @@ const mockSettings: RenderSettings = {
   textPlacement: "bottom-center",
   textArea: "border",
   fontFamily: "serif",
+  textLayers: [],
   autoCrop: false,
   filmFormat: null,
   gradient: { enabled: false, type: "linear", angle: 0, stops: [{ offset: 0, color: "#000000" }, { offset: 1, color: "#ffffff" }] },
   exportFormat: "png",
   jpegQuality: 95,
+  outputSizePreset: "original",
+  customOutputLongEdge: 2048,
+  preserveMetadata: false,
+  preserveColorProfile: false,
+  preferHighBitDepth: false,
+  logo: { enabled: false, mode: "auto-brand", brand: null, placement: "border-top-right", size: 14, colorMode: "auto-contrast" },
 }
 
 const mockTemplate: Template = {
@@ -167,5 +174,71 @@ describe("deduplicateTemplateName", () => {
   it("继续递增序号", () => {
     const existing = ["我的模板", "我的模板 (导入)", "我的模板 (导入 2)"]
     expect(deduplicateTemplateName("我的模板", existing)).toBe("我的模板 (导入 3)")
+  })
+})
+
+describe("旧模板导入兼容性", () => {
+  /** 构造不含 textLayers 的旧格式 JSON。 */
+  const legacyJson = JSON.stringify({
+    kind: "camera-border-template",
+    version: 1,
+    template: {
+      id: "old-template",
+      name: "旧模板",
+      settings: {
+        borderColor: "#ffffff",
+        borderTop: 30,
+        borderBottom: 80,
+        borderLeft: 30,
+        borderRight: 30,
+        textContent: "{Camera} · {Film}",
+        textFontSize: 18,
+        textColor: "#333333",
+        textPlacement: "bottom-center",
+        textArea: "border",
+        fontFamily: "serif",
+        autoCrop: false,
+        filmFormat: null,
+        gradient: { enabled: false, type: "linear", angle: 0, stops: [{ offset: 0, color: "#000000" }, { offset: 1, color: "#ffffff" }] },
+        exportFormat: "png",
+        jpegQuality: 95,
+        outputSizePreset: "original",
+        customOutputLongEdge: 2048,
+      },
+      createdAt: 1700000000000,
+    },
+  })
+
+  it("导入不含 textLayers 的旧模板 JSON 后，settings.textLayers 被迁移填充", () => {
+    const result = decodeTemplateJson(legacyJson)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      const layers = result.template.settings.textLayers
+      expect(layers.length).toBe(3)
+      expect(layers[0]!.enabled).toBe(true)
+      expect(layers[0]!.content).toBe("{Camera} · {Film}")
+      expect(layers[1]!.enabled).toBe(false)
+    }
+  })
+
+  it("导入旧模板后，textLayers[0] 的文字内容与旧 textContent 一致", () => {
+    const result = decodeTemplateJson(legacyJson)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.template.settings.textLayers[0]!.content).toBe(
+        result.template.settings.textContent
+      )
+    }
+  })
+
+  it("导入旧模板后，textLayers[0] 的字号/颜色/字体与旧字段一致", () => {
+    const result = decodeTemplateJson(legacyJson)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      const layer0 = result.template.settings.textLayers[0]!
+      expect(layer0.fontSize).toBe(result.template.settings.textFontSize)
+      expect(layer0.color).toBe(result.template.settings.textColor)
+      expect(layer0.fontFamily).toBe(result.template.settings.fontFamily)
+    }
   })
 })

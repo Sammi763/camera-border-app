@@ -1,5 +1,6 @@
 import { app, BrowserWindow } from "electron"
 import { registerAllIpc } from "../ipc/index.js"
+import { cleanupHeicTempFiles } from "../ipc/imageConvert.js"
 import { JavaBridge } from "../engine/JavaBridge.js"
 import { ENGINE_READY_TIMEOUT_MS } from "../engine/engineConfig.js"
 import { engineBaseUrl, engineManaged } from "../config/devMode.js"
@@ -93,5 +94,6 @@ export const runApplication = (): void => {
   app.on("before-quit", () => {
     bridge?.dispose()
     bridge = null
+    void cleanupHeicTempFiles()
   })
 }

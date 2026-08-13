@@ -12,9 +12,20 @@ import java.io.IOException;
  * 图片读取器（无状态组件）。
  * 负责按 imagePath 读取本地图片文件，校验存在性、可读性与图片格式合法性。
  * 单一职责：只做读取与校验，不关心缩放、边框或文字。
+ *
+ * RAW 文件处理流程：
+ * 1. ImageIO 尝试直接读取（覆盖标准格式：JPEG/PNG/TIFF/BMP/WebP）
+ * 2. 若 ImageIO 返回 null 且文件为 RAW 格式，委托 {@link RawDecoder} 提取嵌入式预览
+ * 3. 若 RAW 解码也失败，抛受控异常（不 500 堆栈直出）
  */
 @Component
 public final class ImageReader {
+
+    private final RawDecoder rawDecoder;
+
+    public ImageReader(final RawDecoder rawDecoder) {
+        this.rawDecoder = rawDecoder;
+    }
 
     /**
      * 读取本地图片文件。
@@ -34,13 +45,21 @@ public final class ImageReader {
         try {
             source = ImageIO.read(file);
         } catch (IOException e) {
-            // 文件存在且可读，但读取仍失败，视为服务内部错误
             throw new IllegalStateException("failed to read image file: " + imagePath, e);
         }
-        if (source == null) {
-            throw new PreviewGenerationException(
-                    "image content is not a supported image: " + imagePath);
+
+        // ImageIO 直接读取成功（标准格式）
+        if (source != null) {
+            return source;
         }
-        return source;
+
+        // ImageIO 不认识该格式，尝试 RAW 解码
+        if (rawDecoder.isRawFile(imagePath)) {
+            return rawDecoder.decode(imagePath);
+        }
+
+        // 非 RAW 且 ImageIO 不支持
+        throw new PreviewGenerationException(
+                "image content is not a supported image: " + imagePath);
     }
 }

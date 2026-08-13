@@ -25,11 +25,12 @@
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-web</artifactId>
     </dependency>
-    <!-- 基础 EXIF 读取依赖（仅读，不写回），符合 MVP 范围；不引入 ICC/16-bit/TIFF 高位深能力 -->
+    <!-- EXIF 读取 + RAW 嵌入式预览提取（NEF/CR2/CR3/ARW/RAF/DNG/ORF/RW2/PEF）。
+         2.19.0 新增 CR3 支持；不引入 ICC/16-bit/TIFF 高位深能力。 -->
     <dependency>
       <groupId>com.drewnoakes</groupId>
       <artifactId>metadata-extractor</artifactId>
-      <version>2.18.0</version>
+      <version>2.19.0</version>
     </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>

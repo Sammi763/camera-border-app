@@ -10,6 +10,7 @@ import org.springframework.http.MediaType;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -27,18 +28,20 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 final class RenderJobControllerTest extends AbstractControllerTest {
 
     @Test
-    void shouldAcceptValidRenderJob() throws Exception {
+    void shouldCompleteRenderJobSynchronously() throws Exception {
         ExportSettings export = new ExportSettings(
                 tempDir.resolve("result.png").toString(), "png", 95);
         RenderRecipe recipe = new RenderRecipe(writeTempImage(), null, null, null, false);
         RenderJobRequest request = new RenderJobRequest(recipe, export);
 
+        // 同步渲染：POST 直接返回最终状态（completed + outputPath），无需轮询
         mockMvc.perform(post("/api/render-jobs")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isAccepted())
+                .andExpect(status().isOk())
                 .andExpect(jsonPath("$.jobId").isNotEmpty())
-                .andExpect(jsonPath("$.status").value("accepted"))
+                .andExpect(jsonPath("$.status").value("completed"))
+                .andExpect(jsonPath("$.outputPath").isNotEmpty())
                 .andExpect(jsonPath("$.message").isNotEmpty());
     }
 
@@ -98,7 +101,7 @@ final class RenderJobControllerTest extends AbstractControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error").value("format must be png or jpeg"));
+                .andExpect(jsonPath("$.error").value("format must be png, jpeg or tiff"));
     }
 
     @Test
@@ -110,7 +113,7 @@ final class RenderJobControllerTest extends AbstractControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error").value("jpegQuality must be between 1 and 100"));
+                .andExpect(jsonPath("$.error").value("jpegQuality must be between 0 and 100"));
     }
 
     @Test
@@ -122,7 +125,7 @@ final class RenderJobControllerTest extends AbstractControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error").value("jpegQuality must be between 1 and 100"));
+                .andExpect(jsonPath("$.error").value("jpegQuality must be between 0 and 100"));
     }
 
     @Test
@@ -220,6 +223,40 @@ final class RenderJobControllerTest extends AbstractControllerTest {
     }
 
     @Test
+    void shouldExportScaledDownToTargetSizeLimit() throws Exception {
+        // 原图 2000x1000，导出目标尺寸 maxWidth=1000/maxHeight=1000 -> 等比缩小为 1000x500
+        RenderRecipe recipe = new RenderRecipe(
+                writeTempImage(2000, 1000, java.awt.Color.BLUE), null, null, null, false);
+        ExportSettings export = new ExportSettings(
+                tempDir.resolve("limited.png").toString(), "png", 95);
+        export.setMaxWidth(1000);
+        export.setMaxHeight(1000);
+
+        String outputPath = submitExport(recipe, export);
+
+        BufferedImage result = ImageIO.read(Path.of(outputPath).toFile());
+        assertThat(result).isNotNull();
+        assertThat(result.getWidth()).isEqualTo(1000);
+        assertThat(result.getHeight()).isEqualTo(500);
+    }
+
+    @Test
+    void shouldRejectNegativeOutputSize() throws Exception {
+        // maxWidth 为负数视为非法请求，返回 400
+        ExportSettings export = new ExportSettings(
+                tempDir.resolve("out.png").toString(), "png", 95);
+        export.setMaxWidth(-1);
+        RenderRecipe recipe = new RenderRecipe(writeTempImage(), null, null, null, false);
+        RenderJobRequest request = new RenderJobRequest(recipe, export);
+
+        mockMvc.perform(post("/api/render-jobs")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("maxWidth and maxHeight must be non-negative"));
+    }
+
+    @Test
     void shouldExportJpegWithDefaultQualityWhenNotProvided() throws Exception {
         // jpegQuality 未传（0）应使用默认高质量导出，且文件可被 ImageIO 读取
         RenderRecipe recipe = new RenderRecipe(writeTempImage(), null, null, null, false);
@@ -290,5 +327,173 @@ final class RenderJobControllerTest extends AbstractControllerTest {
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value(containsString("not found")));
+    }
+
+    // ---- 专业导出测试 ----------------------------------------------------------
+
+    @Test
+    void shouldAcceptTiffFormat() throws Exception {
+        String imageFile = writeTempImage();
+        ExportSettings export = new ExportSettings(
+                tempDir.resolve("out.tif").toString(), "tiff", 95);
+        RenderRecipe recipe = new RenderRecipe(imageFile, null, null, null, false);
+        RenderJobRequest request = new RenderJobRequest(recipe, export);
+
+        mockMvc.perform(post("/api/render-jobs")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk());
+
+        Path outputFile = tempDir.resolve("out.tif");
+        assertThat(Files.exists(outputFile)).isTrue();
+        assertThat(Files.size(outputFile)).isGreaterThan(0);
+    }
+
+    @Test
+    void shouldReportSkippedWhenPreserveMetadataRequested() throws Exception {
+        String imageFile = writeTempImage();
+        ExportSettings export = new ExportSettings(
+                tempDir.resolve("out.tif").toString(), "tiff", 95);
+        export.setPreserveMetadata(true);
+        RenderRecipe recipe = new RenderRecipe(imageFile, null, null, null, false);
+        RenderJobRequest request = new RenderJobRequest(recipe, export);
+
+        String response = mockMvc.perform(post("/api/render-jobs")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String jobId = objectMapper.readTree(response).get("jobId").asText();
+        String statusResponse = mockMvc.perform(get("/api/render-jobs/" + jobId))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+
+        // metadataPreservation.status 应为 SKIPPED，message 包含"暂不支持"
+        String metadataStatus = objectMapper.readTree(statusResponse)
+                .path("metadataPreservation").path("status").asText();
+        String metadataMessage = objectMapper.readTree(statusResponse)
+                .path("metadataPreservation").path("message").asText();
+        assertThat(metadataStatus).isEqualTo("SKIPPED");
+        assertThat(metadataMessage).contains("暂不支持");
+    }
+
+    @Test
+    void shouldReportNotRequestedWhenPreserveColorProfileNotEnabled() throws Exception {
+        String imageFile = writeTempImage();
+        ExportSettings export = new ExportSettings(
+                tempDir.resolve("out.tif").toString(), "tiff", 95);
+        // 不开启 preserveColorProfile
+        RenderRecipe recipe = new RenderRecipe(imageFile, null, null, null, false);
+        RenderJobRequest request = new RenderJobRequest(recipe, export);
+
+        String response = mockMvc.perform(post("/api/render-jobs")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String jobId = objectMapper.readTree(response).get("jobId").asText();
+        String statusResponse = mockMvc.perform(get("/api/render-jobs/" + jobId))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+
+        String colorProfileStatus = objectMapper.readTree(statusResponse)
+                .path("colorProfilePreservation").path("status").asText();
+        assertThat(colorProfileStatus).isEqualTo("NOT_REQUESTED");
+    }
+
+    @Test
+    void shouldReportSkippedWhenPreferHighBitDepthRequested() throws Exception {
+        String imageFile = writeTempImage();
+        ExportSettings export = new ExportSettings(
+                tempDir.resolve("out.tif").toString(), "tiff", 95);
+        export.setPreferHighBitDepth(true);
+        RenderRecipe recipe = new RenderRecipe(imageFile, null, null, null, false);
+        RenderJobRequest request = new RenderJobRequest(recipe, export);
+
+        mockMvc.perform(post("/api/render-jobs")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk());
+
+        Path outputFile = tempDir.resolve("out.tif");
+        assertThat(Files.exists(outputFile)).isTrue();
+    }
+
+    @Test
+    void shouldReportSkippedForPngPreserveMetadata() throws Exception {
+        String imageFile = writeTempImage();
+        ExportSettings export = new ExportSettings(
+                tempDir.resolve("out.png").toString(), "png", 95);
+        export.setPreserveMetadata(true);
+        RenderRecipe recipe = new RenderRecipe(imageFile, null, null, null, false);
+        RenderJobRequest request = new RenderJobRequest(recipe, export);
+
+        String response = mockMvc.perform(post("/api/render-jobs")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String jobId = objectMapper.readTree(response).get("jobId").asText();
+        String statusResponse = mockMvc.perform(get("/api/render-jobs/" + jobId))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+
+        String metadataStatus = objectMapper.readTree(statusResponse)
+                .path("metadataPreservation").path("status").asText();
+        assertThat(metadataStatus).isEqualTo("SKIPPED");
+    }
+
+    @Test
+    void shouldReportSkippedForJpegHighBitDepth() throws Exception {
+        String imageFile = writeTempImage();
+        ExportSettings export = new ExportSettings(
+                tempDir.resolve("out.jpg").toString(), "jpeg", 90);
+        export.setPreferHighBitDepth(true);
+        RenderRecipe recipe = new RenderRecipe(imageFile, null, null, null, false);
+        RenderJobRequest request = new RenderJobRequest(recipe, export);
+
+        String response = mockMvc.perform(post("/api/render-jobs")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String jobId = objectMapper.readTree(response).get("jobId").asText();
+        String statusResponse = mockMvc.perform(get("/api/render-jobs/" + jobId))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+
+        String bitDepthStatus = objectMapper.readTree(statusResponse)
+                .path("highBitDepth").path("status").asText();
+        String bitDepthMessage = objectMapper.readTree(statusResponse)
+                .path("highBitDepth").path("message").asText();
+        assertThat(bitDepthStatus).isEqualTo("SKIPPED");
+        assertThat(bitDepthMessage).contains("8bit");
+    }
+
+    @Test
+    void shouldReturnActualFormatInStatus() throws Exception {
+        String imageFile = writeTempImage();
+        ExportSettings export = new ExportSettings(
+                tempDir.resolve("out.tif").toString(), "tiff", 95);
+        RenderRecipe recipe = new RenderRecipe(imageFile, null, null, null, false);
+        RenderJobRequest request = new RenderJobRequest(recipe, export);
+
+        String response = mockMvc.perform(post("/api/render-jobs")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String jobId = objectMapper.readTree(response).get("jobId").asText();
+        String statusResponse = mockMvc.perform(get("/api/render-jobs/" + jobId))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+
+        String actualFormat = objectMapper.readTree(statusResponse).path("actualFormat").asText();
+        assertThat(actualFormat).isEqualTo("tiff");
     }
 }

@@ -37,6 +37,40 @@ export type TextItem = {
   readonly placement: string
   readonly marginX: number
   readonly marginY: number
+  /** 背景条：是否启用。 */
+  readonly backgroundEnabled?: boolean
+  /** 背景条：颜色。 */
+  readonly backgroundColor?: string
+  /** 背景条：水平内边距。 */
+  readonly backgroundPaddingX?: number
+  /** 背景条：垂直内边距。 */
+  readonly backgroundPaddingY?: number
+  /** 阴影：是否启用。 */
+  readonly shadowEnabled?: boolean
+  /** 阴影：颜色。 */
+  readonly shadowColor?: string
+  /** 阴影：模糊半径。 */
+  readonly shadowBlur?: number
+  /** 阴影：水平偏移。 */
+  readonly shadowOffsetX?: number
+  /** 阴影：垂直偏移。 */
+  readonly shadowOffsetY?: number
+  /** 描边：是否启用。 */
+  readonly strokeEnabled?: boolean
+  /** 描边：颜色。 */
+  readonly strokeColor?: string
+  /** 描边：宽度。 */
+  readonly strokeWidth?: number
+}
+
+/** 品牌标识配置，对应后端 LogoConfig。 */
+export type LogoConfig = {
+  readonly enabled: boolean
+  readonly mode: "auto-brand" | "brand-text"
+  readonly brand: string | null
+  readonly placement: string
+  readonly size: number
+  readonly colorMode: "auto-contrast" | "light" | "dark"
 }
 
 export type RenderRecipe = {
@@ -46,6 +80,8 @@ export type RenderRecipe = {
   readonly texts: readonly TextItem[]
   readonly filmFormat: string | null
   readonly autoCrop: boolean
+  /** 品牌标识配置，null 表示不绘制品牌标识。 */
+  readonly logo?: LogoConfig | null
 }
 
 export type PreviewRequest = {
@@ -66,9 +102,18 @@ export type PreviewResponse = {
  * 对应 Java 引擎的 ExportSettings 模型（ARCHITECTURE.md §4.3）。
  */
 export type ExportSettings = {
-  readonly format: "png" | "jpeg"
+  readonly format: "png" | "jpeg" | "tiff"
   readonly outputPath: string
   readonly jpegQuality: number
+  /** 导出目标尺寸上限（像素）：等比缩小的边界，0 表示不限制（原图尺寸）。 */
+  readonly maxWidth?: number
+  readonly maxHeight?: number
+  /** 专业导出：是否保留 EXIF 元数据。 */
+  readonly preserveMetadata?: boolean
+  /** 专业导出：是否保留 ICC 色彩配置文件。 */
+  readonly preserveColorProfile?: boolean
+  /** 专业导出：是否优先保留高位深（>8bit）。 */
+  readonly preferHighBitDepth?: boolean
 }
 
 /**
@@ -80,21 +125,33 @@ export type RenderJobRequest = {
   readonly export: ExportSettings
 }
 
-/**
- * 导出任务创建响应，POST /api/render-jobs 返回。
- */
-export type RenderJobCreatedResponse = {
-  readonly jobId: string
+/** 专业能力应用状态（镜像 Java ImageEncoder.FeatureStatus）。 */
+export type FeatureStatus = "NOT_REQUESTED" | "APPLIED" | "SKIPPED" | "DOWNGRADED"
+
+/** 单项专业能力的应用结果。 */
+export type FeatureResult = {
+  readonly status: FeatureStatus
+  readonly message: string | null
 }
 
 /**
- * 导出任务状态响应，GET /api/render-jobs/{jobId} 返回。
+ * 导出任务状态响应，POST /api/render-jobs（同步完成）与 GET /api/render-jobs/{jobId} 返回。
+ * 包含结构化的专业能力应用结果，前端据此展示真实导出摘要。
  */
 export type RenderJobStatusResponse = {
   readonly jobId: string
   readonly status: "pending" | "running" | "completed" | "failed"
+  readonly message?: string
   readonly outputPath?: string
   readonly error?: string
+  /** 导出摘要：实际使用的格式。 */
+  readonly actualFormat?: string
+  /** EXIF 元数据保留的真实应用结果。 */
+  readonly metadataPreservation?: FeatureResult
+  /** ICC 色彩配置文件保留的真实应用结果。 */
+  readonly colorProfilePreservation?: FeatureResult
+  /** 高位深输出的真实应用结果。 */
+  readonly highBitDepth?: FeatureResult
 }
 
 /**

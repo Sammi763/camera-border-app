@@ -5,8 +5,12 @@ import { IPC_CHANNELS, type ImageSourceResult } from "../types/desktopApi.js"
 
 const IMAGE_FILTERS = [
   {
-    name: "图片",
-    extensions: ["jpg", "jpeg", "png", "webp", "tif", "tiff", "bmp"]
+    name: "图片（含 RAW / HEIC）",
+    extensions: [
+      "jpg", "jpeg", "png", "webp", "tif", "tiff", "bmp",
+      "heic", "heif",
+      "nef", "cr2", "cr3", "arw", "raf", "dng", "orf", "rw2", "pef"
+    ]
   }
 ]
 
@@ -15,6 +19,9 @@ const getExportFilters = (defaultFileName: string): Electron.FileFilter[] => {
   const ext = defaultFileName.split(".").pop()?.toLowerCase() ?? "png"
   if (ext === "jpg" || ext === "jpeg") {
     return [{ name: "JPEG", extensions: ["jpg", "jpeg"] }]
+  }
+  if (ext === "tif" || ext === "tiff") {
+    return [{ name: "TIFF", extensions: ["tif", "tiff"] }]
   }
   return [{ name: "PNG", extensions: ["png"] }]
 }
@@ -103,7 +110,9 @@ export const registerFileDialogIpc = (): void => {
 
   /** 支持的图片扩展名（小写）。 */
   const SUPPORTED_IMAGE_EXTENSIONS = new Set([
-    ".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp"
+    ".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp",
+    ".heic", ".heif",
+    ".nef", ".cr2", ".cr3", ".arw", ".raf", ".dng", ".orf", ".rw2", ".pef"
   ])
 
   const isSupportedImage = (filePath: string): boolean => {

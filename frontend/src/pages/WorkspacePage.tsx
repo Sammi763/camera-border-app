@@ -28,15 +28,19 @@ import { useSettings } from "../features/settings/hooks/useSettings"
 import { useTemplates } from "../features/template/hooks/useTemplates"
 import { TemplateDropOverlay } from "../features/template/components/TemplateDropOverlay"
 import { deduplicateTemplateName } from "../features/template/utils/templateJsonCodec"
+import { normalizeTemplatePatch, normalizeTemplateSettings } from "../features/template/utils/normalizeTemplate"
 import { useRolls } from "../features/metadata/hooks/useRolls"
 import { usePhotoAssets } from "../features/metadata/hooks/usePhotoAssets"
+import { useExifIndex } from "../features/metadata/hooks/useExifIndex"
 import { resolveEffectiveText } from "../features/metadata/utils/resolveEffectiveText"
+import { detectBrandFromIdentity } from "../features/settings/utils/brandDetection"
 import { BUILT_IN_TEMPLATES } from "../features/template/presets/builtInTemplates"
 import { fetchFilmStocks } from "../services/engine/filmStocksApi"
 import type { DesktopRuntime } from "../types/runtime"
 import type { RenderSettings } from "../features/settings/types"
 import type { Template } from "../features/template/types"
 import type { FilmStock } from "../features/metadata/types"
+import type { QueueItem } from "../features/queue/types"
 
 type WorkspacePageProps = {
   readonly runtime: DesktopRuntime
@@ -88,6 +92,7 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
   const userModifiedRef = useRef(false)
   const rolls = useRolls()
   const assets = usePhotoAssets()
+  const exif = useExifIndex()
   const [filmStocks, setFilmStocks] = useState<readonly FilmStock[]>([])
   const [activePresetId, setActivePresetId] = useState<string | null>(null)
 
@@ -163,10 +168,11 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
     return () => { active = false }
   }, [])
 
-  // 应用内置视觉模板 patch，同时更新活跃模板 id
+  // 应用内置视觉模板 patch，同时更新活跃模板 id。
+  // 内置模板可能含旧单段字段（textContent 等），统一走 normalizeTemplatePatch 迁移。
   const handleApplyPreset = useCallback((patch: Partial<RenderSettings>): void => {
     userModifiedRef.current = true
-    settings.update(patch)
+    settings.update(normalizeTemplatePatch(patch))
     const matched = BUILT_IN_TEMPLATES.find((t) => t.settingsPatch === patch)
     setActivePresetId(matched?.id ?? null)
   }, [settings])
@@ -187,26 +193,56 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
     [settings]
   )
 
-  // 加载模板时更新设置（用户主动操作，标记为已修改）
+  // 包装 updateTextLayer，同样标记用户已主动修改设置
+  const handleUpdateTextLayer = useCallback(
+    (layerId: string, patch: Parameters<typeof settings.updateTextLayer>[1]): void => {
+      userModifiedRef.current = true
+      settings.updateTextLayer(layerId, patch)
+      setActivePresetId(null)
+    },
+    [settings]
+  )
+
+  // 包装 resetTextLayers，标记用户已主动修改设置
+  const handleResetTextLayers = useCallback((): void => {
+    userModifiedRef.current = true
+    settings.resetTextLayers()
+    setActivePresetId(null)
+  }, [settings])
+
+  // 包装 replaceTextLayers，标记用户已主动修改设置
+  const handleReplaceTextLayers = useCallback(
+    (layers: Parameters<typeof settings.replaceTextLayers>[0]): void => {
+      userModifiedRef.current = true
+      settings.replaceTextLayers(layers)
+      setActivePresetId(null)
+    },
+    [settings]
+  )
+
+  // 加载模板时更新设置（用户主动操作，标记为已修改）。
+  // 用户模板可能是旧格式（不含 textLayers），走 normalizeTemplateSettings 迁移。
   const handleLoadTemplate = useCallback((templateSettings: RenderSettings): void => {
     userModifiedRef.current = true
-    settings.update(templateSettings)
+    settings.update(normalizeTemplateSettings(templateSettings))
     setActivePresetId(null)
   }, [settings])
 
-  // 拖拽/导入模板：应用到当前设置（不保存）
+  // 拖拽/导入模板：应用到当前设置（不保存）。
+  // 导入的模板也可能是旧格式，走 normalizeTemplateSettings 迁移。
   const handleDropApply = useCallback((templateSettings: RenderSettings): void => {
     userModifiedRef.current = true
-    settings.update(templateSettings)
+    settings.update(normalizeTemplateSettings(templateSettings))
     setActivePresetId(null)
   }, [settings])
 
-  // 默认模板自动应用回调：仅在用户未手动修改过设置时生效
+  // 默认模板自动应用回调：仅在用户未手动修改过设置时生效。
+  // 默认模板也可能是旧格式，走 normalizeTemplateSettings 迁移。
   const handleDefaultLoaded = useCallback((templateSettings: RenderSettings): void => {
     if (userModifiedRef.current) {
       return
     }
-    settings.update(templateSettings)
+    settings.update(normalizeTemplateSettings(templateSettings))
   }, [settings])
 
   // 模板管理（传入默认模板自动应用回调）
@@ -239,42 +275,102 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
   const selectedItem = queue.items.find((item) => item.isSelected)
   const selectedTextOverride = selectedItem?.textOverride ?? null
 
-  // 计算当前图片的有效摄影身份
+  // 选中图片变化时惰性读取 EXIF（供身份链与变量解析使用）
+  useEffect(() => {
+    exif.ensureExif(queue.selectedFilePath)
+  }, [exif.ensureExif, queue.selectedFilePath])
+
+  // 阻止窗口级默认拖放行为：拖图片到预览区等空白处时，
+  // 避免 Electron/浏览器直接导航打开文件（拖入队列由 QueuePanel 处理）。
+  useEffect(() => {
+    const preventDefault = (event: DragEvent): void => {
+      event.preventDefault()
+    }
+    window.addEventListener("dragover", preventDefault)
+    window.addEventListener("drop", preventDefault)
+    return () => {
+      window.removeEventListener("dragover", preventDefault)
+      window.removeEventListener("drop", preventDefault)
+    }
+  }, [])
+
+  // 计算当前图片的有效摄影身份（每图覆盖 > Roll > EXIF > 空）
   const selectedIdentity = selectedItem !== undefined
-    ? queue.getEffectiveIdentity(selectedItem.id, rolls.rolls)
+    ? queue.getEffectiveIdentity(selectedItem.id, rolls.rolls, exif.exifByPath)
     : null
 
-  // 计算有效文字内容：覆盖文本中的变量也会被解析
-  const effectiveText = useMemo(() => {
-    const template = selectedTextOverride ?? settings.settings.textContent
-    return resolveEffectiveText(template, selectedIdentity)
-  }, [selectedTextOverride, selectedIdentity, settings.settings.textContent])
-
-  // 引擎预览使用解析后的文本
-  const previewTextOverride = selectedTextOverride !== null
-    ? resolveEffectiveText(selectedTextOverride, selectedIdentity)
-    : (settings.settings.textContent.includes("{") && selectedIdentity !== null
-      ? resolveEffectiveText(settings.settings.textContent, selectedIdentity)
-      : null)
-  const preview = usePreview(queue.selectedFilePath, settings.settings, settings.settingsVersion, previewTextOverride)
-
-  // 构建队列文件路径和名称列表（用于批量导出）
-  const queueFilePaths = useMemo(() => queue.items.map((item) => item.filePath), [queue.items])
-  const queueFileNames = useMemo(() => queue.items.map((item) => item.fileName), [queue.items])
-
-  // 每张图的文字覆盖列表：统一使用 resolveEffectiveText
-  const queueTextOverrides = useMemo(() =>
-    queue.items.map((item) => {
-      const identity = queue.getEffectiveIdentity(item.id, rolls.rolls)
-      if (item.textOverride !== null) {
-        return resolveEffectiveText(item.textOverride, identity)
-      }
-      if (settings.settings.textContent.includes("{")) {
-        return resolveEffectiveText(settings.settings.textContent, identity)
-      }
+  // 快捷文字覆盖：当前图片的独立文字覆盖。
+  // 用于 buildTextsFromSettings 中覆盖 textLayers[0].content。
+  // 变量解析后传给 usePreview 和 PreviewPanel。
+  const resolvedTextOverride = useMemo(() => {
+    if (selectedTextOverride === null) {
       return null
-    }),
-    [queue.items, settings.settings.textContent, rolls.rolls, queue.getEffectiveIdentity]
+    }
+    return resolveEffectiveText(selectedTextOverride, selectedIdentity)
+  }, [selectedTextOverride, selectedIdentity])
+
+  // 多段文字图层变量解析：对当前选中图片的每个 textLayer 解析变量
+  const resolvedTextLayers = useMemo(() => {
+    return settings.settings.textLayers.map((layer) => {
+      if (!layer.enabled || layer.content.length === 0) {
+        return null
+      }
+      return resolveEffectiveText(layer.content, selectedIdentity)
+    })
+  }, [settings.settings.textLayers, selectedIdentity])
+
+  // 品牌标识：根据当前图片的相机信息识别品牌
+  const resolvedBrand = useMemo(() => {
+    if (selectedIdentity === null) {
+      return null
+    }
+    const result = detectBrandFromIdentity(selectedIdentity.camera)
+    return result.label
+  }, [selectedIdentity])
+
+  const preview = usePreview(
+    queue.selectedFilePath,
+    settings.settings,
+    settings.settingsVersion,
+    resolvedTextOverride,
+    resolvedTextLayers,
+    resolvedBrand
+  )
+
+  // 识别当前图片的品牌（用于品牌标识设置面板预览）
+  const detectedBrand = useMemo(() => {
+    if (selectedIdentity === null) {
+      return null
+    }
+    return detectBrandFromIdentity(selectedIdentity.camera)
+  }, [selectedIdentity])
+
+  // 单张图片的批量导出解析结果（文字覆盖 + 多段文字变量 + 品牌）。
+  // 与 PreviewPanel 的 ResolvedQueueItem 类型对齐。
+  type ResolvedQueueItem = {
+    readonly textOverride: string | null
+    readonly resolvedLayers: readonly (string | null)[]
+    readonly brand: string | null
+  }
+
+  // 每图解析延迟到批量导出时逐项执行：避免用户在文字框每次击键时
+  // 对全队列重复做变量解析（queueResolved* 不再全量预计算）。
+  const resolveQueueItem = useCallback(
+    (item: QueueItem): ResolvedQueueItem => {
+      const identity = queue.getEffectiveIdentity(item.id, rolls.rolls, exif.exifByPath)
+      const textOverride = item.textOverride !== null
+        ? resolveEffectiveText(item.textOverride, identity)
+        : null
+      const resolvedLayers = settings.settings.textLayers.map((layer) => {
+        if (!layer.enabled || layer.content.length === 0) {
+          return null
+        }
+        return resolveEffectiveText(layer.content, identity)
+      })
+      const brand = detectBrandFromIdentity(identity.camera).label
+      return { textOverride, resolvedLayers, brand }
+    },
+    [queue, rolls.rolls, exif.exifByPath, settings.settings.textLayers]
   )
 
   // ---- 右侧检查器折叠分组 ---------------------------------------------------
@@ -286,11 +382,19 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
       defaultExpanded: true,
       content: (
         <SettingsPanel
-          controller={{ ...settings, update: handleSettingsUpdate, updateNumber: handleSettingsUpdateNumber }}
+          controller={{
+            ...settings,
+            update: handleSettingsUpdate,
+            updateNumber: handleSettingsUpdateNumber,
+            updateTextLayer: handleUpdateTextLayer,
+            resetTextLayers: handleResetTextLayers,
+            replaceTextLayers: handleReplaceTextLayers
+          }}
           hasSelectedImage={queue.selectedFilePath !== null}
           selectedFilePath={queue.selectedFilePath}
           textOverride={queue.selectedTextOverride}
           setTextOverride={queue.setSelectedTextOverride}
+          detectedBrandLabel={detectedBrand?.label ?? null}
         />
       )
     },
@@ -360,7 +464,8 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
       )
     }
   ], [
-    settings, handleSettingsUpdate, handleSettingsUpdateNumber,
+    settings, handleSettingsUpdate, handleSettingsUpdateNumber, handleUpdateTextLayer,
+    handleResetTextLayers, handleReplaceTextLayers,
     templates, handleLoadTemplate, handleApplyPreset, activePresetId, handleImportTemplate,
     queue, selectedItem, selectedIdentity, rolls, assets, filmStocks,
     handleDeleteRoll, handleClearAllRollBindings
@@ -381,14 +486,13 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
         <div className="workspaceCenter">
           <PreviewPanel
             state={preview}
-            settings={{
-              ...settings.settings,
-              textContent: effectiveText
-            }}
+            settings={settings.settings}
             hasSelectedImage={queue.selectedFilePath !== null}
-            queueFilePaths={queueFilePaths}
-            queueFileNames={queueFileNames}
-            queueTextOverrides={queueTextOverrides}
+            queueItems={queue.items}
+            resolveQueueItem={resolveQueueItem}
+            resolvedBrand={resolvedBrand}
+            resolvedTextOverride={resolvedTextOverride}
+            resolvedTextLayers={resolvedTextLayers}
           />
         </div>
         <div className="workspaceRight">

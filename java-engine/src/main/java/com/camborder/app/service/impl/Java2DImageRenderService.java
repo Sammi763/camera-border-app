@@ -7,6 +7,7 @@ import com.camborder.app.util.BorderComposer;
 import com.camborder.app.util.ImageEncoder;
 import com.camborder.app.util.ImageReader;
 import com.camborder.app.util.ImageScaler;
+import com.camborder.app.util.LogoRenderer;
 import com.camborder.app.util.TextRenderer;
 import org.springframework.stereotype.Service;
 
@@ -14,7 +15,7 @@ import java.awt.image.BufferedImage;
 
 /**
  * 图像渲染服务 Java 2D 实现（service.impl 层）。
- * 编排各 util 组件完成渲染流水线：读取 -> 缩放 -> 边框 -> 文字 -> 编码。
+ * 编排各 util 组件完成渲染流水线：读取 -> 缩放 -> 边框 -> 文字 -> 品牌标识 -> 编码。
  * 本类只做编排，不承担具体渲染逻辑（各职责已在 util 包拆分）。
  *
  * 设计原则：
@@ -30,17 +31,20 @@ public final class Java2DImageRenderService implements ImageRenderService {
     private final BorderComposer borderComposer;
     private final TextRenderer textRenderer;
     private final ImageEncoder imageEncoder;
+    private final LogoRenderer logoRenderer;
 
     public Java2DImageRenderService(final ImageReader imageReader,
                                     final ImageScaler imageScaler,
                                     final BorderComposer borderComposer,
                                     final TextRenderer textRenderer,
-                                    final ImageEncoder imageEncoder) {
+                                    final ImageEncoder imageEncoder,
+                                    final LogoRenderer logoRenderer) {
         this.imageReader = imageReader;
         this.imageScaler = imageScaler;
         this.borderComposer = borderComposer;
         this.textRenderer = textRenderer;
         this.imageEncoder = imageEncoder;
+        this.logoRenderer = logoRenderer;
     }
 
     @Override
@@ -51,6 +55,8 @@ public final class Java2DImageRenderService implements ImageRenderService {
         // 文字定位需要区分「图片区域」与「边框区域」，传入边框配置与缩放后图片尺寸
         textRenderer.draw(canvas, recipe.getTexts(), recipe.getBorder(),
                 scaled.getWidth(), scaled.getHeight());
+        // 品牌标识绘制（如果启用）
+        logoRenderer.draw(canvas, recipe.getLogo(), recipe.getBorder());
         return canvas;
     }
 
@@ -60,9 +66,7 @@ public final class Java2DImageRenderService implements ImageRenderService {
     }
 
     @Override
-    public String writeToFile(final BufferedImage image, final ExportSettings export) {
-        // 解包 DTO 后交给编码器，保持 util 不依赖 dto
-        return imageEncoder.writeToFile(image, export.getOutputPath(),
-                export.getFormat(), export.getJpegQuality());
+    public ImageEncoder.ExportResult writeToFile(final BufferedImage image, final ExportSettings export) {
+        return imageEncoder.writeToFile(image, export.getOutputPath(), export);
     }
 }

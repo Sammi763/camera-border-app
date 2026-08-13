@@ -4,9 +4,11 @@
  * 模板方向偏胶片、暗房、档案馆、展览展示风格，
  * 非互联网卡片风。每个模板只需提供 settingsPatch，
  * 应用时与当前设置合并，避免覆盖用户已调整的无关参数。
+ *
+ * 阶段 2 新增：多段文字模板使用 textLayers 而非 textContent。
  */
 
-import type { RenderSettings } from "../../settings/types"
+import type { RenderSettings, TextLayerSettings } from "../../settings/types"
 
 /** 内置模板分类。 */
 export type TemplateCategory = "经典" | "胶片" | "暗房" | "档案"
@@ -27,6 +29,51 @@ export type BuiltInTemplate = {
     readonly bottomRatio: number
   }
 }
+
+/**
+ * 创建文字图层快捷函数。
+ */
+const layer = (
+  id: string,
+  content: string,
+  fontSize: number,
+  color: string,
+  placement: string,
+  textArea: "image" | "border",
+  marginY: number,
+  fontFamily: string = "sans-serif",
+  extra?: Partial<TextLayerSettings>
+): TextLayerSettings => ({
+  id,
+  enabled: true,
+  content,
+  fontFamily,
+  fontSize,
+  color,
+  placement,
+  textArea,
+  marginX: 0,
+  marginY,
+  backgroundEnabled: false,
+  backgroundColor: "#000000",
+  backgroundPaddingX: 6,
+  backgroundPaddingY: 3,
+  shadowEnabled: false,
+  shadowColor: "#000000",
+  shadowBlur: 0,
+  shadowOffsetX: 2,
+  shadowOffsetY: 2,
+  strokeEnabled: false,
+  strokeColor: "#000000",
+  strokeWidth: 1,
+  ...extra,
+})
+
+/** 禁用的第三图层（通用）。 */
+const disabledLayer3 = (id: string = "layer-3"): TextLayerSettings => ({
+  ...layer(id, "", 14, "#888888", "top-center", "border", 8),
+  enabled: false,
+})
 
 /**
  * 内置视觉模板列表。
@@ -234,5 +281,131 @@ export const BUILT_IN_TEMPLATES: readonly BuiltInTemplate[] = [
       gradient: { enabled: false, type: "linear", angle: 0, stops: [{ offset: 0, color: "#000000" }, { offset: 1, color: "#ffffff" }] },
     },
     thumb: { borderColor: "#ffffff", photoColor: "#6b6560", textColor: "#000000", bottomRatio: 0.04 },
+  },
+
+  // ── 多段文字模板（阶段 2 新增） ──────────────────────────
+  {
+    id: "darkroom-info-bar",
+    name: "Darkroom Info Bar",
+    category: "暗房",
+    description: "深色边框双行信息条。第一行相机·镜头，第二行胶片·扫描仪，字号更小。",
+    settingsPatch: {
+      borderColor: "#1a1a1a",
+      borderTop: 20,
+      borderBottom: 90,
+      borderLeft: 20,
+      borderRight: 20,
+      textLayers: [
+        layer("l1", "{Camera} · {Lens}", 20, "#e0e0e0", "bottom-center", "border", 20, "sans-serif"),
+        layer("l2", "{Film} · {Scanner}", 14, "#999999", "bottom-center", "border", 48, "sans-serif"),
+        disabledLayer3("l3"),
+      ],
+      gradient: { enabled: false, type: "linear", angle: 0, stops: [{ offset: 0, color: "#000000" }, { offset: 1, color: "#ffffff" }] },
+    },
+    thumb: { borderColor: "#1a1a1a", photoColor: "#3d3830", textColor: "#e0e0e0", bottomRatio: 0.32 },
+  },
+  {
+    id: "archive-two-line",
+    name: "Archive Two-Line",
+    category: "档案",
+    description: "浅色边框双行归档信息。第一行胶片·地点，第二行帧号·卷名。",
+    settingsPatch: {
+      borderColor: "#e8e2d8",
+      borderTop: 25,
+      borderBottom: 80,
+      borderLeft: 25,
+      borderRight: 25,
+      textLayers: [
+        layer("l1", "{Film} · {Location}", 18, "#555048", "bottom-center", "border", 18, "serif"),
+        layer("l2", "#{FrameNumber} · {RollName}", 14, "#888888", "bottom-center", "border", 44, "serif"),
+        disabledLayer3("l3"),
+      ],
+      gradient: { enabled: false, type: "linear", angle: 0, stops: [{ offset: 0, color: "#000000" }, { offset: 1, color: "#ffffff" }] },
+    },
+    thumb: { borderColor: "#e8e2d8", photoColor: "#a09888", textColor: "#555048", bottomRatio: 0.28 },
+  },
+  {
+    id: "museum-caption",
+    name: "Museum Caption",
+    category: "档案",
+    description: "大面积白色留白，双行展览说明。第一行卷名，第二行地点·相机。",
+    settingsPatch: {
+      borderColor: "#faf8f4",
+      borderTop: 50,
+      borderBottom: 140,
+      borderLeft: 50,
+      borderRight: 50,
+      textLayers: [
+        layer("l1", "{RollName}", 18, "#333333", "bottom-center", "border", 30, "serif"),
+        layer("l2", "{Location} · {Camera}", 14, "#777777", "bottom-center", "border", 58, "serif"),
+        disabledLayer3("l3"),
+      ],
+      gradient: { enabled: false, type: "linear", angle: 0, stops: [{ offset: 0, color: "#000000" }, { offset: 1, color: "#ffffff" }] },
+    },
+    thumb: { borderColor: "#faf8f4", photoColor: "#c0b8a8", textColor: "#444444", bottomRatio: 0.35 },
+  },
+  {
+    id: "contact-note-strip",
+    name: "Contact Note Strip",
+    category: "暗房",
+    description: "底部细信息条，三行分层展示相机、胶片、地点，字号递减。",
+    settingsPatch: {
+      borderColor: "#222222",
+      borderTop: 8,
+      borderBottom: 70,
+      borderLeft: 8,
+      borderRight: 8,
+      textLayers: [
+        layer("l1", "{Camera}", 16, "#e8e8e8", "bottom-center", "border", 10, "sans-serif"),
+        layer("l2", "{Film}", 13, "#aaaaaa", "bottom-center", "border", 30, "sans-serif"),
+        layer("l3", "{Location}", 11, "#888888", "bottom-center", "border", 48, "sans-serif"),
+      ],
+      gradient: { enabled: false, type: "linear", angle: 0, stops: [{ offset: 0, color: "#000000" }, { offset: 1, color: "#ffffff" }] },
+    },
+    thumb: { borderColor: "#222222", photoColor: "#4a4540", textColor: "#e8e8e8", bottomRatio: 0.25 },
+  },
+
+  // ── 品牌标识模板 ──────────────────────────────────────
+  {
+    id: "brand-mark-darkroom",
+    name: "Brand Mark Darkroom",
+    category: "暗房",
+    description: "深色边框，自动识别相机品牌并显示在右上角，双行文字信息条。",
+    settingsPatch: {
+      borderColor: "#1a1a1a",
+      borderTop: 20,
+      borderBottom: 90,
+      borderLeft: 20,
+      borderRight: 20,
+      textLayers: [
+        layer("l1", "{Camera} · {Lens}", 20, "#e0e0e0", "bottom-center", "border", 20, "sans-serif"),
+        layer("l2", "{Film} · {Scanner}", 14, "#999999", "bottom-center", "border", 48, "sans-serif"),
+        disabledLayer3("l3"),
+      ],
+      logo: { enabled: true, mode: "auto-brand", brand: null, placement: "border-top-right", size: 16, colorMode: "auto-contrast" },
+      gradient: { enabled: false, type: "linear", angle: 0, stops: [{ offset: 0, color: "#000000" }, { offset: 1, color: "#ffffff" }] },
+    },
+    thumb: { borderColor: "#1a1a1a", photoColor: "#3d3830", textColor: "#e0e0e0", bottomRatio: 0.32 },
+  },
+  {
+    id: "brand-mark-archive",
+    name: "Brand Mark Archive",
+    category: "档案",
+    description: "浅色边框，自动识别相机品牌并显示在右上角，归档风格双行文字。",
+    settingsPatch: {
+      borderColor: "#e8e2d8",
+      borderTop: 25,
+      borderBottom: 80,
+      borderLeft: 25,
+      borderRight: 25,
+      textLayers: [
+        layer("l1", "{Film} · {Location}", 18, "#555048", "bottom-center", "border", 18, "serif"),
+        layer("l2", "#{FrameNumber} · {RollName}", 14, "#888888", "bottom-center", "border", 44, "serif"),
+        disabledLayer3("l3"),
+      ],
+      logo: { enabled: true, mode: "auto-brand", brand: null, placement: "border-top-right", size: 14, colorMode: "auto-contrast" },
+      gradient: { enabled: false, type: "linear", angle: 0, stops: [{ offset: 0, color: "#000000" }, { offset: 1, color: "#ffffff" }] },
+    },
+    thumb: { borderColor: "#e8e2d8", photoColor: "#a09888", textColor: "#555048", bottomRatio: 0.28 },
   },
 ]
