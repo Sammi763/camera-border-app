@@ -22,6 +22,18 @@ final class MetadataFormatControllerTest {
     private MockMvc mockMvc;
 
     @Test
+    void shouldReplaceCaptureFormatVariable() throws Exception {
+        // {CaptureFormat} 与前端变量清单一致（6x10/6x12 画幅可经此格式化）
+        String body = "{\"template\":\"{CaptureFormat} · {Film}\","
+                + "\"metadata\":{\"captureformat\":\"6×10\",\"film\":\"Kodak Portra 400\"}}";
+        mockMvc.perform(post("/api/metadata/format")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.text").value("6×10 · Kodak Portra 400"));
+    }
+
+    @Test
     void shouldReplaceAllVariables() throws Exception {
         String body = "{\"template\":\"{Camera} · {Lens} · {Film} · {Scanner} · {Lab}\","
                 + "\"metadata\":{\"camera\":\"Leica M6\",\"lens\":\"Voigtlander 35mm F1.4\","

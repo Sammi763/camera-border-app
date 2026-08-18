@@ -7,6 +7,7 @@ import type { NumberSettingKey, OutputSizePreset, RenderSettings, SettingsContro
 import { VariableHelpPanel } from "../../metadata/components/VariableHelpPanel"
 import { TextLayerEditor } from "./TextLayerEditor"
 import { createDefaultTextLayers } from "../utils/defaultTextLayers"
+import { applyFilmFormatSettings } from "../utils/applyFilmFormat"
 import { CUSTOM_LONG_EDGE_MAX, CUSTOM_LONG_EDGE_MIN, OUTPUT_SIZE_PRESETS } from "../utils/outputSizePresets"
 import type { FilmFormatInfo } from "../../../types/preview"
 
@@ -24,7 +25,7 @@ type SettingsPanelProps = {
   readonly detectedBrandLabel?: string | null
 }
 
-/** 内置画幅选项（后端不可用时的回退）。 */
+/** 内置画幅选项（后端不可用时的回退；含 6x10 与 6x12）。 */
 const FALLBACK_FORMATS: readonly FilmFormatInfo[] = [
   { id: "half-frame", label: "半格", recommendedBorder: { top: 40, bottom: 40, left: 20, right: 20, color: "#ffffff" } },
   { id: "135", label: "135", recommendedBorder: { top: 30, bottom: 30, left: 30, right: 30, color: "#ffffff" } },
@@ -33,6 +34,7 @@ const FALLBACK_FORMATS: readonly FilmFormatInfo[] = [
   { id: "6x7", label: "6x7", recommendedBorder: { top: 30, bottom: 50, left: 35, right: 35, color: "#ffffff" } },
   { id: "6x8", label: "6x8", recommendedBorder: { top: 30, bottom: 50, left: 35, right: 35, color: "#ffffff" } },
   { id: "6x9", label: "6x9", recommendedBorder: { top: 30, bottom: 50, left: 40, right: 40, color: "#ffffff" } },
+  { id: "6x10", label: "6x10", recommendedBorder: { top: 30, bottom: 50, left: 45, right: 45, color: "#ffffff" } },
   { id: "6x12", label: "6x12", recommendedBorder: { top: 30, bottom: 50, left: 50, right: 50, color: "#ffffff" } }
 ]
 
@@ -107,18 +109,8 @@ export const SettingsPanel = ({
   )
 
   const handleFilmFormatChange = useCallback((formatId: string): void => {
-    if (formatId === "") {
-      update({ filmFormat: null })
-      return
-    }
     const format = filmFormats.find((f) => f.id === formatId)
-    update({
-      filmFormat: formatId,
-      borderTop: format?.recommendedBorder.top ?? settings.borderTop,
-      borderBottom: format?.recommendedBorder.bottom ?? settings.borderBottom,
-      borderLeft: format?.recommendedBorder.left ?? settings.borderLeft,
-      borderRight: format?.recommendedBorder.right ?? settings.borderRight
-    })
+    update(applyFilmFormatSettings(settings, formatId, format))
   }, [filmFormats, settings, update])
 
   const handleExifFill = useCallback(async () => {

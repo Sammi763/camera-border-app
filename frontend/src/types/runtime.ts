@@ -76,13 +76,23 @@ export type DesktopBridge = {
   readonly writeAssets: (json: string) => Promise<void>
   /**
    * 读取 userData 中的 Roll 胶卷数据 JSON 字符串。
-   * 文件不存在时返回 "[]"。
+   * 文件不存在时返回 "[]"。（旧版兼容，不扩展）
    */
   readonly readRolls: () => Promise<string>
   /**
    * 将 Roll 胶卷数据 JSON 字符串写入 userData 中的 rolls 文件。
+   * （旧版兼容，不扩展）
    */
   readonly writeRolls: (json: string) => Promise<void>
+  /**
+   * 读取 userData 中的摄影预设 JSON 字符串。
+   * 文件不存在时返回 "[]"。
+   */
+  readonly readPresets: () => Promise<string>
+  /**
+   * 将摄影预设 JSON 字符串写入 userData 中的预设文件。
+   */
+  readonly writePresets: (json: string) => Promise<void>
   /**
    * 打开保存对话框，将模板 JSON 写入用户选择的路径。
    * 用户取消时返回 null。

@@ -33,6 +33,8 @@ public final class FilmFormatServiceImpl implements FilmFormatService {
                     new FilmFormatBorder(50, 70, 50, 50)),
             new FilmFormatResponse("6x9", "6×9", "90:56",
                     new FilmFormatBorder(50, 80, 50, 50)),
+            new FilmFormatResponse("6x10", "6×10", "100:56",
+                    new FilmFormatBorder(50, 85, 50, 50)),
             new FilmFormatResponse("6x12", "6×12", "120:56",
                     new FilmFormatBorder(50, 90, 50, 50))
     );

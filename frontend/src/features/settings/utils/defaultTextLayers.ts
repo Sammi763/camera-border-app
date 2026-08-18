@@ -39,7 +39,7 @@ export const createDefaultTextLayers = (): readonly TextLayerSettings[] => [
   {
     id: "layer-2",
     enabled: true,
-    content: "{Film} · {Scanner}",
+    content: "{CaptureFormat} · {Film} · {Location}",
     fontFamily: "sans-serif",
     fontSize: 16,
     color: "#666666",

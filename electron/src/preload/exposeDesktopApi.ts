@@ -52,6 +52,10 @@ export const exposeDesktopApi = (): void => {
       ipcRenderer.invoke(IPC_CHANNELS.READ_ROLLS),
     writeRolls: (json: string): Promise<void> =>
       ipcRenderer.invoke(IPC_CHANNELS.WRITE_ROLLS, json),
+    readPresets: (): Promise<string> =>
+      ipcRenderer.invoke(IPC_CHANNELS.READ_PRESETS),
+    writePresets: (json: string): Promise<void> =>
+      ipcRenderer.invoke(IPC_CHANNELS.WRITE_PRESETS, json),
     exportTemplateJson: (defaultFileName: string, json: string): Promise<string | null> =>
       ipcRenderer.invoke(IPC_CHANNELS.EXPORT_TEMPLATE_JSON, defaultFileName, json),
     importTemplateJson: (): Promise<string | null> =>

@@ -1190,26 +1190,34 @@ body {
   overflow: auto;
 }
 
-/* ---- Roll 面板 ---------------------------------------------------------- */
+/* ---- 摄影预设面板 ------------------------------------------------------- */
 
-.rollPanel {
+.presetPanel {
   flex: 0 0 auto;
 }
 
-.rollPanelInner {
+.presetPanelInner {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
 }
 
-.rollList {
+.presetFilterRow {
+  margin-bottom: var(--space-2);
+}
+
+.presetFilterSelect {
+  min-width: 120px;
+}
+
+.presetList {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
   margin-bottom: var(--space-3);
 }
 
-.rollItem {
+.presetItem {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -1217,24 +1225,38 @@ body {
   border: 1px solid var(--border-subtle);
   border-radius: 4px;
   background: var(--surface-primary);
+  gap: var(--space-2);
 }
 
-.rollItemInfo {
+.presetItemInfo {
   display: flex;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
 }
 
-.rollItemName {
+.presetItemName {
   font-weight: 600;
   font-size: 0.9rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
 }
 
-.rollItemDetail {
+.presetCategoryChip {
+  font-weight: 400;
+  font-size: 0.65rem;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 2px;
+  padding: 0 var(--space-1);
+  flex-shrink: 0;
+}
+
+.presetItemDetail {
   font-size: 0.75rem;
   color: var(--text-secondary);
   white-space: nowrap;
@@ -1242,55 +1264,56 @@ body {
   text-overflow: ellipsis;
 }
 
-.rollItemActions {
+.presetUsageHint {
+  font-size: 0.7rem;
+  color: var(--status-warning);
+}
+
+.presetItemActions {
   display: flex;
   gap: var(--space-1);
   flex-shrink: 0;
 }
 
-.rollActions {
+.presetActions {
   margin-bottom: var(--space-3);
 }
 
-.rollEditor {
+.presetEditor {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
 }
 
-.rollEditorActions {
+.presetEditorActions {
   display: flex;
   gap: var(--space-2);
   margin-top: var(--space-2);
 }
 
-.rollApplyRow {
+.presetApplyRow {
   display: flex;
   gap: var(--space-2);
   align-items: center;
   flex-wrap: wrap;
 }
 
-.rollApplySelect {
+.presetApplySelect {
   min-width: 120px;
 }
 
-.rollFilmQuickPick {
+.presetErrorList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: flex;
-  gap: var(--space-1);
-  flex-wrap: wrap;
-  margin-top: var(--space-1);
+  flex-direction: column;
+  gap: 2px;
 }
 
-.rollFilmChip {
-  font-size: 0.7rem;
-  padding: 2px var(--space-2);
-}
-
-.rollFilmChipActive {
-  background: var(--accent-primary);
-  color: var(--surface-elevated);
-  border-color: var(--accent-primary);
+.presetErrorItem {
+  font-size: 0.75rem;
+  color: var(--status-error, #c0392b);
 }
 
 /* ---- 变量插入面板 ------------------------------------------------------- */
@@ -1315,9 +1338,9 @@ body {
   margin-bottom: var(--space-2);
 }
 
-/* ---- 队列 Roll / 身份覆盖标记 ----------------------------------------- */
+/* ---- 队列预设 / 身份覆盖标记 ----------------------------------------- */
 
-.queueRollIndicator {
+.queuePresetIndicator {
   font-family: var(--font-mono);
   font-size: 0.625rem;
   color: var(--status-success);
@@ -1495,7 +1518,7 @@ body {
   min-width: 0;
 }
 
-.identityRollBadge {
+.identityPresetBadge {
   font-family: var(--font-mono);
   font-size: 0.625rem;
   color: var(--status-success);

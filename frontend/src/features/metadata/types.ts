@@ -1,9 +1,11 @@
 /**
- * 摄影资产库与 Roll 胶卷工作流的类型定义。
+ * 摄影资产库、摄影预设与摄影身份的类型定义。
  *
- * PhotoIdentity 表示一张照片的完整摄影身份信息（相机、镜头、胶片等）。
- * Roll 表示一卷胶卷的绑定信息，同卷照片可批量继承。
+ * PhotoIdentity 表示一张照片的完整摄影身份信息（相机、镜头、胶片、画幅等）。
+ * ShootingPreset 是可分类的拍摄身份组合（P0-05），替代产品层的 Roll 成为主流程。
  * 资产库存储结构带 version 字段，方便后续迁移。
+ *
+ * 字段来源优先级固定为：每图覆盖 > 摄影预设 > EXIF > 空（docs/tasks.md §0.2）。
  */
 
 // ---- 资产库条目类型 -----------------------------------------------------------
@@ -146,9 +148,9 @@ export const createEmptyDeveloper = (): DeveloperAsset => ({
   notes: ""
 })
 
-// ---- 摄影身份与 Roll -----------------------------------------------------------
+// ---- 摄影身份与摄影预设 ---------------------------------------------------------
 
-/** 摄影身份信息：相机、镜头、胶片、冲洗、扫描仪、实验室、地点、卷名、帧号。 */
+/** 摄影身份信息：相机、镜头、胶片、冲洗、扫描仪、实验室、地点、卷名、帧号、拍摄画幅。 */
 export type PhotoIdentity = {
   readonly camera: string
   readonly lens: string
@@ -159,6 +161,8 @@ export type PhotoIdentity = {
   readonly location: string
   readonly rollName: string
   readonly frameNumber: string
+  /** 拍摄画幅 ID（见 constants/captureFormats.ts）。空字符串表示未设置。 */
+  readonly captureFormat: string
 }
 
 /** 创建空的摄影身份。 */
@@ -171,35 +175,47 @@ export const createEmptyIdentity = (): PhotoIdentity => ({
   lab: "",
   location: "",
   rollName: "",
-  frameNumber: ""
+  frameNumber: "",
+  captureFormat: ""
 })
 
-/** Roll 胶卷数据结构。 */
-export type Roll = {
+/**
+ * 可分类摄影预设（P0-05）：一组可复用的拍摄身份组合。
+ *
+ * 与视觉模板相互独立：预设只保存拍摄身份，不保存边框/文字/导出设置；
+ * 删除预设不会删除图片、资产或模板。
+ */
+export type ShootingPreset = {
   readonly id: string
+  /** 预设名称（必填）。 */
   readonly name: string
-  readonly camera: string
-  readonly lens: string
-  readonly film: string
-  readonly developer: string
-  readonly scanner: string
-  readonly lab: string
-  readonly location: string
-  readonly notes: string
+  /** 分类（必填，允许重复使用已有分类做筛选）。 */
+  readonly category: string
+  /** 拍摄画幅 ID（必填，见 constants/captureFormats.ts）。 */
+  readonly captureFormat: string
+  /** 相机资产引用；null 表示不引用。 */
+  readonly cameraAssetId: string | null
+  /** 镜头资产引用；null 表示不引用。 */
+  readonly lensAssetId: string | null
+  /** 胶片资产引用；null 表示不引用。 */
+  readonly filmAssetId: string | null
+  /** 默认拍摄地点（可选）。 */
+  readonly defaultLocation: string | null
+  /** 备注（可选）。 */
+  readonly notes: string | null
 }
 
-/** 创建空的 Roll。 */
-export const createEmptyRoll = (): Roll => ({
+/** 创建空的摄影预设（id 由调用方赋值，如 crypto.randomUUID()）。 */
+export const createEmptyPreset = (): ShootingPreset => ({
   id: "",
   name: "",
-  camera: "",
-  lens: "",
-  film: "",
-  developer: "",
-  scanner: "",
-  lab: "",
-  location: "",
-  notes: ""
+  category: "",
+  captureFormat: "",
+  cameraAssetId: null,
+  lensAssetId: null,
+  filmAssetId: null,
+  defaultLocation: null,
+  notes: null
 })
 
 /** 内置胶片库条目（来自后端 GET /api/assets/film-stocks）。 */
@@ -234,11 +250,13 @@ export type PhotoAssetController = {
   readonly clearError: () => void
 }
 
-/** Roll 控制器。 */
-export type RollController = {
-  readonly rolls: readonly Roll[]
+/** 摄影预设控制器（P0-05，供 ShootingPresetPanel 使用）。 */
+export type ShootingPresetController = {
+  readonly presets: readonly ShootingPreset[]
   readonly lastError: string | null
-  readonly saveRoll: (roll: Roll) => void
-  readonly deleteRoll: (id: string) => void
+  readonly savePreset: (preset: ShootingPreset) => void
+  /** 复制预设：生成新 id，名称追加「（副本）」。 */
+  readonly duplicatePreset: (id: string) => ShootingPreset | null
+  readonly deletePreset: (id: string) => void
   readonly clearError: () => void
 }

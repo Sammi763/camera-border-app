@@ -12,7 +12,8 @@ const fullIdentity: PhotoIdentity = {
   lab: "Local Lab",
   location: "Kyoto",
   rollName: "2025-03 Kyoto",
-  frameNumber: "12"
+  frameNumber: "12",
+  captureFormat: "135"
 }
 
 describe("resolveEffectiveText", () => {

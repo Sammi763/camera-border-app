@@ -1,16 +1,17 @@
 import { useCallback, useState } from "react"
-import type { PhotoAssetStore, PhotoIdentity, Roll } from "../types"
+import type { PhotoAssetStore, PhotoIdentity, ShootingPreset } from "../types"
+import { captureFormatLabel } from "../constants/captureFormats"
 import { BUILT_IN_CAMERA_MODELS } from "../constants/cameraModels"
 
 type PhotoIdentityPanelProps = {
-  /** 当前选中图片的有效摄影身份（已合并覆盖 > Roll > 空默认）。 */
+  /** 当前选中图片的有效摄影身份（已合并覆盖 > 摄影预设 > EXIF > 空）。 */
   readonly effectiveIdentity: PhotoIdentity
-  /** 当前选中图片的每图覆盖（null 表示无覆盖，继承 Roll）。 */
+  /** 当前选中图片的每图覆盖（null 表示无覆盖，继承摄影预设）。 */
   readonly identityOverride: Partial<PhotoIdentity> | null
-  /** 当前选中图片绑定的 Roll ID。 */
-  readonly rollId: string | null
-  /** Roll 列表。 */
-  readonly rolls: readonly Roll[]
+  /** 当前选中图片绑定的摄影预设 ID。 */
+  readonly presetId: string | null
+  /** 摄影预设列表。 */
+  readonly presets: readonly ShootingPreset[]
   /** 资产库（用于候选选择）。 */
   readonly assetStore: PhotoAssetStore
   /** 更新当前选中图片的覆盖字段。 */
@@ -25,14 +26,14 @@ type PhotoIdentityPanelProps = {
  * 当前图片摄影信息覆盖面板。
  *
  * 显示当前图片的有效身份（合并结果），允许用户对单张图片设置覆盖。
- * 覆盖字段留空表示继承 Roll。
+ * 覆盖字段留空表示继承摄影预设（或 EXIF）。
  * 相机字段支持内置机型快速选择。
  */
 export const PhotoIdentityPanel = ({
   effectiveIdentity,
   identityOverride,
-  rollId,
-  rolls,
+  presetId,
+  presets,
   assetStore,
   onUpdateOverride,
   onClearOverride,
@@ -55,7 +56,7 @@ export const PhotoIdentityPanel = ({
     handleChange("camera", label)
   }, [handleChange])
 
-  const boundRoll = rollId !== null ? rolls.find((r) => r.id === rollId) ?? null : null
+  const boundPreset = presetId !== null ? presets.find((p) => p.id === presetId) ?? null : null
 
   if (!hasSelectedImage) {
     return (
@@ -82,8 +83,8 @@ export const PhotoIdentityPanel = ({
         onKeyDown={(e) => { if (e.key === "Enter") setExpanded(!expanded) }}
       >
         <div className="identitySummaryContent">
-          {boundRoll && (
-            <span className="identityRollBadge">R: {boundRoll.name}</span>
+          {boundPreset && (
+            <span className="identityPresetBadge">P: {boundPreset.name}</span>
           )}
           {hasOverride && (
             <span className="identityOverrideBadge">I</span>
@@ -100,7 +101,10 @@ export const PhotoIdentityPanel = ({
       {expanded && (
         <div className="identityEditor">
           <p className="settingsCapabilityHint">
-            覆盖字段留空表示继承 Roll。{!boundRoll && "当前图片未绑定 Roll。"}
+            覆盖字段留空表示继承摄影预设。{!boundPreset && "当前图片未绑定摄影预设。"}
+            {boundPreset && captureFormatLabel(boundPreset.captureFormat).length > 0
+              ? ` 当前预设画幅：${captureFormatLabel(boundPreset.captureFormat)}。`
+              : ""}
           </p>
 
           <IdentityField
@@ -162,30 +166,6 @@ export const PhotoIdentityPanel = ({
             placeholder="例如：Kodak Portra 400"
             onChange={(v) => handleChange("film", v)}
             assetSuggestions={assetStore.films.map((f) => `${f.brand} ${f.name}`)}
-          />
-          <IdentityField
-            label="冲洗工艺"
-            value={identityOverride?.developer ?? ""}
-            effectiveValue={effectiveIdentity.developer}
-            placeholder="例如：C-41"
-            onChange={(v) => handleChange("developer", v)}
-            assetSuggestions={assetStore.developers.map((d) => d.name)}
-          />
-          <IdentityField
-            label="扫描仪"
-            value={identityOverride?.scanner ?? ""}
-            effectiveValue={effectiveIdentity.scanner}
-            placeholder="例如：Noritsu HS-1800"
-            onChange={(v) => handleChange("scanner", v)}
-            assetSuggestions={assetStore.scanners.map((s) => `${s.brand} ${s.model}`)}
-          />
-          <IdentityField
-            label="实验室"
-            value={identityOverride?.lab ?? ""}
-            effectiveValue={effectiveIdentity.lab}
-            placeholder="例如：Local Lab"
-            onChange={(v) => handleChange("lab", v)}
-            assetSuggestions={assetStore.labs.map((l) => l.name)}
           />
           <IdentityField
             label="拍摄地点"

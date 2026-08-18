@@ -2,7 +2,7 @@
  * 队列模块的 UI 状态类型。
  */
 
-import type { PhotoIdentity, Roll } from "../metadata/types"
+import type { PhotoAssetStore, PhotoIdentity, ShootingPreset } from "../metadata/types"
 import type { PhotoMetadata } from "../../types/preview"
 
 /** 队列中的图片项。`filePath` 是引擎实际处理的路径（可能是转换后的临时文件）。 */
@@ -23,9 +23,9 @@ export type QueueItem = {
   readonly workingFormat: string
   /** 每张图独立的文字内容覆盖。null 表示使用全局默认。 */
   readonly textOverride: string | null
-  /** 绑定的 Roll ID。null 表示未绑定。 */
-  readonly rollId: string | null
-  /** 每张图独立的摄影身份覆盖。null 表示使用 Roll 或全局默认。 */
+  /** 绑定的摄影预设 ID。null 表示未绑定。 */
+  readonly presetId: string | null
+  /** 每张图独立的摄影身份覆盖。null 表示使用摄影预设或全局默认。 */
   readonly identityOverride: Partial<PhotoIdentity> | null
 }
 
@@ -57,19 +57,26 @@ export type QueueController = {
   readonly clear: () => void
   readonly setSelectedTextOverride: (text: string | null) => void
   readonly getEffectiveText: (id: string, globalText: string) => string
-  readonly assignRollToSelected: (rollId: string | null) => void
-  readonly assignRollToAll: (rollId: string | null) => void
-  readonly clearRollBinding: (rollId: string) => void
-  readonly clearAllRollBindings: () => void
+  /** 应用摄影预设到当前选中图片（当前图片/选中图片）。 */
+  readonly assignPresetToSelected: (presetId: string | null) => void
+  /** 应用摄影预设到队列全部图片。 */
+  readonly assignPresetToAll: (presetId: string | null) => void
+  /** 清除绑定到指定预设 ID 的所有图片的预设绑定（删除预设时调用）。 */
+  readonly clearPresetBinding: (presetId: string) => void
+  /** 清除当前选中图片的预设绑定。 */
+  readonly clearSelectedPreset: () => void
+  /** 清除全部图片的预设绑定。 */
+  readonly clearAllPresetBindings: () => void
   readonly setSelectedIdentityOverride: (patch: Partial<PhotoIdentity>) => void
   readonly clearSelectedIdentityOverride: () => void
   /**
    * 计算图片的有效摄影身份。
-   * 优先级：每图覆盖 > Roll > EXIF（可选传入）> 空默认。
+   * 优先级：每图覆盖 > 摄影预设 > EXIF（可选传入）> 空默认。
    */
   readonly getEffectiveIdentity: (
     itemId: string,
-    rolls: readonly Roll[],
+    presets: readonly ShootingPreset[],
+    assetStore: PhotoAssetStore,
     exifByPath?: ReadonlyMap<string, PhotoMetadata>
   ) => PhotoIdentity
 }

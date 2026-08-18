@@ -9,11 +9,12 @@
  */
 
 import type { PhotoIdentity } from "../types"
+import { captureFormatLabel } from "../constants/captureFormats"
 
 /** 已知变量名集合（小写）。 */
 const KNOWN_VARIABLES = new Set([
   "camera", "lens", "film", "developer", "scanner",
-  "lab", "location", "rollname", "framenumber"
+  "lab", "location", "rollname", "framenumber", "captureformat"
 ])
 
 /** 匹配 {VariableName} 变量占位符。 */
@@ -43,6 +44,8 @@ const identityToMap = (identity: PhotoIdentity): Map<string, string> => {
   map.set("location", identity.location)
   map.set("rollname", identity.rollName)
   map.set("framenumber", identity.frameNumber)
+  // 画幅展示为显示名（如「135」），不是 id；未知 id 为空字符串
+  map.set("captureformat", captureFormatLabel(identity.captureFormat))
   return map
 }
 

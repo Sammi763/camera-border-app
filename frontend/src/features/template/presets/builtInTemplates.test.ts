@@ -113,6 +113,11 @@ describe("BUILT_IN_TEMPLATES", () => {
     }
   })
 
+  it("内置模板不向用户暴露旧暗房变量", () => {
+    const serialized = JSON.stringify(BUILT_IN_TEMPLATES)
+    expect(serialized).not.toMatch(/\{(Developer|Scanner|Lab|RollName)\}/)
+  })
+
   it("4 个多段文字模板都包含 textLayers 且至少 2 段", () => {
     const multiTextIds = ["darkroom-info-bar", "archive-two-line", "museum-caption", "contact-note-strip"]
     for (const id of multiTextIds) {
@@ -129,7 +134,7 @@ describe("BUILT_IN_TEMPLATES", () => {
     expect(template).toBeDefined()
     const layers = template!.settingsPatch.textLayers!
     expect(layers[0]!.content).toBe("{Camera} · {Lens}")
-    expect(layers[1]!.content).toBe("{Film} · {Scanner}")
+    expect(layers[1]!.content).toBe("{CaptureFormat} · {Film}")
     // 第二行字号更小
     expect(layers[1]!.fontSize).toBeLessThan(layers[0]!.fontSize)
   })
@@ -177,7 +182,7 @@ describe("BUILT_IN_TEMPLATES", () => {
     const texts = buildTextsFromSettings(merged)
     expect(texts.length).toBe(2)
     expect(texts[0]!.content).toBe("{Camera} · {Lens}")
-    expect(texts[1]!.content).toBe("{Film} · {Scanner}")
+    expect(texts[1]!.content).toBe("{CaptureFormat} · {Film}")
   })
 
   it("Brand Mark Darkroom 品牌标识模板包含 logo 配置", () => {

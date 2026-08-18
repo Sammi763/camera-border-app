@@ -24,10 +24,10 @@ public final class MetadataFormatServiceImpl implements MetadataFormatService {
     /** 匹配 {VariableName} 变量占位符。 */
     private static final Pattern VARIABLE_PATTERN = Pattern.compile("\\{([A-Za-z]+)}");
 
-    /** 已知变量名集合（小写），与 PhotoIdentity 契约一致。 */
+    /** 已知变量名集合（小写），与前端 resolveTextVariables 的变量清单一致（docs/cookbook.md §2）。 */
     private static final Set<String> KNOWN_VARIABLES = Set.of(
             "camera", "lens", "film", "developer", "scanner",
-            "lab", "location", "rollname", "framenumber",
+            "lab", "location", "rollname", "framenumber", "captureformat",
             "filmbrand", "filmiso", "filmtype", "make", "model",
             "focallength", "fnumber", "exposuretime", "iso",
             "datetimeoriginal", "filmname"

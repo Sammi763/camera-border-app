@@ -4,7 +4,7 @@
  * 布局：左（源图片队列）、中（主预览）、右（检查器）。
  * - 左右两栏宽度可拖拽调整，并持久化到 sessionStorage，会话内保持。
  * - 右栏可折叠为竖条，给预览区让出空间。
- * - 检查器用折叠分组承载：渲染设置 / 摄影信息 / 模板 / Roll / 资产库。
+ * - 检查器用折叠分组承载：渲染设置 / 摄影信息 / 模板 / 摄影预设 / 资产库。
  * 所有业务状态在此组装，各面板只接收 props。
  */
 
@@ -16,7 +16,7 @@ import type { InspectorSection } from "../components/layout/InspectorPanel"
 import { QueuePanel } from "../features/queue/components/QueuePanel"
 import { PreviewPanel } from "../features/preview/components/PreviewPanel"
 import { SettingsPanel } from "../features/settings/components/SettingsPanel"
-import { RollPanel } from "../features/metadata/components/RollPanel"
+import { ShootingPresetPanel } from "../features/metadata/components/ShootingPresetPanel"
 import { AssetLibraryPanel } from "../features/metadata/components/AssetLibraryPanel"
 import { PhotoIdentityPanel } from "../features/metadata/components/PhotoIdentityPanel"
 import { TemplatePanel } from "../features/template/components/TemplatePanel"
@@ -29,7 +29,7 @@ import { useTemplates } from "../features/template/hooks/useTemplates"
 import { TemplateDropOverlay } from "../features/template/components/TemplateDropOverlay"
 import { deduplicateTemplateName } from "../features/template/utils/templateJsonCodec"
 import { normalizeTemplatePatch, normalizeTemplateSettings } from "../features/template/utils/normalizeTemplate"
-import { useRolls } from "../features/metadata/hooks/useRolls"
+import { useShootingPresets } from "../features/metadata/hooks/useShootingPresets"
 import { usePhotoAssets } from "../features/metadata/hooks/usePhotoAssets"
 import { useExifIndex } from "../features/metadata/hooks/useExifIndex"
 import { resolveEffectiveText } from "../features/metadata/utils/resolveEffectiveText"
@@ -90,7 +90,7 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
   const queue = useQueue()
   const settings = useSettings()
   const userModifiedRef = useRef(false)
-  const rolls = useRolls()
+  const presets = useShootingPresets()
   const assets = usePhotoAssets()
   const exif = useExifIndex()
   const [filmStocks, setFilmStocks] = useState<readonly FilmStock[]>([])
@@ -260,16 +260,27 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
     templates.saveTemplate(template.name, template.settings)
   }, [templates])
 
-  // 删除 Roll 时同步清理队列中的悬空绑定
-  const handleDeleteRoll = useCallback((rollId: string): void => {
-    queue.clearRollBinding(rollId)
-    rolls.deleteRoll(rollId)
-  }, [queue, rolls])
+  // 删除摄影预设时同步清理队列中的悬空绑定（预设、图片、资产、模板相互独立）。
+  const handleDeletePreset = useCallback((presetId: string): void => {
+    queue.clearPresetBinding(presetId)
+    presets.deletePreset(presetId)
+  }, [queue, presets])
 
-  // 清除全部 Roll 绑定
-  const handleClearAllRollBindings = useCallback((): void => {
-    queue.clearAllRollBindings()
+  // 清除全部图片的预设绑定
+  const handleClearAllPresetBindings = useCallback((): void => {
+    queue.clearAllPresetBindings()
   }, [queue])
+
+  // 计算各预设被队列中多少张图片引用（用于预设面板展示应用范围）
+  const presetUsageCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const item of queue.items) {
+      if (item.presetId !== null) {
+        counts.set(item.presetId, (counts.get(item.presetId) ?? 0) + 1)
+      }
+    }
+    return counts
+  }, [queue.items])
 
   // 获取当前选中图片的信息
   const selectedItem = queue.items.find((item) => item.isSelected)
@@ -294,9 +305,10 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
     }
   }, [])
 
-  // 计算当前图片的有效摄影身份（每图覆盖 > Roll > EXIF > 空）
+  // 计算当前图片的有效摄影身份（每图覆盖 > 摄影预设 > EXIF > 空）
+  // getExifByPath() 读取最新缓存：导出等待 EXIF 期间刚到达的数据也能即时生效
   const selectedIdentity = selectedItem !== undefined
-    ? queue.getEffectiveIdentity(selectedItem.id, rolls.rolls, exif.exifByPath)
+    ? queue.getEffectiveIdentity(selectedItem.id, presets.presets, assets.store, exif.getExifByPath())
     : null
 
   // 快捷文字覆盖：当前图片的独立文字覆盖。
@@ -355,9 +367,10 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
 
   // 每图解析延迟到批量导出时逐项执行：避免用户在文字框每次击键时
   // 对全队列重复做变量解析（queueResolved* 不再全量预计算）。
+  // EXIF 经 getExifByPath() 读取最新缓存：导出前确保全部 EXIF 已读取，解析时取到最新值。
   const resolveQueueItem = useCallback(
     (item: QueueItem): ResolvedQueueItem => {
-      const identity = queue.getEffectiveIdentity(item.id, rolls.rolls, exif.exifByPath)
+      const identity = queue.getEffectiveIdentity(item.id, presets.presets, assets.store, exif.getExifByPath())
       const textOverride = item.textOverride !== null
         ? resolveEffectiveText(item.textOverride, identity)
         : null
@@ -370,11 +383,11 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
       const brand = detectBrandFromIdentity(identity.camera).label
       return { textOverride, resolvedLayers, brand }
     },
-    [queue, rolls.rolls, exif.exifByPath, settings.settings.textLayers]
+    [queue, presets.presets, assets.store, settings.settings.textLayers]
   )
 
   // ---- 右侧检查器折叠分组 ---------------------------------------------------
-  // 顺序：渲染设置 / 摄影信息 / 模板 / Roll / 资产库。默认仅展开渲染设置。
+  // 顺序：渲染设置 / 摄影信息 / 模板 / 摄影预设 / 资产库。默认仅展开渲染设置。
   const inspectorSections = useMemo((): readonly InspectorSection[] => [
     {
       id: "settings",
@@ -405,8 +418,8 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
         <PhotoIdentityPanel
           effectiveIdentity={selectedIdentity}
           identityOverride={selectedItem.identityOverride}
-          rollId={selectedItem.rollId}
-          rolls={rolls.rolls}
+          presetId={selectedItem.presetId}
+          presets={presets.presets}
           assetStore={assets.store}
           onUpdateOverride={queue.setSelectedIdentityOverride}
           onClearOverride={queue.clearSelectedIdentityOverride}
@@ -435,21 +448,24 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
       )
     },
     {
-      id: "roll",
-      label: "Roll 胶卷",
+      id: "presets",
+      label: "摄影预设",
       content: (
-        <RollPanel
-          rolls={rolls.rolls}
-          lastError={rolls.lastError}
-          onSaveRoll={rolls.saveRoll}
-          onDeleteRoll={handleDeleteRoll}
-          onClearError={rolls.clearError}
-          onApplyToSelected={queue.assignRollToSelected}
-          onApplyToAll={queue.assignRollToAll}
-          onClearAllRollBindings={handleClearAllRollBindings}
+        <ShootingPresetPanel
+          presets={presets.presets}
+          lastError={presets.lastError}
+          onSavePreset={presets.savePreset}
+          onDuplicatePreset={presets.duplicatePreset}
+          onDeletePreset={handleDeletePreset}
+          onClearError={presets.clearError}
+          onApplyToSelected={queue.assignPresetToSelected}
+          onApplyToAll={queue.assignPresetToAll}
+          onClearSelectedPreset={queue.clearSelectedPreset}
+          onClearAllPresetBindings={handleClearAllPresetBindings}
           hasSelectedImage={queue.selectedFilePath !== null}
           queueCount={queue.items.length}
           assetStore={assets.store}
+          presetUsageCounts={presetUsageCounts}
         />
       )
     },
@@ -467,8 +483,8 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
     settings, handleSettingsUpdate, handleSettingsUpdateNumber, handleUpdateTextLayer,
     handleResetTextLayers, handleReplaceTextLayers,
     templates, handleLoadTemplate, handleApplyPreset, activePresetId, handleImportTemplate,
-    queue, selectedItem, selectedIdentity, rolls, assets, filmStocks,
-    handleDeleteRoll, handleClearAllRollBindings
+    queue, selectedItem, selectedIdentity, presets, assets, filmStocks,
+    handleDeletePreset, handleClearAllPresetBindings, presetUsageCounts
   ])
 
   const workspaceStyle = {
@@ -490,6 +506,7 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
             hasSelectedImage={queue.selectedFilePath !== null}
             queueItems={queue.items}
             resolveQueueItem={resolveQueueItem}
+            prepareExifForExport={exif.ensureExifForExport}
             resolvedBrand={resolvedBrand}
             resolvedTextOverride={resolvedTextOverride}
             resolvedTextLayers={resolvedTextLayers}

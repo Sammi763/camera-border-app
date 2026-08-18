@@ -8,9 +8,14 @@ const getAssetsFilePath = (): string => {
   return join(app.getPath("userData"), "assets.json")
 }
 
-/** Roll 胶卷数据文件存储路径：userData/rolls.json */
+/** Roll 胶卷数据文件存储路径：userData/rolls.json（旧版兼容，不扩展） */
 const getRollsFilePath = (): string => {
   return join(app.getPath("userData"), "rolls.json")
+}
+
+/** 摄影预设文件存储路径：userData/presets.json */
+const getPresetsFilePath = (): string => {
+  return join(app.getPath("userData"), "presets.json")
 }
 
 /**
@@ -43,9 +48,9 @@ const writeJsonFile = async (filePath: string, json: string, label: string): Pro
 }
 
 /**
- * 注册摄影资产库和 Roll 胶卷数据的存储 IPC handler。
+ * 注册摄影资产库、Roll 胶卷（旧版兼容）与摄影预设的存储 IPC handler。
  *
- * 数据存储在 app.getPath("userData") 下的 assets.json 和 rolls.json 文件中。
+ * 数据存储在 app.getPath("userData") 下的 assets.json、rolls.json、presets.json 文件中。
  * 只读写固定文件，不暴露任意路径文件读写——
  * 遵循 ARCHITECTURE.md §1（前端不直接操作本地文件系统）。
  *
@@ -64,7 +69,7 @@ export const registerAssetStorageIpc = (): void => {
     }
   )
 
-  // ---- Roll 胶卷 ----
+  // ---- Roll 胶卷（旧版兼容，不扩展） ----
   ipcMain.handle(IPC_CHANNELS.READ_ROLLS, async (): Promise<string> => {
     return readJsonFile(getRollsFilePath(), "Roll 胶卷")
   })
@@ -73,6 +78,18 @@ export const registerAssetStorageIpc = (): void => {
     IPC_CHANNELS.WRITE_ROLLS,
     async (_event, json: string): Promise<void> => {
       await writeJsonFile(getRollsFilePath(), json, "Roll 胶卷")
+    }
+  )
+
+  // ---- 摄影预设 ----
+  ipcMain.handle(IPC_CHANNELS.READ_PRESETS, async (): Promise<string> => {
+    return readJsonFile(getPresetsFilePath(), "摄影预设")
+  })
+
+  ipcMain.handle(
+    IPC_CHANNELS.WRITE_PRESETS,
+    async (_event, json: string): Promise<void> => {
+      await writeJsonFile(getPresetsFilePath(), json, "摄影预设")
     }
   )
 }

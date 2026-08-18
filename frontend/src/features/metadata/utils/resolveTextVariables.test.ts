@@ -13,7 +13,8 @@ const fullIdentity: PhotoIdentity = {
   lab: "Local Lab",
   location: "Kyoto",
   rollName: "2025-03 Kyoto",
-  frameNumber: "12"
+  frameNumber: "12",
+  captureFormat: "135"
 }
 
 describe("resolveTextVariables", () => {
@@ -21,6 +22,19 @@ describe("resolveTextVariables", () => {
     const template = "{Camera} · {Lens} · {Film} · {Scanner} · {Lab}"
     const result = resolveTextVariables(template, fullIdentity)
     expect(result).toBe("Leica M6 · Voigtlander 35mm F1.4 · Kodak Portra 400 · Noritsu HS-1800 · Local Lab")
+  })
+
+  it("画幅变量替换为显示名（非 id）", () => {
+    const template = "{CaptureFormat} · {Film}"
+    const result = resolveTextVariables(template, fullIdentity)
+    expect(result).toBe("135 · Kodak Portra 400")
+  })
+
+  it("画幅未知或缺失时替换为空并清理分隔符", () => {
+    const identity: PhotoIdentity = { ...createEmptyIdentity(), film: "Kodak Portra 400" }
+    const unknown = { ...identity, captureFormat: "unknown-format" }
+    expect(resolveTextVariables("{CaptureFormat} · {Film}", identity)).toBe("Kodak Portra 400")
+    expect(resolveTextVariables("{CaptureFormat} · {Film}", unknown)).toBe("Kodak Portra 400")
   })
 
   it("缺失变量清理多余 ·", () => {

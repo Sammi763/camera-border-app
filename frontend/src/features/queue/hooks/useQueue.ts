@@ -4,7 +4,8 @@ import { resolveHeicPaths } from "../../../services/desktop/heicConvert"
 import { isHeicFile } from "../../metadata/constants/imageFormats"
 import { toFileName } from "../../../utils/fileName"
 import { createEmptyIdentity } from "../../metadata/types"
-import type { PhotoIdentity, Roll } from "../../metadata/types"
+import { mergeIdentityChain, resolvePresetIdentity } from "../../metadata/utils/resolveIdentity"
+import type { PhotoAssetStore, PhotoIdentity, ShootingPreset } from "../../metadata/types"
 import type { PhotoMetadata } from "../../../types/preview"
 import type { ImportResult, QueueController, QueueItem } from "../types"
 
@@ -69,7 +70,7 @@ export const useQueue = (): QueueController => {
         workingFormat: item.converted ? "jpg" : extractFormat(item.original),
         isSelected: isFirstSelection && index === 0,
         textOverride: null,
-        rollId: null,
+        presetId: null,
         identityOverride: null
       }))
       return [...previous, ...added]
@@ -178,33 +179,42 @@ export const useQueue = (): QueueController => {
     return globalText
   }, [items])
 
-  const assignRollToSelected = useCallback((rollId: string | null): void => {
+  const assignPresetToSelected = useCallback((presetId: string | null): void => {
     setItems((previous) =>
       previous.map((item) =>
-        item.isSelected ? { ...item, rollId } : item
+        item.isSelected ? { ...item, presetId } : item
       )
     )
   }, [])
 
-  const assignRollToAll = useCallback((rollId: string | null): void => {
+  const assignPresetToAll = useCallback((presetId: string | null): void => {
     setItems((previous) =>
-      previous.map((item) => ({ ...item, rollId }))
+      previous.map((item) => ({ ...item, presetId }))
     )
   }, [])
 
-  /** 清除绑定到指定 Roll ID 的所有图片的 Roll 绑定。 */
-  const clearRollBinding = useCallback((rollId: string): void => {
+  /** 清除绑定到指定预设 ID 的所有图片的预设绑定（删除预设时调用）。 */
+  const clearPresetBinding = useCallback((presetId: string): void => {
     setItems((previous) =>
       previous.map((item) =>
-        item.rollId === rollId ? { ...item, rollId: null } : item
+        item.presetId === presetId ? { ...item, presetId: null } : item
       )
     )
   }, [])
 
-  /** 清除全部图片的 Roll 绑定。 */
-  const clearAllRollBindings = useCallback((): void => {
+  /** 清除当前选中图片的预设绑定。 */
+  const clearSelectedPreset = useCallback((): void => {
     setItems((previous) =>
-      previous.map((item) => ({ ...item, rollId: null }))
+      previous.map((item) =>
+        item.isSelected ? { ...item, presetId: null } : item
+      )
+    )
+  }, [])
+
+  /** 清除全部图片的预设绑定。 */
+  const clearAllPresetBindings = useCallback((): void => {
+    setItems((previous) =>
+      previous.map((item) => ({ ...item, presetId: null }))
     )
   }, [])
 
@@ -238,7 +248,8 @@ export const useQueue = (): QueueController => {
 
   const getEffectiveIdentity = useCallback((
     itemId: string,
-    rolls: readonly Roll[],
+    presets: readonly ShootingPreset[],
+    assetStore: PhotoAssetStore,
     exifByPath?: ReadonlyMap<string, PhotoMetadata>
   ): PhotoIdentity => {
     const item = items.find((i) => i.id === itemId)
@@ -246,26 +257,18 @@ export const useQueue = (): QueueController => {
       return createEmptyIdentity()
     }
 
-    // 优先级：每图覆盖 > Roll > EXIF > 空默认
-    const empty = createEmptyIdentity()
-    const roll = item.rollId !== null
-      ? rolls.find((r) => r.id === item.rollId) ?? null
+    // 优先级：每图覆盖 > 摄影预设 > EXIF > 空默认（合并逻辑见 metadata/utils/resolveIdentity.ts）
+    const preset = item.presetId !== null
+      ? presets.find((p) => p.id === item.presetId) ?? null
       : null
+    const presetIdentity = preset !== null ? resolvePresetIdentity(preset, assetStore) : null
     const exif = exifByPath?.get(item.filePath) ?? null
 
-    const override = item.identityOverride ?? {}
-
-    return {
-      camera: override.camera ?? roll?.camera ?? exif?.cameraModel ?? empty.camera,
-      lens: override.lens ?? roll?.lens ?? exif?.lensModel ?? empty.lens,
-      film: override.film ?? roll?.film ?? empty.film,
-      developer: override.developer ?? roll?.developer ?? empty.developer,
-      scanner: override.scanner ?? roll?.scanner ?? empty.scanner,
-      lab: override.lab ?? roll?.lab ?? empty.lab,
-      location: override.location ?? roll?.location ?? empty.location,
-      rollName: override.rollName ?? roll?.name ?? empty.rollName,
-      frameNumber: override.frameNumber ?? empty.frameNumber
-    }
+    return mergeIdentityChain({
+      override: item.identityOverride,
+      preset: presetIdentity,
+      exif
+    })
   }, [items])
 
   const selected = items.find((item) => item.isSelected)
@@ -286,10 +289,11 @@ export const useQueue = (): QueueController => {
     clear,
     setSelectedTextOverride,
     getEffectiveText,
-    assignRollToSelected,
-    assignRollToAll,
-    clearRollBinding,
-    clearAllRollBindings,
+    assignPresetToSelected,
+    assignPresetToAll,
+    clearPresetBinding,
+    clearSelectedPreset,
+    clearAllPresetBindings,
     setSelectedIdentityOverride,
     clearSelectedIdentityOverride,
     getEffectiveIdentity

@@ -20,7 +20,7 @@ const QueueRow = ({
   readonly onSelect: (id: string) => void
 }): JSX.Element => {
   const rowClassName = item.isSelected ? "queueItem isSelected" : "queueItem"
-  const hasRoll = item.rollId !== null
+  const hasPreset = item.presetId !== null
   const hasIdentity = item.identityOverride !== null && Object.keys(item.identityOverride).length > 0
 
   return (
@@ -60,8 +60,8 @@ const QueueRow = ({
           {item.textOverride !== null && (
             <span className="queueTextOverrideIndicator" title="此图片有独立文字"> T</span>
           )}
-          {hasRoll && (
-            <span className="queueRollIndicator" title="已绑定 Roll"> R</span>
+          {hasPreset && (
+            <span className="queuePresetIndicator" title="已绑定摄影预设"> P</span>
           )}
           {hasIdentity && (
             <span className="queueIdentityIndicator" title="有摄影信息覆盖"> I</span>

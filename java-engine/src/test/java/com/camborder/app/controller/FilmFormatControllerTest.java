@@ -24,13 +24,25 @@ final class FilmFormatControllerTest {
 
     @Test
     void shouldReturnAllFilmFormats() throws Exception {
+        // 契约：半格、135、645、6x6、6x7、6x8、6x9、6x10、6x12（6x10 新增，6x12 保留）
         mockMvc.perform(get("/api/film-formats"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$", hasSize(8)))
+                .andExpect(jsonPath("$", hasSize(9)))
                 .andExpect(jsonPath("$[*].id", containsInAnyOrder(
-                        "half-frame", "135", "645", "6x6", "6x7", "6x8", "6x9", "6x12")))
+                        "half-frame", "135", "645", "6x6", "6x7", "6x8", "6x9", "6x10", "6x12")))
                 .andExpect(jsonPath("$[*].label").isNotEmpty())
                 .andExpect(jsonPath("$[*].aspectRatio").isNotEmpty());
+    }
+
+    @Test
+    void shouldKeep6x10And6x12() throws Exception {
+        // 6x10 是新增画幅，6x12 必须保留且不被替换/改名
+        mockMvc.perform(get("/api/film-formats"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.id=='6x10')].label").value("6×10"))
+                .andExpect(jsonPath("$[?(@.id=='6x10')].aspectRatio").value("100:56"))
+                .andExpect(jsonPath("$[?(@.id=='6x12')].label").value("6×12"))
+                .andExpect(jsonPath("$[?(@.id=='6x12')].aspectRatio").value("120:56"));
     }
 
     @Test

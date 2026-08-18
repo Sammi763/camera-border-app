@@ -2,7 +2,8 @@
  * 摄影资产库面板。
  *
  * 负责 tab 切换、错误提示、组装各资产分组。
- * 各分组组件已拆分到独立文件。
+ * 用户界面只保留相机、镜头、胶片三类（P0-04/P0-05 契约）；
+ * 扫描仪/实验室/冲洗工艺仅保留旧数据兼容读取，不再提供用户入口。
  */
 
 import { useCallback, useState } from "react"
@@ -10,9 +11,6 @@ import type { FilmStock, PhotoAssetController } from "../types"
 import { CameraSection } from "./CameraAssetSection"
 import { LensSection } from "./LensAssetSection"
 import { FilmSection } from "./FilmAssetSection"
-import { ScannerSection } from "./ScannerAssetSection"
-import { LabSection } from "./LabAssetSection"
-import { DeveloperSection } from "./DeveloperAssetSection"
 
 type AssetLibraryPanelProps = {
   readonly assetController: PhotoAssetController
@@ -20,17 +18,14 @@ type AssetLibraryPanelProps = {
   readonly filmStocks: readonly FilmStock[]
 }
 
-/** 资产类型分组标识。 */
-type AssetTab = "cameras" | "lenses" | "films" | "scanners" | "labs" | "developers"
+/** 资产类型分组标识（用户界面仅保留三类）。 */
+type AssetTab = "cameras" | "lenses" | "films"
 
 /** 分组标签（中文）。 */
 const TAB_LABELS: Record<AssetTab, string> = {
   cameras: "相机",
   lenses: "镜头",
-  films: "胶片",
-  scanners: "扫描仪",
-  labs: "实验室",
-  developers: "冲洗工艺"
+  films: "胶片"
 }
 
 export const AssetLibraryPanel = ({
@@ -69,7 +64,7 @@ export const AssetLibraryPanel = ({
       )}
 
       <p className="assetDeleteHint">
-        删除资产不会删除已保存到 Roll 的文字信息。
+        删除资产不会删除已保存到摄影预设的引用文字（引用悬空时预设显示为空）。
       </p>
 
       {/* 分组标签 */}
@@ -113,36 +108,6 @@ export const AssetLibraryPanel = ({
             isAdding={isAdding}
             controller={assetController}
             filmStocks={filmStocks}
-            onStartAdd={handleStartAdd}
-            onCancelAdd={handleCancelAdd}
-            onSaved={handleSaved}
-          />
-        )}
-        {activeTab === "scanners" && (
-          <ScannerSection
-            items={store.scanners}
-            isAdding={isAdding}
-            controller={assetController}
-            onStartAdd={handleStartAdd}
-            onCancelAdd={handleCancelAdd}
-            onSaved={handleSaved}
-          />
-        )}
-        {activeTab === "labs" && (
-          <LabSection
-            items={store.labs}
-            isAdding={isAdding}
-            controller={assetController}
-            onStartAdd={handleStartAdd}
-            onCancelAdd={handleCancelAdd}
-            onSaved={handleSaved}
-          />
-        )}
-        {activeTab === "developers" && (
-          <DeveloperSection
-            items={store.developers}
-            isAdding={isAdding}
-            controller={assetController}
             onStartAdd={handleStartAdd}
             onCancelAdd={handleCancelAdd}
             onSaved={handleSaved}

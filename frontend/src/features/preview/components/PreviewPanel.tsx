@@ -20,6 +20,11 @@ type PreviewPanelProps = {
   readonly queueItems: readonly QueueItem[]
   /** 单张图片的批量导出解析器：文字覆盖 + 多段文字变量 + 品牌。 */
   readonly resolveQueueItem: (item: QueueItem) => ResolvedQueueItem
+  /**
+   * 导出前等待指定路径的 EXIF 读取完成（失败降级为空，不阻塞导出）。
+   * 保证批量导出时队列中每一张图片都先读 EXIF，再构建 RenderRecipe。
+   */
+  readonly prepareExifForExport: (paths: readonly string[]) => Promise<void>
   /** 当前选中图片识别到的品牌文字。 */
   readonly resolvedBrand?: string | null
   /** 当前选中图片的已解析快捷单段文字覆盖。 */
@@ -65,6 +70,7 @@ const buildExportSummary = (result: RenderJobStatusResponse): readonly string[] 
 /** 单图导出任务状态。 */
 type ExportJobState =
   | { readonly kind: "idle" }
+  | { readonly kind: "preparing" }
   | { readonly kind: "submitting" }
   | { readonly kind: "running"; readonly jobId: string }
   | { readonly kind: "completed"; readonly outputPath: string; readonly actualFormat: string; readonly summary: readonly string[] }
@@ -82,6 +88,7 @@ type BatchExportItemResult = {
 /** 批量导出状态。 */
 type BatchExportState =
   | { readonly kind: "idle" }
+  | { readonly kind: "preparing"; readonly total: number }
   | { readonly kind: "running"; readonly total: number; readonly current: number; readonly success: number; readonly failed: number }
   | { readonly kind: "completed"; readonly total: number; readonly success: number; readonly failed: number; readonly results: readonly BatchExportItemResult[] }
   | { readonly kind: "error"; readonly message: string }
@@ -373,6 +380,7 @@ export const PreviewPanel = ({
   hasSelectedImage,
   queueItems,
   resolveQueueItem,
+  prepareExifForExport,
   resolvedBrand,
   resolvedTextOverride,
   resolvedTextLayers
@@ -391,28 +399,59 @@ export const PreviewPanel = ({
       return
     }
 
-    const exportFileName = toExportFileName(state.fileName, settings.exportFormat)
-
+    // 先锁定导出操作，避免读取 EXIF 或等待系统对话框时重复点击。
+    setExportJob({ kind: "preparing" })
     let outputPath: string | null = null
 
-    if (window.desktop !== undefined) {
-      outputPath = await window.desktop.selectExportPath(exportFileName)
-      if (outputPath === null) {
-        return
+    try {
+      const exportFileName = toExportFileName(state.fileName, settings.exportFormat)
+      if (window.desktop !== undefined) {
+        outputPath = await window.desktop.selectExportPath(exportFileName)
+      } else {
+        outputPath = deriveBrowserExportPath(state.filePath, exportFileName)
       }
-    } else {
-      outputPath = deriveBrowserExportPath(state.filePath, exportFileName)
-      if (outputPath === null) {
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "无法选择导出位置"
+      setExportJob({ kind: "error", message })
+      return
+    }
+
+    if (outputPath === null) {
+      if (window.desktop !== undefined) {
+        setExportJob({ kind: "idle" })
+      } else {
         setExportJob({
           kind: "error",
           message: "浏览器降级模式无法选择保存位置，请启动桌面应用导出。"
         })
-        return
       }
+      return
     }
 
+    // 单图导出与批量导出一致：先等待 EXIF 读取完成，再解析变量、构建 RenderRecipe。
+    try {
+      await prepareExifForExport([state.filePath])
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "读取照片 EXIF 失败"
+      setExportJob({ kind: "error", message })
+      return
+    }
+
+    // 用与批量导出相同的 resolveQueueItem 解析当前图（getExifByPath 读取最新 EXIF），
+    // 保证单图导出与批量导出、预览使用同一套有效摄影信息。
+    const item = queueItems.find((i) => i.filePath === state.filePath)
+    const resolved = item !== undefined
+      ? resolveQueueItem(item)
+      : { textOverride: null, resolvedLayers: null, brand: null }
+
     const request: RenderJobRequest = {
-      recipe: buildRecipeFromSettings(state.filePath, resolvedSettings),
+      recipe: buildRecipeFromSettings(
+        state.filePath,
+        settings,
+        resolved.textOverride ?? undefined,
+        resolved.resolvedLayers,
+        resolved.brand
+      ),
       export: buildExportSettings(settings, outputPath)
     }
 
@@ -438,7 +477,7 @@ export const PreviewPanel = ({
       const message = error instanceof Error ? error.message : "导出请求失败"
       setExportJob({ kind: "error", message })
     }
-  }, [state, resolvedSettings])
+  }, [state, queueItems, resolveQueueItem, prepareExifForExport, settings])
 
   const handleBatchExport = useCallback(async () => {
     if (queueItems.length === 0) {
@@ -455,14 +494,35 @@ export const PreviewPanel = ({
     }
 
     const ext = settings.exportFormat === "jpeg" ? "jpg" : settings.exportFormat === "tiff" ? "tif" : "png"
+    const total = queueItems.length
 
-    // 使用目录选择 API，不再复用单文件保存对话框
-    const dirPath = await window.desktop.selectExportDirectory()
-    if (dirPath === null) {
+    // 先锁定批量导出，再选择目录和读取 EXIF，避免用户重复点击造成并行批量任务。
+    setBatchExport({ kind: "preparing", total })
+
+    let dirPath: string | null
+    try {
+      dirPath = await window.desktop.selectExportDirectory()
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "无法选择导出目录"
+      setBatchExport({ kind: "error", message })
       return
     }
 
-    const total = queueItems.length
+    if (dirPath === null) {
+      setBatchExport({ kind: "idle" })
+      return
+    }
+
+    // 批量导出关键修复：先逐张读取队列中全部图片的 EXIF（含失败降级），
+    // 全部完成后才开始构建 RenderRecipe，保证每张图都能用上自己的 EXIF。
+    try {
+      await prepareExifForExport(queueItems.map((item) => item.filePath))
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "读取照片 EXIF 失败"
+      setBatchExport({ kind: "error", message })
+      return
+    }
+
     let success = 0
     let failed = 0
     let done = 0
@@ -551,11 +611,11 @@ export const PreviewPanel = ({
     await Promise.all(workers)
 
     setBatchExport({ kind: "completed", total, success, failed, results: itemResults })
-  }, [queueItems, resolveQueueItem, settings])
+  }, [queueItems, resolveQueueItem, settings, prepareExifForExport])
 
   const canExport = state.kind === "active" && state.currentImage !== null
-  const isExporting = exportJob.kind === "submitting" || exportJob.kind === "running"
-  const isBatchExporting = batchExport.kind === "running"
+  const isExporting = exportJob.kind === "preparing" || exportJob.kind === "submitting" || exportJob.kind === "running"
+  const isBatchExporting = batchExport.kind === "preparing" || batchExport.kind === "running"
   const hasBatchItems = queueItems.length > 1
 
   return (
@@ -576,7 +636,7 @@ export const PreviewPanel = ({
           disabled={!canExport || isExporting}
           onClick={() => void handleHighQualityExport()}
         >
-          {isExporting ? "导出中…" : "导出原图"}
+          {exportJob.kind === "preparing" ? "读取 EXIF…" : isExporting ? "导出中…" : "导出原图"}
         </button>
         {hasBatchItems && (
           <button
@@ -585,7 +645,9 @@ export const PreviewPanel = ({
             disabled={isBatchExporting}
             onClick={() => void handleBatchExport()}
           >
-            {isBatchExporting
+            {batchExport.kind === "preparing"
+              ? "读取 EXIF…"
+              : isBatchExporting
               ? `批量导出中 ${batchExport.current}/${batchExport.total}…`
               : `批量导出 ${queueItems.length} 张`}
           </button>
@@ -598,6 +660,7 @@ export const PreviewPanel = ({
               ? "浏览器降级模式：导出能力受限，建议启动桌面应用。"
               : "导出使用原图尺寸，由引擎渲染。"
           )}
+          {exportJob.kind === "preparing" && "正在读取 EXIF…"}
           {exportJob.kind === "completed" && (
             <span className="previewExportSuccess">
               导出完成（{exportJob.actualFormat.toUpperCase()}）：{exportJob.outputPath}
@@ -612,6 +675,7 @@ export const PreviewPanel = ({
           {batchExport.kind === "running" && (
             `进度 ${batchExport.current}/${batchExport.total}　成功 ${batchExport.success}　失败 ${batchExport.failed}`
           )}
+          {batchExport.kind === "preparing" && "正在读取 EXIF…"}
           {batchExport.kind === "completed" && (
             <span className={batchExport.failed > 0 ? "previewExportError" : "previewExportSuccess"}>
               批量导出完成：共 {batchExport.total} 张，成功 {batchExport.success}，失败 {batchExport.failed}

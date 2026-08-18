@@ -8,6 +8,8 @@
 - `frontend/`
 - `java-engine/`
 
+> 文档定位：本文件是**架构规则与边界**。产品方向见 [docs/prd.md](docs/prd.md)；每次任务必读的规则速览见 [AGENTS.md](AGENTS.md)；环境与命令见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
 ## 1. 总体边界
 
 这个项目是一个本地桌面应用，分为三个明确子系统：
@@ -23,90 +25,83 @@
 - `java-engine/` 不关心 UI 布局和前端交互细节。
 - 跨子系统通信必须通过明确的 API 或 preload 暴露接口完成，禁止隐式耦合。
 
-## 2. 当前阶段目标
+## 2. 当前阶段
 
-当前阶段是“先搭稳定框架，再填真实能力”。
+项目已过“先搭稳定框架”阶段：工作台骨架、Java 引擎生命周期、预览/渲染接口、模板系统、摄影资产库均已落地。
+当前处于可安装摄影师 MVP 的稳定化阶段：数码走 EXIF，胶片走可分类摄影预设，具体任务与优先级见 [docs/prd.md](docs/prd.md) 第 8、9 节和 [docs/tasks.md](docs/tasks.md)。
 
-允许先做：
-
-- 工作台骨架
-- Java 引擎生命周期
-- 预览/渲染接口骨架
-- 占位服务
-- 基础请求校验
-
-当前阶段不允许先做：
-
-- ICC / 16-bit / TIFF
-- 复杂模板系统
-- 大而全的字体/数据库能力
-- 为未来假想场景提前抽很多层
+架构上仍遵守本文件约束；是否新增抽象/分层按第 7 节规则判断。
 
 ## 3. Repo 级结构规范
 
 ### 3.1 Electron
 
-推荐结构：
+当前结构（描述性，与代码一致）：
 
 ```text
 electron/src/
-  main.ts
-  preload.ts
-  paths.ts
-  java-bridge.ts
-  runtime/
-  ipc/
+  main/       应用启动、窗口创建、生命周期编排（main.ts、appLifecycle.ts、createMainWindow.ts）
+  engine/     Java 引擎启动/停止、健康探测、配置（JavaBridge.ts、engineHealth.ts、engineConfig.ts）
+  ipc/        IPC handler（文件对话框、模板/资产/摄影预设存储、HEIC 转换）
+  preload/    preload 脚本，暴露白名单 API
+  paths/      路径解析
+  config/     应用配置（appConfig.ts、devMode.ts）
+  types/      preload 契约类型与 IPC 通道常量（desktopApi.ts）
 ```
 
 规则：
 
-- `main.ts` 只负责应用启动、窗口创建、生命周期编排。
-- `java-bridge.ts` 只负责 Java 引擎的启动、停止、健康探测、错误包装。
-- `preload.ts` 只暴露经过筛选的安全运行时接口。
-- 不要在 `main.ts` 内堆业务判断和大量字符串常量。
+- 主进程代码按职责分目录，`main/` 只负责应用启动、窗口创建、生命周期编排，不堆业务判断和大量字符串常量。
+- `engine/` 只负责 Java 引擎的启动、停止、健康探测、错误包装。
+- `preload/` 只暴露经过筛选的安全运行时接口（`window.desktop` / `window.desktopRuntime`）。
 
 ### 3.2 Frontend
 
-推荐结构：
+当前结构（描述性，与代码一致）：
 
 ```text
 frontend/src/
-  App.tsx
-  main.tsx
-  styles.css
-  api/
-  components/
-  features/
-  types/
-  state/
+  app/         入口（main.tsx、App.tsx）
+  pages/       工作台页面（WorkspacePage）
+  features/    按业务分组的界面和状态逻辑：queue/、preview/、settings/、template/、metadata/
+  components/  可复用基础 UI
+  services/    engine/（Java HTTP 客户端）、desktop/（桌面桥接、HEIC 转换）
+  types/       共享类型
+  utils/       工具
+  styles/      设计 token 与全局样式
 ```
 
 规则：
 
-- `App.tsx` 只负责页面骨架组合，不承载大量业务逻辑。
-- `api/` 只放请求封装和响应映射。
+- `app/` 与 `pages/` 只负责页面骨架组合，不承载大量业务逻辑。
+- `services/engine/` 只放请求封装和响应映射。
 - `components/` 放可复用基础 UI。
-- `features/` 放按业务分组的界面和状态逻辑，例如 `queue/`、`preview/`、`settings/`。
+- `features/` 放按业务分组的界面和状态逻辑，例如 `queue/`、`preview/`、`settings/`、`template/`、`metadata/`。
 - `types/` 只放共享类型，不放行为逻辑。
 - 前端禁止自行定义与后端长期契约冲突的“临时 DTO”。
 
 ### 3.3 Java Engine
 
-推荐结构：
+当前结构（描述性，与代码一致）：
 
 ```text
 java-engine/src/main/java/com/camborder/app/
-  controller/
-  model/
-  service/
+  controller/   HTTP 接口输入输出
+  dto/          请求/响应对象
+  model/        渲染领域模型（RenderRecipe、BorderConfig、TextItem 等）
+  service/      业务接口；service/impl/ 为实现
+  repository/   内存存储（任务状态、预览存储）
+  util/         图像/颜色/文字/路径/元数据工具
+  exception/    受控异常与统一错误处理
+  config/       配置
 ```
 
 规则：
 
 - `controller/` 只负责 HTTP 接口输入输出。
-- `service/` 承载引擎行为，不把逻辑塞进 controller。
-- `model/` 放请求、响应、领域配置对象。
-- 占位实现必须放在 `Placeholder*Service`，避免和未来真实实现混在一起。
+- `service/` 承载引擎行为，实现放 `service/impl/`，不把逻辑塞进 controller。
+- `model/` 放渲染领域模型，`dto/` 放请求/响应对象。
+- 新增实现遵循现有命名（`XxxService` 接口 + `XxxServiceImpl` 实现）。
 
 ## 4. API 设计规则
 
@@ -161,7 +156,7 @@ java-engine/src/main/java/com/camborder/app/
 
 - 4xx：请求不合法
 - 5xx：服务内部异常
-- 占位实现可以返回受控占位结果，但不能吞掉明显的非法输入
+- 受控异常应返回明确的 4xx/5xx 响应（经 `GlobalExceptionHandler`），不能吞掉明显的非法输入
 
 ## 6. 测试规则
 
@@ -217,32 +212,21 @@ java-engine/src/main/java/com/camborder/app/
 
 ## 9. Definition of Done
 
-一个“框架搭建”类任务完成前，必须同时满足：
+一个任务完成前，必须同时满足：
 
-- 代码位置符合本文件结构约束
-- 接口命名与字段命名符合本文件规则
-- 至少有基础成功路径和失败路径测试
-- 占位实现和未来真实实现边界清晰
+- 代码位置符合本文件结构约束（第 3 节）
+- 接口命名与字段命名符合本文件规则（第 4 节）
+- 至少有基础成功路径和失败路径测试（第 6 节）
+- 新增抽象/分层有明确理由（第 7 节）
 - 没有把 UI 草稿直接硬编码成后端长期契约
 
 ## 10. Agent Working Rules
 
-给执行 agent 的附加硬约束：
+给执行 agent 的硬约束速览见根目录 [AGENTS.md](AGENTS.md)（每次任务必读）。
+其要点均出自本文件，不在此重复：先判断子系统归属、不跨子系统顺手重构、改 API/DTO 前检查第 4 节、
+新增目录/分层必须说明理由（第 7 节）、测试必须含失败路径（第 6 节）、注释默认简体中文（第 8 节）。
 
-- 改代码前先判断改动属于 `electron`、`frontend` 还是 `java-engine`
-- 不得跨子系统顺手重构
-- 如果新增接口或 DTO，必须先检查是否违反本文件第 4 节
-- 如果新增目录或分层，必须说明为什么需要这一层
-- 如果测试只覆盖 happy path，任务不算完成
-- 新增代码注释和说明默认使用简体中文
+## 11. 路线图
 
-## 11. 当前推荐下一步
-
-优先顺序如下：
-
-1. 固定 Java API 骨架和请求模型
-2. 固定 Electron 启动 Java 的生命周期
-3. 固定前端工作台结构
-4. 再接单图预览与导出闭环
-
-不要跳过前 3 步直接做复杂业务能力。
+产品阶段计划与优先级见 [docs/prd.md](docs/prd.md)（第 8、9 节），架构相关任务随其推进。
+本文件不再维护“推荐下一步”，避免与路线图漂移。

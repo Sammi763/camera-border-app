@@ -140,7 +140,7 @@ export const BUILT_IN_TEMPLATES: readonly BuiltInTemplate[] = [
       borderBottom: 90,
       borderLeft: 20,
       borderRight: 20,
-      textContent: "{Camera} · {Lens}\n{Film} · {Scanner}",
+      textContent: "{Camera} · {Lens}\n{CaptureFormat} · {Film}",
       textFontSize: 18,
       textColor: "#cccccc",
       textPlacement: "bottom-center",
@@ -207,7 +207,7 @@ export const BUILT_IN_TEMPLATES: readonly BuiltInTemplate[] = [
       borderBottom: 140,
       borderLeft: 50,
       borderRight: 50,
-      textContent: "{RollName}\n{Location}",
+      textContent: "{CaptureFormat} · {Film}\n{Location}",
       textFontSize: 16,
       textColor: "#444444",
       textPlacement: "bottom-center",
@@ -288,7 +288,7 @@ export const BUILT_IN_TEMPLATES: readonly BuiltInTemplate[] = [
     id: "darkroom-info-bar",
     name: "Darkroom Info Bar",
     category: "暗房",
-    description: "深色边框双行信息条。第一行相机·镜头，第二行胶片·扫描仪，字号更小。",
+    description: "深色边框双行信息条。第一行相机·镜头，第二行画幅·胶片，字号更小。",
     settingsPatch: {
       borderColor: "#1a1a1a",
       borderTop: 20,
@@ -297,7 +297,7 @@ export const BUILT_IN_TEMPLATES: readonly BuiltInTemplate[] = [
       borderRight: 20,
       textLayers: [
         layer("l1", "{Camera} · {Lens}", 20, "#e0e0e0", "bottom-center", "border", 20, "sans-serif"),
-        layer("l2", "{Film} · {Scanner}", 14, "#999999", "bottom-center", "border", 48, "sans-serif"),
+        layer("l2", "{CaptureFormat} · {Film}", 14, "#999999", "bottom-center", "border", 48, "sans-serif"),
         disabledLayer3("l3"),
       ],
       gradient: { enabled: false, type: "linear", angle: 0, stops: [{ offset: 0, color: "#000000" }, { offset: 1, color: "#ffffff" }] },
@@ -308,7 +308,7 @@ export const BUILT_IN_TEMPLATES: readonly BuiltInTemplate[] = [
     id: "archive-two-line",
     name: "Archive Two-Line",
     category: "档案",
-    description: "浅色边框双行归档信息。第一行胶片·地点，第二行帧号·卷名。",
+    description: "浅色边框双行归档信息。第一行胶片·地点，第二行画幅·帧号。",
     settingsPatch: {
       borderColor: "#e8e2d8",
       borderTop: 25,
@@ -317,7 +317,7 @@ export const BUILT_IN_TEMPLATES: readonly BuiltInTemplate[] = [
       borderRight: 25,
       textLayers: [
         layer("l1", "{Film} · {Location}", 18, "#555048", "bottom-center", "border", 18, "serif"),
-        layer("l2", "#{FrameNumber} · {RollName}", 14, "#888888", "bottom-center", "border", 44, "serif"),
+        layer("l2", "{CaptureFormat} · #{FrameNumber}", 14, "#888888", "bottom-center", "border", 44, "serif"),
         disabledLayer3("l3"),
       ],
       gradient: { enabled: false, type: "linear", angle: 0, stops: [{ offset: 0, color: "#000000" }, { offset: 1, color: "#ffffff" }] },
@@ -328,7 +328,7 @@ export const BUILT_IN_TEMPLATES: readonly BuiltInTemplate[] = [
     id: "museum-caption",
     name: "Museum Caption",
     category: "档案",
-    description: "大面积白色留白，双行展览说明。第一行卷名，第二行地点·相机。",
+    description: "大面积白色留白，双行展览说明。第一行画幅·胶片，第二行地点·相机。",
     settingsPatch: {
       borderColor: "#faf8f4",
       borderTop: 50,
@@ -336,7 +336,7 @@ export const BUILT_IN_TEMPLATES: readonly BuiltInTemplate[] = [
       borderLeft: 50,
       borderRight: 50,
       textLayers: [
-        layer("l1", "{RollName}", 18, "#333333", "bottom-center", "border", 30, "serif"),
+        layer("l1", "{CaptureFormat} · {Film}", 18, "#333333", "bottom-center", "border", 30, "serif"),
         layer("l2", "{Location} · {Camera}", 14, "#777777", "bottom-center", "border", 58, "serif"),
         disabledLayer3("l3"),
       ],
@@ -379,7 +379,7 @@ export const BUILT_IN_TEMPLATES: readonly BuiltInTemplate[] = [
       borderRight: 20,
       textLayers: [
         layer("l1", "{Camera} · {Lens}", 20, "#e0e0e0", "bottom-center", "border", 20, "sans-serif"),
-        layer("l2", "{Film} · {Scanner}", 14, "#999999", "bottom-center", "border", 48, "sans-serif"),
+        layer("l2", "{CaptureFormat} · {Film}", 14, "#999999", "bottom-center", "border", 48, "sans-serif"),
         disabledLayer3("l3"),
       ],
       logo: { enabled: true, mode: "auto-brand", brand: null, placement: "border-top-right", size: 16, colorMode: "auto-contrast" },
@@ -400,7 +400,7 @@ export const BUILT_IN_TEMPLATES: readonly BuiltInTemplate[] = [
       borderRight: 25,
       textLayers: [
         layer("l1", "{Film} · {Location}", 18, "#555048", "bottom-center", "border", 18, "serif"),
-        layer("l2", "#{FrameNumber} · {RollName}", 14, "#888888", "bottom-center", "border", 44, "serif"),
+        layer("l2", "{CaptureFormat} · #{FrameNumber}", 14, "#888888", "bottom-center", "border", 44, "serif"),
         disabledLayer3("l3"),
       ],
       logo: { enabled: true, mode: "auto-brand", brand: null, placement: "border-top-right", size: 14, colorMode: "auto-contrast" },
