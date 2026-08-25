@@ -52,8 +52,9 @@ public final class DefaultRenderJobService implements RenderJobService {
 
         // 导出按 ExportSettings 的目标尺寸合成（0/0 = 原图尺寸），不受预览缩放限制约束
         ExportSettings export = request.getExport();
-        BufferedImage composited = imageRenderService.compose(
+        ImageRenderService.ComposeOutcome outcome = imageRenderService.compose(
                 request.getRecipe(), export.getMaxWidth(), export.getMaxHeight());
+        BufferedImage composited = outcome.getImage();
         // 同步渲染并写入文件；outputPath 为空或不可写时抛 RenderExportException，由控制器映射为 4xx
         ImageEncoder.ExportResult exportResult = imageRenderService.writeToFile(composited, export);
 
@@ -68,6 +69,7 @@ public final class DefaultRenderJobService implements RenderJobService {
                 exportResult.getColorProfilePreservation(),
                 exportResult.getHighBitDepth()
         );
+        status.setSourceDecode(outcome.getSourceDecode());
         renderJobStore.put(jobId, status);
         return status;
     }

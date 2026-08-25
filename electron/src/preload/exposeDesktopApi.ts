@@ -5,6 +5,7 @@ import {
   IPC_CHANNELS,
   type DesktopApi,
   type DesktopRuntime,
+  type EngineDiagnostics,
   type ImageSourceResult
 } from "../types/desktopApi.js"
 
@@ -63,7 +64,15 @@ export const exposeDesktopApi = (): void => {
     convertHeicFiles: (paths: readonly string[]): Promise<readonly (string | null)[]> =>
       ipcRenderer.invoke(IPC_CHANNELS.CONVERT_HEIC_FILES, paths),
     listSystemFonts: (): Promise<readonly string[]> =>
-      ipcRenderer.invoke(IPC_CHANNELS.LIST_SYSTEM_FONTS)
+      ipcRenderer.invoke(IPC_CHANNELS.LIST_SYSTEM_FONTS),
+    openDirectory: (dirPath: string): Promise<boolean> =>
+      ipcRenderer.invoke(IPC_CHANNELS.OPEN_DIRECTORY, dirPath),
+    getEngineDiagnostics: (): Promise<EngineDiagnostics | null> =>
+      ipcRenderer.invoke(IPC_CHANNELS.GET_ENGINE_DIAGNOSTICS),
+    retryEngineStart: (): Promise<boolean> =>
+      ipcRenderer.invoke(IPC_CHANNELS.RETRY_ENGINE_START),
+    showNotification: (title: string, body: string): Promise<boolean> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SHOW_NOTIFICATION, title, body)
   }
 
   contextBridge.exposeInMainWorld("desktopRuntime", runtime)

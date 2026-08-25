@@ -1,6 +1,6 @@
-import { readdir } from "node:fs/promises"
+import { readdir, stat } from "node:fs/promises"
 import { extname, join } from "node:path"
-import { BrowserWindow, dialog, ipcMain } from "electron"
+import { BrowserWindow, dialog, ipcMain, shell } from "electron"
 import { IPC_CHANNELS, type ImageSourceResult } from "../types/desktopApi.js"
 
 const IMAGE_FILTERS = [
@@ -239,6 +239,28 @@ export const registerFileDialogIpc = (): void => {
         kind: "directory",
         paths: images
       }
+    }
+  )
+
+  // ---- 在系统文件管理器中打开目录（批量导出后查看产物） --------------------
+  // 安全边界：仅接受真实存在的目录路径；非目录或不存在时返回 false。
+
+  ipcMain.handle(
+    IPC_CHANNELS.OPEN_DIRECTORY,
+    async (_event, dirPath: string): Promise<boolean> => {
+      if (typeof dirPath !== "string" || dirPath.trim().length === 0) {
+        return false
+      }
+      try {
+        const info = await stat(dirPath)
+        if (!info.isDirectory()) {
+          return false
+        }
+      } catch {
+        return false
+      }
+      const errorMessage = await shell.openPath(dirPath)
+      return errorMessage.length === 0
     }
   )
 }

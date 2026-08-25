@@ -35,10 +35,8 @@ type PanelMocks = {
   readonly onDuplicatePreset: Mock
   readonly onDeletePreset: Mock
   readonly onClearError: Mock
-  readonly onApplyToSelected: Mock
-  readonly onApplyToAll: Mock
-  readonly onClearSelectedPreset: Mock
-  readonly onClearAllPresetBindings: Mock
+  readonly onApplyToScope: Mock
+  readonly onClearScope: Mock
 }
 
 const renderPanel = (overrides: Partial<PanelProps> = {}): { props: PanelProps & PanelMocks } & ReturnType<typeof render> => {
@@ -49,12 +47,11 @@ const renderPanel = (overrides: Partial<PanelProps> = {}): { props: PanelProps &
     onDuplicatePreset: vi.fn(() => null),
     onDeletePreset: vi.fn(),
     onClearError: vi.fn(),
-    onApplyToSelected: vi.fn(),
-    onApplyToAll: vi.fn(),
-    onClearSelectedPreset: vi.fn(),
-    onClearAllPresetBindings: vi.fn(),
+    onApplyToScope: vi.fn(),
+    onClearScope: vi.fn(),
     hasSelectedImage: true,
     queueCount: 3,
+    checkedCount: 0,
     assetStore: makeAssetStore(),
     presetUsageCounts: new Map<string, number>(),
     ...overrides
@@ -175,34 +172,48 @@ describe("ShootingPresetPanel（集成）", () => {
     confirmSpy.mockRestore()
   })
 
-  it("应用到当前图片：无选中图片时禁用", () => {
+  it("无当前图片时应用按钮禁用（默认作用域为当前图片）", () => {
     renderPanel({ hasSelectedImage: false })
-    const applyButton = screen.getByRole("button", { name: "应用到当前图片" })
+    const applyButton = screen.getByRole("button", { name: "应用当前" })
     expect(applyButton.hasAttribute("disabled")).toBe(true)
-    // 未选预设时应用到全部图片同样禁用
-    expect(screen.getByRole("button", { name: "应用到全部图片" }).hasAttribute("disabled")).toBe(true)
   })
 
-  it("应用到当前图片：有选中图片但未选预设时禁用", () => {
+  it("有当前图片但未选预设时应用按钮禁用", () => {
     renderPanel()
-    const applyButton = screen.getByRole("button", { name: "应用到当前图片" })
+    const applyButton = screen.getByRole("button", { name: "应用当前" })
     expect(applyButton.hasAttribute("disabled")).toBe(true)
   })
 
-  it("应用到当前图片 / 全部图片：选择预设后调用回调", async () => {
-    const { props } = renderPanel()
+  it("应用作用域：当前图片 / 已选图片 / 全部图片，选择预设后调用回调", async () => {
+    const { props } = renderPanel({ checkedCount: 2 })
     const applySelect = screen.getByLabelText(/选择预设/)
     fireEvent.change(applySelect, { target: { value: "p2" } })
 
-    const applyCurrent = screen.getByRole("button", { name: "应用到当前图片" })
+    // 当前图片作用域（默认）
+    const applyCurrent = screen.getByRole("button", { name: "应用当前" })
     expect(applyCurrent.hasAttribute("disabled")).toBe(false)
     fireEvent.click(applyCurrent)
-    expect(props.onApplyToSelected).toHaveBeenCalledWith("p2")
+    expect(props.onApplyToScope).toHaveBeenCalledWith("p2", "active")
 
-    const applyAll = screen.getByRole("button", { name: "应用到全部图片" })
+    // 已选图片作用域：点击「已选 2 张」后按钮变为「应用已选」
+    fireEvent.click(screen.getByRole("button", { name: "已选 2 张" }))
+    const applyChecked = screen.getByRole("button", { name: "应用已选" })
+    expect(applyChecked.hasAttribute("disabled")).toBe(false)
+    fireEvent.click(applyChecked)
+    expect(props.onApplyToScope).toHaveBeenCalledWith("p2", "checked")
+
+    // 全部图片作用域
+    fireEvent.click(screen.getByRole("button", { name: "全部图片" }))
+    const applyAll = screen.getByRole("button", { name: "应用全部" })
     expect(applyAll.hasAttribute("disabled")).toBe(false)
     fireEvent.click(applyAll)
-    expect(props.onApplyToAll).toHaveBeenCalledWith("p2")
+    expect(props.onApplyToScope).toHaveBeenCalledWith("p2", "all")
+  })
+
+  it("无已选图片时「已选」作用域按钮禁用", () => {
+    renderPanel({ checkedCount: 0 })
+    const scopeBtn = screen.getByRole("button", { name: "已选 0 张" })
+    expect(scopeBtn.hasAttribute("disabled")).toBe(true)
   })
 
   it("引用资产列表：相机/镜头/胶片下拉来自资产库", async () => {

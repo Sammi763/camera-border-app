@@ -5,7 +5,7 @@
  * 开发模式使用相对路径（由 Vite 代理转发），生产模式使用引擎绝对 URL。
  */
 
-const DEFAULT_ENGINE_BASE_URL = "http://127.0.0.1:8080"
+const DEFAULT_ENGINE_BASE_URL = "http://127.0.0.1:8099"
 
 export const getBaseUrl = (): string => {
   if (import.meta.env.DEV) {

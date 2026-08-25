@@ -12,7 +12,7 @@ pnpm install
 # 先启动 Java 引擎（dev 模式不会自动启动 jar）
 cd java-engine && mvn spring-boot:run
 
-# 再一键启动前端 + Electron（Vite :5173 → Electron）
+# 再一键启动前端 + Electron（Vite :5174 → Electron）
 cd .. && pnpm dev
 ```
 
@@ -29,6 +29,7 @@ cd .. && pnpm dev
 | [docs/tasks.md](docs/tasks.md) | 按依赖拆分的实施任务、完成条件与验证路径 |
 | [docs/adr/](docs/adr/) | 关键决策的原因与替代方案 |
 | [docs/cookbook.md](docs/cookbook.md) | 常见任务操作步骤（加端点/变量/模板/字体等） |
+| [docs/release-checklist.md](docs/release-checklist.md) | 打包链路与干净机器验收清单 |
 | [DESIGN.md](DESIGN.md) | 设计系统（色彩 token、字体、间距、组件） |
 | [electron/README.md](electron/README.md) | 桌面壳：职责、IPC 桥接 API、持久化位置 |
 | [frontend/README.md](frontend/README.md) | 前端：目录、数据流、桌面/浏览器模式差异 |
@@ -39,6 +40,16 @@ cd .. && pnpm dev
 
 > 本节同时记录当前已具备能力与已经确定的 MVP 目标；标注为摄影预设、统一画幅和安装包的部分以 [docs/tasks.md](docs/tasks.md) 的完成状态为准。
 
+### 快速出图模式（默认）
+
+- 打开应用默认进入「快速出图」模式：空队列显示欢迎页（选择照片 / 拖入照片 / 加载样片 + 本地处理、无需登录、EXIF 自动读取等价值提示）。
+- 导入照片后自动应用「摄影信息卡」默认模板；用户手动选择过模板后，后续导入不再覆盖用户选择。
+- 快速模式只显示当前照片、模板卡片、摄影信息摘要和导出按钮。
+- 首屏精选 8 个模板卡片（摄影信息卡 / 经典白边 / 极简黑边 / 拍立得 / 档案标签 / 中画幅留白 / 电影字幕 / 全画幅叠字），带真实布局缩略图、适用场景与信息字段说明，以及确定性规则给出的「推荐」标记（只提示，不修改用户设置）。
+- 摄影信息卡支持 白/黑边框 × 底部居中/左下 布局变体一键切换。
+- 摄影信息摘要为每个字段标注来源（EXIF / 摄影预设 / 每图覆盖），并内置摄影预设快速栏（选择已有预设或直接创建，应用到当前/已选/全部图片）。
+- 详细的边框、渐变、字体、图层与模板管理在顶栏「高级编辑」中；两种模式共享同一份 RenderRecipe、身份合并链与导出逻辑。
+
 ### 图片导入
 
 - 支持从本机选择图片文件（多选）或图片文件夹导入。
@@ -46,8 +57,15 @@ cd .. && pnpm dev
 - 支持 JPG / JPEG / PNG / WebP / TIFF 图片格式。
 - 代码层面已具备 RAW 嵌入式预览提取与 HEIC/HEIF 桌面模式转换（macOS），是否正式纳入支持格式待产品确认（见 [docs/prd.md §3.3](docs/prd.md)）。
 - 文件夹导入自动扫描当前层级图片，按文件名自然排序。
-- 首张图片自动选中，切换图片触发预览。
+- 首张图片自动激活预览；点击缩略图切换当前预览图。
 - 空文件夹显示中文提示。
+
+### 多选批量工作流
+
+- 队列缩略图带复选框：点击行切换当前预览图，勾选复选框控制批量选中范围，两组状态相互独立。
+- 支持全选 / 取消全选，底部显示「已选 N 张」。
+- 摄影预设应用支持作用域选择：当前图片 / 已选图片 / 全部图片，操作前明确显示影响数量。
+- 批量导出按勾选范围执行（未勾选时导出全部），按钮显示目标张数。
 
 ### 边框与文字
 
@@ -99,7 +117,7 @@ cd .. && pnpm dev
 - 批量导出使用系统目录选择器，用户自选本机目录；多图并行导出，进度实时展示。
 - 支持 PNG / JPEG 原图尺寸导出。
 - 支持输出尺寸预设：原图 / 1080P / 2K / 4K / 自定义长边，按长边等比缩小。
-- 批量导出进度展示（当前/总数/成功/失败）。
+- 批量导出完成后显示总数、成功数、失败数与失败文件明细，支持一键重试失败项和打开输出目录。
 - 文件名冲突自动追加序号。
 
 ### 预览
@@ -119,11 +137,11 @@ cd .. && pnpm dev
 
 ```text
 camera-border-app/
-├── electron/       # Electron 桌面壳，负责窗口、IPC、文件选择、保存目录、Java 引擎生命周期
-├── frontend/       # React + TypeScript + Vite 前端，负责工作台 UI、状态和即时预览
+├── electron/       # Electron 桌面壳，负责窗口、IPC、文件选择、保存目录、Java 引擎生命周期、打包资源路径
+├── frontend/       # React + TypeScript + Vite 前端，负责工作台 UI（快速出图/高级编辑）、状态和即时预览
 ├── java-engine/    # Spring Boot 本地图像引擎，负责预览、渲染、导出、EXIF 读取
-├── docs/           # PRD（prd.md）、任务清单（tasks.md）、决策记录（adr/）、操作手册（cookbook.md）
-├── scripts/        # 开发辅助脚本（dev.sh）
+├── docs/           # PRD（prd.md）、任务清单（tasks.md）、决策记录（adr/）、操作手册（cookbook.md）、发布验收清单
+├── scripts/        # 开发与打包脚本（dev.sh、fetch-runtime.sh、build-engine.sh、package-app.sh、smoke-test.sh）
 ├── photos/         # 开发样片（/api/dev/photos 扫描）
 ├── AGENTS.md       # 每次任务必读的工程规则速览
 ├── ARCHITECTURE.md # 项目架构规范
@@ -163,4 +181,8 @@ camera-border-app/
 - AI 辅助能力
 - 自动更新、代码签名和公证
 
-Windows `.exe` 和 macOS `.dmg` 打包是当前 MVP 的交付前置任务；Roll、冲洗、扫描、暗房和接触表明确延期。完整任务拆分见 [docs/tasks.md](docs/tasks.md)，产品规划与优先级见 [docs/prd.md](docs/prd.md)。
+Windows `.exe` 和 macOS `.dmg` 的打包脚本已就绪（`pnpm fetch:runtime && pnpm package`，
+随包 Java Runtime，最终用户无需安装 Java、Node.js 或 Python）；部分平台产物和干净机器验收仍按
+[docs/release-checklist.md](docs/release-checklist.md) 待完成。代码签名、公证与自动更新未配置。
+Roll、冲洗、扫描、暗房和接触表明确延期。完整任务拆分见 [docs/tasks.md](docs/tasks.md)，
+产品规划与优先级见 [docs/prd.md](docs/prd.md)。

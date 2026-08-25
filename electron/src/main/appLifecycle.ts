@@ -1,23 +1,68 @@
 import { app, BrowserWindow } from "electron"
+import path from "node:path"
 import { registerAllIpc } from "../ipc/index.js"
 import { cleanupHeicTempFiles } from "../ipc/imageConvert.js"
 import { JavaBridge } from "../engine/JavaBridge.js"
+import { resolveBundledJavaExecutable, resolveBundledLibRawExecutable } from "../engine/engineRuntime.js"
 import { ENGINE_READY_TIMEOUT_MS } from "../engine/engineConfig.js"
-import { engineBaseUrl, engineManaged } from "../config/devMode.js"
-import { engineJarPath, projectRoot } from "../paths/paths.js"
+import type { EngineConfig } from "../engine/engineConfig.js"
+import { engineBaseUrl, engineManaged, enginePort } from "../config/devMode.js"
+import { engineCwd, engineJarPath, projectRoot } from "../paths/paths.js"
+import { setManagedEngine } from "../engine/managedEngine.js"
 import { registerAppProtocol } from "./protocol.js"
 import { createMainWindow } from "./createMainWindow.js"
 
 let bridge: JavaBridge | null = null
+let isQuitting = false
+
+/** 引擎日志文件路径（userData/logs/engine.log）。 */
+const engineLogPath = (): string => path.join(app.getPath("userData"), "logs", "engine.log")
+
+/**
+ * 组装引擎配置并创建 JavaBridge。
+ *
+ * 运行时策略：
+ * - 打包模式（engineManaged=true）：必须使用随包 Java Runtime；
+ *   缺失时不回退系统 Java，由 JavaBridge 归类 runtime-missing 进入诊断页；
+ * - 开发模式：优先随包运行时（本地验证打包布局用），允许回退系统 PATH 的 java。
+ */
+const buildBridge = (): JavaBridge => {
+  const bundledJava = resolveBundledJavaExecutable()
+  if (bundledJava === null && !engineManaged) {
+    console.warn("[app] 开发模式未找到随包 Java Runtime，回退到系统 PATH 中的 java。")
+  }
+
+  // 随包 LibRaw 原生程序：存在时经环境变量注入引擎（RAW 真实显影）；
+  // 缺失时不注入——引擎走嵌入预览降级并在 sourceDecode.warning 说明。
+  const bundledLibRaw = resolveBundledLibRawExecutable()
+  const engineEnv: Record<string, string> | undefined = bundledLibRaw !== null
+    ? { CAMBORDER_LIBRAW_PATH: bundledLibRaw }
+    : undefined
+  if (bundledLibRaw === null) {
+    console.warn("[app] 未找到随包 LibRaw 原生程序，RAW 将降级为嵌入预览。")
+  }
+
+  const base = {
+    baseUrl: engineBaseUrl,
+    jarPath: engineJarPath,
+    cwd: engineManaged ? engineCwd : projectRoot,
+    readyTimeoutMs: ENGINE_READY_TIMEOUT_MS,
+    requireBundledRuntime: engineManaged,
+    logPath: engineLogPath(),
+    env: engineEnv,
+    serverPort: enginePort
+  }
+  const config: EngineConfig = bundledJava !== null
+    ? { ...base, javaExecutablePath: bundledJava }
+    : base
+  const newBridge = new JavaBridge(config)
+  setManagedEngine(newBridge, config)
+  return newBridge
+}
 
 /** 启动 Java 渲染引擎子进程（仅生产/托管模式）。 */
 const startEngine = (): void => {
-  bridge = new JavaBridge({
-    baseUrl: engineBaseUrl,
-    jarPath: engineJarPath,
-    cwd: projectRoot,
-    readyTimeoutMs: ENGINE_READY_TIMEOUT_MS
-  })
+  bridge = buildBridge()
 
   // 启动前检查 jar 是否存在，不存在时 JavaBridge.start() 会输出中文错误
   if (!bridge.checkJarExists()) {
@@ -91,9 +136,30 @@ export const runApplication = (): void => {
     }
   })
 
-  app.on("before-quit", () => {
-    bridge?.dispose()
+  app.on("before-quit", (event) => {
+    // before-quit 默认会立刻结束 Electron。第一次触发时阻止退出，
+    // 等引擎进程和临时文件清理完成后再触发一次 app.quit()，避免
+    // 未响应 SIGTERM 的 Java 进程在应用退出后继续残留。
+    if (isQuitting) {
+      return
+    }
+    isQuitting = true
+
+    const currentBridge = bridge
     bridge = null
-    void cleanupHeicTempFiles()
+    if (currentBridge === null) {
+      void cleanupHeicTempFiles()
+      return
+    }
+
+    event.preventDefault()
+    void Promise.all([
+      currentBridge.dispose(),
+      cleanupHeicTempFiles()
+    ]).catch((error: unknown) => {
+      console.error("[app] 退出清理失败", error)
+    }).finally(() => {
+      app.quit()
+    })
   })
 }

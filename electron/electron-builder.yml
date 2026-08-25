@@ -1,0 +1,61 @@
+# electron-builder 打包配置（Camera Border App）
+#
+# 产物布局（extraResources，位于 process.resourcesPath 下）：
+#   <resources>/
+#     app.asar/                              electron 编译产物（files: dist/**）
+#     frontend/                              前端构建产物（app:// 协议加载）
+#     java-engine/camera-border-engine.jar   Java 引擎 jar
+#     java-runtime/                          随包 Java Runtime（Temurin JRE）
+#
+# java-runtime 由 scripts/package-app.sh 按当前平台/架构
+# 从 runtime/<platform>-<arch>/ 复制到 electron/runtime-bundle/java-runtime，
+# 本配置只引用固定目录，避免 per-arch 路径模板漂移。
+#
+# 构建入口见 scripts/package-app.sh；干净机器验证清单见 docs/release-checklist.md。
+
+appId: com.camborder.desktop
+productName: Camera Border
+# 产物名带 -arch 后缀：随包 Java Runtime 必须与目标架构一致（每次只构建一个架构）
+artifactName: "Camera-Border-${version}-${arch}.${ext}"
+
+directories:
+  output: release
+  buildResources: build
+
+# DMG 制作前对外层 .app 做 ad-hoc 签名（保留 java-runtime 原始签名，见 build-hooks/afterPack.cjs）
+afterPack: ./build-hooks/afterPack.cjs
+
+# 只打包 electron 编译产物与 package.json；
+# 前端 / jar / Java Runtime 走 extraResources（asar 外，JavaBridge 可直接 spawn）。
+files:
+  - dist/**/*
+  - package.json
+
+asar: true
+
+extraResources:
+  - from: runtime-bundle/frontend
+    to: frontend
+  - from: runtime-bundle/java-engine.jar
+    to: java-engine/camera-border-engine.jar
+  - from: runtime-bundle/java-runtime
+    to: java-runtime
+
+mac:
+  category: public.app-category.photography
+  # 架构由命令行 --arm64 / --x64 指定（scripts/package-app.sh 每次装配对应架构的 JRE）
+  target:
+    - dmg
+  # 未配置签名证书时跳过签名（本地分发）；正式发布需补充 codesign + notarize
+  identity: null
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true

@@ -41,10 +41,11 @@
 ```text
 electron/src/
   main/       应用启动、窗口创建、生命周期编排（main.ts、appLifecycle.ts、createMainWindow.ts）
-  engine/     Java 引擎启动/停止、健康探测、配置（JavaBridge.ts、engineHealth.ts、engineConfig.ts）
-  ipc/        IPC handler（文件对话框、模板/资产/摄影预设存储、HEIC 转换）
+  engine/     Java 引擎启动/停止、健康探测、配置、随包运行时解析与托管单例
+              （JavaBridge.ts、engineHealth.ts、engineConfig.ts、engineRuntime.ts、managedEngine.ts）
+  ipc/        IPC handler（文件对话框、模板/资产/摄影预设存储、HEIC 转换、引擎诊断与重试）
   preload/    preload 脚本，暴露白名单 API
-  paths/      路径解析
+  paths/      路径解析（开发 / 打包双模式：frontendDistDir、engineJarPath、javaRuntimeDir）
   config/     应用配置（appConfig.ts、devMode.ts）
   types/      preload 契约类型与 IPC 通道常量（desktopApi.ts）
 ```
@@ -52,7 +53,7 @@ electron/src/
 规则：
 
 - 主进程代码按职责分目录，`main/` 只负责应用启动、窗口创建、生命周期编排，不堆业务判断和大量字符串常量。
-- `engine/` 只负责 Java 引擎的启动、停止、健康探测、错误包装。
+- `engine/` 只负责 Java 引擎的启动、停止、健康探测、错误包装；打包模式使用随包 Java Runtime（`engineRuntime.ts` 解析），不依赖用户本机安装 Java。
 - `preload/` 只暴露经过筛选的安全运行时接口（`window.desktop` / `window.desktopRuntime`）。
 
 ### 3.2 Frontend
@@ -62,8 +63,10 @@ electron/src/
 ```text
 frontend/src/
   app/         入口（main.tsx、App.tsx）
-  pages/       工作台页面（WorkspacePage）
-  features/    按业务分组的界面和状态逻辑：queue/、preview/、settings/、template/、metadata/
+  pages/       工作台页面（WorkspacePage：快速出图 / 高级编辑两种模式的共享状态装配）
+  features/    按业务分组的界面和状态逻辑：
+               queue/（队列与批量选中）、preview/、settings/、template/、metadata/、
+               quick/（快速出图模式）、engineHealth/（引擎故障页面）
   components/  可复用基础 UI
   services/    engine/（Java HTTP 客户端）、desktop/（桌面桥接、HEIC 转换）
   types/       共享类型
@@ -130,6 +133,11 @@ java-engine/src/main/java/com/camborder/app/
 - 文本使用 `texts[]`，不要只做单个 `text`
 - 导出设置单独建 `ExportSettings`
 - 预览接口和导出接口都基于 `RenderRecipe`
+- 可选边框风格使用 `RenderRecipe.borderStyle`（id/intensity/edgeWidth/holeCount/paperTone）：
+  Canvas 与 Java2D 使用同一套风格 ID 与几何规格（权威定义在
+  `java-engine/util/BorderStyleRenderer` 类注释）；未识别 id 或缺省时两端都保持原行为
+- 图片解码来源 `sourceDecode {mode, format, warning}` 随预览/导出响应返回；
+  RAW 显影失败必须显式降级（embedded-preview-fallback + 中文原因），禁止静默伪装
 
 ### 4.4 接口风格
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { buildResolvedRenderSettings, buildTextsFromSettings, resolveLogoBrand } from "./buildTexts"
+import { buildRecipeFromSettings, buildPreviewRequest } from "./buildRecipe"
 import type { RenderSettings, TextLayerSettings } from "../types"
 
 /** 默认 logo 配置。 */
@@ -39,6 +40,7 @@ const makeSettings = (
   preserveMetadata: false,
   preserveColorProfile: false,
   preferHighBitDepth: false,
+  borderStyle: null,
   logo: { ...defaultLogo, ...logo },
 })
 
@@ -274,5 +276,62 @@ describe("端到端：单图导出品牌不丢失", () => {
       "Canon"
     )
     expect(recipeBrand).toBe("Canon")
+  })
+})
+
+describe("边框风格：同一 RenderRecipe 的预览/导出一致性", () => {
+  const styleSettings = (): RenderSettings => ({
+    ...makeSettings([]),
+    borderStyle: {
+      id: "film-perforation",
+      intensity: 90,
+      edgeWidth: 12,
+      holeCount: 16,
+      paperTone: "#e8e8e8"
+    }
+  })
+
+  it("buildRecipeFromSettings 把 borderStyle 原样写入引擎配方（预览与导出共用）", () => {
+    const settings = styleSettings()
+    const previewRecipe = buildPreviewRequest("/photos/a.jpg", settings, 1280, 1280).recipe
+    const exportRecipe = buildRecipeFromSettings("/photos/a.jpg", settings)
+    // 引擎预览与导出的 borderStyle 必须完全一致（同一份配置）
+    expect(previewRecipe.borderStyle).toEqual(settings.borderStyle)
+    expect(exportRecipe.borderStyle).toEqual(previewRecipe.borderStyle)
+    expect(exportRecipe.borderStyle?.id).toBe("film-perforation")
+  })
+
+  it("borderStyle 为 null 时配方不带风格字段值（旧模板保持原行为）", () => {
+    const settings = makeSettings([])
+    expect(buildRecipeFromSettings("/photos/a.jpg", settings).borderStyle).toBeNull()
+  })
+
+  it("Canvas 渲染器接受全部 8 种风格 id 且不抛异常（含未知 id 回退为不绘制）", async () => {
+    const { drawBorderStyle } = await import("../../preview/canvas/canvasRenderer")
+    const calls: string[] = []
+    const ctx = new Proxy({}, {
+      get(_target, prop) {
+        if (prop === "createLinearGradient") {
+          return () => ({ addColorStop: () => {} })
+        }
+        return (...args: unknown[]) => {
+          void args
+          calls.push(String(prop))
+        }
+      },
+      set() { return true }
+    }) as unknown as CanvasRenderingContext2D
+
+    const ids = ["exhibition-line", "polaroid-shadow", "film-perforation", "mat-double-line",
+      "torn-edge", "negative-band", "magazine-keyline", "archive-label-box"]
+    for (const id of [...ids, "unknown-style-x"]) {
+      expect(() => drawBorderStyle(ctx,
+        { id, intensity: 80, edgeWidth: 8, holeCount: 16, paperTone: "#e8e8e8" },
+        20, 20, 400, 300, 440, 380, 40, 40)).not.toThrow()
+    }
+    // intensity=0 时不产生任何绘制调用
+    const before = calls.length
+    drawBorderStyle(ctx, { id: "exhibition-line", intensity: 0, edgeWidth: 8, holeCount: 0, paperTone: "#000" }, 20, 20, 400, 300, 440, 380, 40, 40)
+    expect(calls.length).toBe(before)
   })
 })

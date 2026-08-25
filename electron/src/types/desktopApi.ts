@@ -96,6 +96,38 @@ export type DesktopApi = {
    * 返回字体族名称数组；获取失败时返回空数组（前端回退到内置列表）。
    */
   readonly listSystemFonts: () => Promise<readonly string[]>
+  /**
+   * 在系统文件管理器中打开指定目录（批量导出后查看产物）。
+   * 目录不存在或打开失败时返回 false，不会抛出异常。
+   */
+  readonly openDirectory: (dirPath: string) => Promise<boolean>
+  /**
+   * 读取引擎托管诊断信息（引擎启动失败页面使用）。
+   * 仅托管模式下有意义；未托管或引擎从未启动时返回 null。
+   */
+  readonly getEngineDiagnostics: () => Promise<EngineDiagnostics | null>
+  /** 请求桌面壳重试启动引擎（引擎启动失败页面使用）。 */
+  readonly retryEngineStart: () => Promise<boolean>
+  /**
+   * 展示系统通知（导出完成/失败反馈）。
+   * title/body 必须是字符串且非空；参数非法或平台不支持时返回 false，
+   * 不会抛出异常。通知只展示文件名等简短文案，不展示绝对路径。
+   */
+  readonly showNotification: (title: string, body: string) => Promise<boolean>
+}
+
+/**
+ * 引擎托管诊断信息（引擎启动失败页面使用）。
+ * 由主进程根据引擎 jar / 运行时 / 进程 / 端口状态分类生成。
+ */
+export type EngineDiagnostics = {
+  readonly code: "ok" | "jar-missing" | "runtime-missing" | "start-failed" | "port-conflict" | "health-timeout" | "unknown"
+  /** 面向用户的中文描述。 */
+  readonly message: string
+  /** 引擎日志文件绝对路径（可为空）。 */
+  readonly logPath: string | null
+  /** 引擎进程是否存活。 */
+  readonly processAlive: boolean
 }
 
 /**
@@ -122,5 +154,9 @@ export const IPC_CHANNELS = {
   EXPORT_TEMPLATE_JSON: "desktop:export-template-json",
   IMPORT_TEMPLATE_JSON: "desktop:import-template-json",
   CONVERT_HEIC_FILES: "desktop:convert-heic-files",
-  LIST_SYSTEM_FONTS: "desktop:list-system-fonts"
+  LIST_SYSTEM_FONTS: "desktop:list-system-fonts",
+  OPEN_DIRECTORY: "desktop:open-directory",
+  GET_ENGINE_DIAGNOSTICS: "desktop:get-engine-diagnostics",
+  RETRY_ENGINE_START: "desktop:retry-engine-start",
+  SHOW_NOTIFICATION: "desktop:show-notification"
 } as const

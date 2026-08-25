@@ -8,13 +8,16 @@ React 18 + TypeScript 5 + Vite 6 的工作台 UI。负责交互、状态编排�
 ```text
 frontend/src/
   app/         入口（main.tsx、App.tsx，页面骨架组合，不承载业务逻辑）
-  pages/       工作台页面（WorkspacePage）
+  pages/       工作台页面（WorkspacePage：快速出图 / 高级编辑两种模式的共享状态装配）
   features/    按业务分组的界面与状态逻辑：
-    queue/       图片队列（useQueue、useThumbnails、QueuePanel）
-    preview/     预览（Canvas 渲染 canvasRenderer、引擎同步 usePreview、视口 usePreviewViewport）
+    queue/       图片队列（useQueue：activeItemId 当前预览 + checkedItemIds 批量选中两组独立状态；useThumbnails、QueuePanel 复选框多选）
+    preview/     预览（Canvas 渲染 canvasRenderer、引擎同步 usePreview、视口 usePreviewViewport；批量导出作用域/失败重试/打开目录）
     settings/    渲染设置（buildRecipe 装配 RenderRecipe、输出尺寸预设、品牌识别、文字层）
-    template/    模板系统（内置视觉模板、模板 JSON 编解码、缩略图）
-    metadata/    摄影信息（EXIF 索引、相机/镜头/胶片资产库、摄影预设 ShootingPreset、画幅目录、变量解析 resolveTextVariables、变量面板）
+    template/    模板系统（内置视觉模板含快速模式精选画廊与 8 种风格模板、模板 JSON 编解码、CSS 示意缩略图 TemplateThumbnail、当前照片实时缩略图 LiveTemplateThumbnail）
+    metadata/    摄影信息（EXIF 索引、相机/镜头/胶片资产库、摄影预设 ShootingPreset、画幅目录、变量解析 resolveTextVariables、来源标识 resolveIdentityFieldSources、变量面板）
+    quick/       快速出图模式（欢迎页 QuickWelcome、主视图 QuickWorkspace、模板画廊、信息摘要 QuickInfoSummary、
+                 确定性模板推荐 recommendTemplate、快速创建预设 buildPresetFromText）
+    engineHealth/ 引擎启动失败页面（EngineFailureView + useEngineDiagnostics，托管模式专用）
   components/  可复用基础 UI（Panel、InspectorPanel、TopBar、NumberInput…）
   services/    engine/（Java HTTP 客户端）+ desktop/（window.desktop 桥接、HEIC 转换）
   types/       共享类型（preview、health、runtime）
@@ -24,9 +27,15 @@ frontend/src/
 
 ## 关键数据流
 
+- **工作台模式**：默认「快速出图」（空队列欢迎页 → 导入后自动应用「摄影信息卡」默认模板，用户手动选过模板则不覆盖）；顶栏可切到「高级编辑」三栏工作台。两种模式共享同一份 RenderRecipe、身份合并链与导出逻辑。
+- **队列状态**：`activeItemId`（当前预览图，点击切换）与 `checkedItemIds`（复选框批量选中）相互独立；预设应用与批量导出支持作用域：当前图片 / 已选图片 / 全部图片。
+- **模板推荐**：`quick/utils/recommendTemplate.ts` 按确定性规则给出「建议模板」标记，只提示不修改用户设置。
+- **实时缩略图**：模板卡片优先用 `LiveTemplateThumbnail` 以当前照片经同一 `drawPreviewToCanvas` 渲染（缩略图=预览=导出同一配置）；点击模板后中间预览立即更新。
+- **边框风格**：`RenderSettings.borderStyle` → recipe.borderStyle；Canvas `drawBorderStyle` 与引擎 `BorderStyleRenderer` 同一几何规格（8 种风格，未知 id 回退）。
+- **RAW 来源状态**：预览元信息栏显示「RAW 已真实显影 / 已降级为嵌入预览（原因）」徽标；导出摘要包含 sourceDecode 说明。
 - **渲染配方**：UI 设置 → `features/settings/utils/buildRecipe.ts` 装配 `RenderRecipe`（单一配方，[ADR-0002](../docs/adr/0002-preview-export-share-recipe.md)）。
 - **预览**：Canvas 即时预览（`canvasRenderer.ts`，设置改动立即重绘）+ 后台引擎预览同步（`POST /api/preview` → `GET /previews/{id}`，`usePreview`）。引擎失败降级 Canvas。
-- **导出**：`services/engine/renderJobsApi.ts` → `POST /api/render-jobs`（同步链路，直接返回 completed + outputPath）；批量导出多图并行、限并发、实时进度。批量导出前会先逐张读取队列全部图片的 EXIF（`useExifIndex.ensureExifForExport`，失败降级为空），再构建每张图的 RenderRecipe，单图导出与批量导出共用同一解析函数（`resolveQueueItem`）。
+- **导出**：`services/engine/renderJobsApi.ts` → `POST /api/render-jobs`（同步链路，直接返回 completed + outputPath）；批量导出多图并行、限并发、determinate 进度（`role="progressbar"` 展示 current/total + 成功/失败计数）。批量导出前会先逐张读取队列全部图片的 EXIF（`useExifIndex.ensureExifForExport`，失败降级为空），再构建每张图的 RenderRecipe，单图导出与批量导出共用同一解析函数（`resolveQueueItem`）。完成后展示总数/成功/失败与失败文件明细，支持重试失败项（沿用原目录与文件名冲突策略）与打开输出目录（`openDirectory` IPC）。单图导出区分「准备（选路径+读 EXIF）→ 渲染（引擎写盘）」阶段提示；单图与批量导出入口互斥禁用。导出完成/失败通过 `showNotification` IPC 发送系统通知（取消选择路径不发通知；浏览器模式或通知不可用时静默降级为工作台内状态）。
 - **摄影信息**：EXIF 经 `POST /api/photo-metadata` 读取 → 与摄影预设合并（`metadata/utils/resolveIdentity.ts`）→ 变量解析 `resolveTextVariables`（优先级：每图覆盖 > 摄影预设 > EXIF > 空，[tasks.md §0.2](../docs/tasks.md)）。摄影预设（`ShootingPreset`，[P0-05](../docs/tasks.md)）替代旧 Roll 成为主流程：预设面板（`metadata/components/ShootingPresetPanel.tsx`）支持创建/编辑/复制/删除、分类筛选、画幅与资产引用，并可应用到当前/选中/全部图片；Electron 模式持久化到 `userData/presets.json`，浏览器模式降级 localStorage。旧 `readRolls/writeRolls` IPC 仅保留兼容读取，不再被 UI 使用。
 - **画幅**：统一画幅目录在 `metadata/constants/captureFormats.ts`（数码 M43/APS-C/135 全画幅/4433；胶片半格/135/645/6x6/6x7/6x8/6x9/**6x10**/**6x12**，6x10 为新增、6x12 保留），胶片 id 与引擎 `/api/film-formats` 一致；摄影预设与设置面板（含引擎不可用时的 `FALLBACK_FORMATS`）均含 6x10 与 6x12。画幅只提供信息与边框建议，不改变裁剪/尺寸设置。
 - **桌面能力**：`window.desktop`（见 [electron/README.md](../electron/README.md) 的桥接 API 表）；`window.desktopRuntime` 提供 managed/baseUrl。
@@ -38,7 +47,7 @@ frontend/src/
 | 持久化 | `userData/*.json`（经 IPC） | localStorage |
 | 文件选择/保存 | 系统对话框 | 无（用 `/api/dev/photos` 样片） |
 | HEIC 转换 | 支持（macOS sips） | 不支持 |
-| 引擎地址 | dev：Vite 代理相对路径；managed：`desktopRuntime.engine.baseUrl` | Vite 代理（`vite.config.ts` → 127.0.0.1:8080） |
+| 引擎地址 | dev：Vite 代理相对路径；managed：`desktopRuntime.engine.baseUrl` | Vite 代理（`vite.config.ts` → 127.0.0.1:8099） |
 
 ## 验证
 

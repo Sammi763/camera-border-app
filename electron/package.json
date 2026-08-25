@@ -5,15 +5,17 @@
   "main": "dist/main/main.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "dev": "tsc -p tsconfig.json && ELECTRON_RENDERER_URL=http://127.0.0.1:5173 electron dist/main/main.js",
-    "dev:managed": "tsc -p tsconfig.json && electron dist/main/main.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "dev": "node ../scripts/prepare-electron-dev.mjs && tsc -p tsconfig.json && ELECTRON_RENDERER_URL=http://127.0.0.1:5174 CAMBORDER_ENGINE_PORT=8099 electron dist/main/main.js",
+    "dev:managed": "node ../scripts/prepare-electron-dev.mjs && tsc -p tsconfig.json && electron dist/main/main.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
   },
-  "dependencies": {
-    "electron": "^31.0.0"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@types/node": "^22.10.0",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "electron-builder": "^25.1.8",
+    "vitest": "^2.1.9",
+    "electron": "^31.0.0"
   }
 }

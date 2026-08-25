@@ -634,7 +634,7 @@ body {
 }
 
 /* 选中态：左侧粗条 + 轻底色，更明显 */
-.queueItem.isSelected {
+.queueItem.isActive {
   border-color: var(--accent-primary);
   border-left: 3px solid var(--accent-primary);
   background: var(--surface-elevated);
@@ -651,7 +651,7 @@ body {
   opacity: 0.5;
 }
 
-.queueItem.isSelected .queueSelectBadge {
+.queueItem.isActive .queueSelectBadge {
   color: var(--accent-primary);
   font-weight: 600;
   opacity: 1;
@@ -838,6 +838,58 @@ body {
   font-size: 0.6875rem;
   line-height: 1.4;
   color: var(--text-tertiary);
+}
+
+/* 单图导出阶段提示（准备 / 渲染） */
+.previewExportPhase {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 220px;
+  color: var(--text-secondary, var(--text-tertiary));
+}
+
+/* 可见阶段进度轨道；百分比只代表当前阶段，不冒充引擎内部精确进度。 */
+.previewExportProgressTrack,
+.previewBatchProgressTrack {
+  display: inline-block;
+  flex: 0 0 120px;
+  width: 120px;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--border-subtle, rgba(0, 0, 0, 0.12));
+}
+
+.previewExportProgressFill,
+.previewBatchProgressFill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent-primary);
+  transition: width 0.2s ease;
+}
+
+/* 批量导出 determinate 进度条（role=progressbar，含 current/total 与成败计数） */
+.previewBatchProgress {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 180px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--bg-tertiary, rgba(0, 0, 0, 0.04));
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.previewBatchProgressTrack {
+  flex-basis: 140px;
+  width: 140px;
+}
+
+.previewBatchProgressLabel {
+  white-space: nowrap;
 }
 
 .previewExportHint {
@@ -1889,4 +1941,750 @@ body {
   font-family: var(--font-mono);
   min-width: 3em;
   text-align: center;
+}
+
+/* ---- 快速出图模式：欢迎页 -------------------------------------------------- */
+
+.quickWelcomeHost {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  overflow: auto;
+}
+
+.quickModeHost {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  overflow: auto;
+}
+
+.quickWelcome {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-8);
+  border: 2px dashed var(--border-subtle);
+  border-radius: 8px;
+  margin: var(--space-4);
+  background: var(--surface-primary);
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.quickWelcomeDragActive {
+  border-color: var(--accent-primary);
+  background: var(--surface-elevated);
+}
+
+.quickWelcomeInner {
+  max-width: 640px;
+  width: 100%;
+  text-align: center;
+}
+
+.quickWelcomeTitle {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0 0 var(--space-2);
+}
+
+.quickWelcomeSubtitle {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  margin: 0 0 var(--space-6);
+}
+
+.quickWelcomeActions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.primaryButton {
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--accent-primary);
+  border-radius: 4px;
+  background: var(--accent-primary);
+  color: #ffffff;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.primaryButton:hover {
+  background: var(--accent-primary-hover, var(--accent-primary));
+}
+
+.primaryButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.quickWelcomePrimary {
+  padding: var(--space-3) var(--space-6);
+  font-size: 0.9375rem;
+}
+
+.quickWelcomeSecondary {
+  padding: var(--space-3) var(--space-4);
+}
+
+.quickWelcomeDropHint {
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  margin: var(--space-4) 0 0;
+}
+
+.quickWelcomeDropError {
+  margin-top: var(--space-2);
+  color: var(--error-primary, #c0392b);
+}
+
+.quickWelcomeValues {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-3);
+  margin-top: var(--space-8);
+  text-align: left;
+}
+
+.quickWelcomeValue {
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--surface-primary);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.quickWelcomeValueTitle {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.quickWelcomeValueBody {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+/* ---- 快速出图模式：主布局 -------------------------------------------------- */
+
+.quickWorkspace {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-3);
+  gap: var(--space-3);
+  width: 100%;
+}
+
+.quickMain {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr) 340px;
+  gap: var(--space-3);
+}
+
+.quickLeft {
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--surface-primary);
+}
+
+.quickCenter {
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--surface-primary);
+}
+
+.quickRight {
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--surface-primary);
+}
+
+/* 队列复选框（批量选中，不切换预览） */
+.queueItemCheck {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent-primary);
+  cursor: pointer;
+}
+
+.queueCheckedCount {
+  color: var(--accent-primary);
+  font-weight: 600;
+}
+
+/* ---- 快速出图模式：摄影信息摘要 --------------------------------------------- */
+
+.quickInfoSummary {
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.quickInfoHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.quickInfoTitle {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.quickInfoBoundPreset {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  color: var(--accent-primary);
+  padding: 2px 6px;
+  border: 1px solid var(--border-default);
+  border-radius: 3px;
+}
+
+.quickInfoIdentity {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: 0.875rem;
+}
+
+.quickInfoIdentityValue {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.quickInfoSeparator {
+  color: var(--text-tertiary);
+}
+
+.quickInfoEmpty {
+  color: var(--text-tertiary);
+  font-style: normal;
+}
+
+.quickInfoMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+/* 来源标识徽章 */
+.quickInfoSourceBadge,
+.identitySourceBadge,
+.identityFieldSourceBadge {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 0.5625rem;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 3px;
+  margin-left: 4px;
+  vertical-align: middle;
+  letter-spacing: 0.02em;
+}
+
+.identityFieldSourceBadge {
+  margin-left: 6px;
+}
+
+.identitySourceexif {
+  background: rgba(46, 125, 50, 0.12);
+  color: #2e7d32;
+  border: 1px solid rgba(46, 125, 50, 0.35);
+}
+
+.identitySourcepreset {
+  background: rgba(21, 101, 192, 0.12);
+  color: #1565c0;
+  border: 1px solid rgba(21, 101, 192, 0.35);
+}
+
+.identitySourceoverride {
+  background: rgba(198, 40, 40, 0.12);
+  color: #c62828;
+  border: 1px solid rgba(198, 40, 40, 0.35);
+}
+
+/* ---- 快速出图模式：摄影预设快速栏 ------------------------------------------- */
+
+.quickPresetBar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border-top: 1px solid var(--border-subtle);
+  padding-top: var(--space-3);
+}
+
+.quickPresetBarHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.quickPresetScopeHint {
+  font-size: 0.6875rem;
+  color: var(--text-tertiary);
+}
+
+.quickPresetSelectRow {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.quickPresetSelect {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.quickScopeSelector {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.quickScopeBtn {
+  flex: 1 1 auto;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border-default);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.6875rem;
+  cursor: pointer;
+}
+
+.quickScopeBtn:hover:not(:disabled) {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}
+
+.quickScopeActive {
+  border-color: var(--accent-primary);
+  background: rgba(0, 0, 0, 0.04);
+  color: var(--accent-primary);
+  font-weight: 600;
+}
+
+.quickScopeBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.quickPresetClearRow {
+  display: flex;
+}
+
+.quickPresetCreateToggle {
+  align-self: flex-start;
+}
+
+.quickPresetCreateForm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: var(--space-3);
+}
+
+.quickPresetCreateActions {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+
+/* ---- 快速出图模式：模板画廊 ------------------------------------------------ */
+
+.quickTemplateGallery {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--surface-primary);
+  padding: var(--space-3);
+}
+
+.quickTemplateGalleryHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.quickTemplateGalleryTitle {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.quickTemplateGalleryHint {
+  font-size: 0.6875rem;
+  color: var(--text-tertiary);
+}
+
+.quickTemplateGalleryStrip {
+  display: flex;
+  gap: var(--space-3);
+  overflow-x: auto;
+  padding-bottom: var(--space-1);
+}
+
+.quickTemplateCard {
+  position: relative;
+  flex: 0 0 auto;
+  width: 196px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--surface-primary);
+  transition: border-color 0.12s;
+}
+
+.quickTemplateCard:hover {
+  border-color: var(--border-default);
+}
+
+.quickTemplateCardActive {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 1px var(--accent-primary);
+}
+
+.quickTemplateRecommendBadge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 1;
+  font-family: var(--font-mono);
+  font-size: 0.5625rem;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: var(--accent-primary);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.quickTemplateThumb {
+  width: 100%;
+}
+
+.quickTemplateCaption {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.quickTemplateName {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.quickTemplateDesc {
+  font-size: 0.6875rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.quickTemplateFields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.quickTemplateFieldChip {
+  font-family: var(--font-mono);
+  font-size: 0.5625rem;
+  padding: 2px 5px;
+  border: 1px solid var(--border-default);
+  border-radius: 3px;
+  color: var(--text-tertiary);
+}
+
+.quickTemplateApplyButton {
+  align-self: flex-start;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border-default);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.quickTemplateApplyButton:hover {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}
+
+.quickTemplateApplyActive {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+  font-weight: 600;
+}
+
+/* 摄影信息卡变体切换（布局 / 边框） */
+.quickInfoCardVariants {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.quickInfoCardVariantLabel {
+  font-size: 0.625rem;
+  color: var(--text-tertiary);
+}
+
+.quickInfoCardVariantGroup {
+  display: flex;
+  gap: 4px;
+}
+
+.quickInfoCardVariantBtn {
+  flex: 1 1 auto;
+  padding: 3px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.625rem;
+  cursor: pointer;
+}
+
+.quickInfoCardVariantBtn:hover {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}
+
+.quickInfoCardVariantActive {
+  border-color: var(--accent-primary);
+  background: rgba(0, 0, 0, 0.04);
+  color: var(--accent-primary);
+  font-weight: 600;
+}
+
+/* ---- 顶栏模式切换 --------------------------------------------------------- */
+
+.topbarModeSwitch {
+  display: flex;
+  gap: var(--space-1);
+  margin: 0 var(--space-3);
+}
+
+.topbarModeBtn {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.topbarModeBtn:hover {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}
+
+.topbarModeActive {
+  border-color: var(--accent-primary);
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--accent-primary);
+  font-weight: 600;
+}
+
+/* ---- 批量导出：失败明细与操作 --------------------------------------------- */
+
+.previewBatchFailures {
+  display: block;
+  margin-top: var(--space-1);
+  font-size: 0.6875rem;
+  color: var(--error-primary, #c0392b);
+}
+
+.previewBatchSummaries {
+  display: block;
+  margin-top: var(--space-1);
+  font-size: 0.6875rem;
+  color: var(--accent-warm, #c47c2a);
+}
+
+.previewBatchSummaryTitle {
+  font-weight: 600;
+}
+
+.previewBatchFailureTitle {
+  font-weight: 600;
+}
+
+.previewBatchActions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.previewBatchActionBtn {
+  padding: var(--space-1) var(--space-3);
+}
+
+/* ---- 高级编辑：预设作用域选择 --------------------------------------------- */
+
+.presetScopeSelector {
+  display: flex;
+  gap: var(--space-1);
+  margin-bottom: var(--space-2);
+}
+
+.presetScopeActive {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+  font-weight: 600;
+}
+
+/* ---- 响应式：窄窗口下快速模式降级为单列 ----------------------------------- */
+@media (max-width: 1100px) {
+  .quickMain {
+    grid-template-columns: 220px minmax(0, 1fr);
+  }
+  .quickRight {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 860px) {
+  .quickMain {
+    grid-template-columns: 1fr;
+  }
+  .quickLeft {
+    max-height: 200px;
+  }
+}
+
+/* ---- 引擎启动失败页面（托管模式） ----------------------------------------- */
+
+.engineFailureView {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-primary);
+}
+
+.engineFailureCard {
+  max-width: 480px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  text-align: center;
+  padding: var(--space-6);
+}
+
+.engineFailureMark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: rgba(198, 40, 40, 0.12);
+  color: #c62828;
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.engineFailureTitle {
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.engineFailureMessage {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  line-height: 1.7;
+  margin: 0;
+}
+
+.engineFailureActions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* ---- 实时模板缩略图（当前照片渲染） --------------------------------------- */
+
+.liveThumbCanvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 2px;
+}
+
+.templatePresetCard .liveThumbCanvas {
+  width: 100%;
+}
+
+.liveThumbEmpty {
+  width: 100%;
+  aspect-ratio: 3 / 2;
+  background: var(--surface-primary);
+}
+
+/* ---- RAW 解码来源徽标 ------------------------------------------------------ */
+
+.decodeBadge {
+  font-family: var(--font-mono);
+  font-size: 0.5625rem;
+  padding: 2px 6px;
+  border-radius: 3px;
+  letter-spacing: 0.02em;
+}
+
+.decodeBadgeDeveloped {
+  background: rgba(46, 125, 50, 0.12);
+  color: #2e7d32;
+  border: 1px solid rgba(46, 125, 50, 0.35);
+}
+
+.decodeBadgeFallback {
+  background: rgba(230, 126, 34, 0.14);
+  color: #b35a1f;
+  border: 1px solid rgba(230, 126, 34, 0.4);
 }

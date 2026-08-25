@@ -39,6 +39,7 @@ const makeSettings = (): RenderSettings => ({
   preserveMetadata: true,
   preserveColorProfile: true,
   preferHighBitDepth: false,
+  borderStyle: null,
   logo: { enabled: false, mode: "auto-brand", brand: null, placement: "border-bottom-right", size: 48, colorMode: "auto-contrast" }
 })
 
@@ -59,7 +60,6 @@ const makeItem = (): QueueItem => ({
   id: "q1",
   filePath: FILE_PATH,
   fileName: "A.jpg",
-  isSelected: true,
   sourcePath: FILE_PATH,
   sourceFormat: "jpg",
   converted: false,
@@ -134,6 +134,8 @@ describe("PreviewPanel 单图导出（EXIF 等待 + 解析一致）", () => {
         settings={makeSettings()}
         hasSelectedImage={true}
         queueItems={[makeItem()]}
+        batchExportItems={[]}
+        batchExportLabel="批量导出 1 张"
         resolveQueueItem={resolveQueueItem}
         prepareExifForExport={prepareExifForExport}
       />
@@ -164,6 +166,11 @@ describe("PreviewPanel 单图导出（EXIF 等待 + 解析一致）", () => {
     const recipe = renderJobBodies[0]!.recipe
     expect(recipe.imagePath).toBe(FILE_PATH)
     expect(recipe.texts.map((t) => t.content)).toEqual(["NIKON Z6 · Nikkor 50mm", "6×10"])
+
+    // 等到导出终态再结束，防止悬挂异步链路在后续测试中触发它们的通知 mock
+    await waitFor(() => {
+      expect(screen.getAllByText(/导出完成/).length).toBeGreaterThan(0)
+    })
   })
 
   it("批量导出读取 EXIF 期间禁用批量按钮", async () => {
@@ -196,6 +203,8 @@ describe("PreviewPanel 单图导出（EXIF 等待 + 解析一致）", () => {
         settings={makeSettings()}
         hasSelectedImage={true}
         queueItems={[makeItem(), secondItem]}
+        batchExportItems={[makeItem(), secondItem]}
+        batchExportLabel="批量导出 2 张"
         resolveQueueItem={vi.fn(() => ({ textOverride: null, resolvedLayers: [], brand: null }))}
         prepareExifForExport={vi.fn(async () => { await prepareGate })}
       />
@@ -211,6 +220,10 @@ describe("PreviewPanel 单图导出（EXIF 等待 + 解析一致）", () => {
     releasePrepare?.()
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalled()
+    })
+    // 等到批量导出终态再结束，防止悬挂异步链路污染后续测试
+    await waitFor(() => {
+      expect(screen.getAllByText(/批量导出完成/).length).toBeGreaterThan(0)
     })
   })
 
@@ -233,6 +246,8 @@ describe("PreviewPanel 单图导出（EXIF 等待 + 解析一致）", () => {
         settings={makeSettings()}
         hasSelectedImage={true}
         queueItems={[]}
+        batchExportItems={[]}
+        batchExportLabel="批量导出 0 张"
         resolveQueueItem={vi.fn()}
         prepareExifForExport={vi.fn(async () => {})}
       />
@@ -241,6 +256,594 @@ describe("PreviewPanel 单图导出（EXIF 等待 + 解析一致）", () => {
     fireEvent.click(screen.getByRole("button", { name: "导出原图" }))
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/render-jobs"), expect.anything())
+    })
+    // 等到导出终态再结束，防止悬挂异步链路污染后续测试
+    await waitFor(() => {
+      expect(screen.getAllByText(/导出完成/).length).toBeGreaterThan(0)
+    })
+  })
+
+  it("批量导出：失败项定位到具体文件并可重试成功", async () => {
+    // 第一次请求全部失败；重试时全部成功
+    let firstRun = true
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const url = String(input)
+      if (url.endsWith("/api/render-jobs") && init?.method === "POST") {
+        if (firstRun) {
+          // 500 → submitRenderJob 抛错 → 该项标记失败
+          return jsonResponse({ jobId: "job-fail", status: "failed", error: "渲染失败" }, 500)
+        }
+        return jsonResponse({ jobId: "job-ok", status: "completed", outputPath: "/tmp/out/b.jpg", actualFormat: "jpeg" })
+      }
+      return jsonResponse({ error: "unexpected" }, 404)
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    ;(window as unknown as { desktop?: unknown }).desktop = {
+      selectExportDirectory: vi.fn(async () => "/tmp/out")
+    }
+
+    const item = makeItem()
+    const secondItem = {
+      ...makeItem(),
+      id: "q2",
+      filePath: "/photos/B.jpg",
+      fileName: "B.jpg",
+      sourcePath: "/photos/B.jpg"
+    }
+    render(
+      <PreviewPanel
+        state={makeActiveState()}
+        settings={makeSettings()}
+        hasSelectedImage={true}
+        queueItems={[item, secondItem]}
+        batchExportItems={[item, secondItem]}
+        batchExportLabel="批量导出 2 张"
+        resolveQueueItem={vi.fn(() => ({ textOverride: null, resolvedLayers: [], brand: null }))}
+        prepareExifForExport={vi.fn(async () => {})}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "批量导出 2 张" }))
+
+    // 首轮：两张全部失败 → 完成态显示失败 2，并列出失败文件与重试按钮
+    await waitFor(() => {
+      expect(screen.getByText(/失败 2/)).toBeTruthy()
+    })
+    // 失败文件可定位到具体文件名
+    expect(screen.getAllByText(/A\.jpg/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/B\.jpg/).length).toBeGreaterThan(0)
+
+    // 第二轮（重试）：全部成功 → 完成态更新为成功 2
+    firstRun = false
+    fireEvent.click(screen.getByRole("button", { name: /重试失败项/ }))
+    await waitFor(() => {
+      expect(screen.getByText(/成功 2/)).toBeTruthy()
+    })
+    expect(screen.getByText(/失败 0/)).toBeTruthy()
+  })
+
+  it("批量失败重试使用首次导出批次快照：改变勾选范围后仍只重试原批次失败项", async () => {
+    const requestedPaths: string[] = []
+    let firstRun = true
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const url = String(input)
+      if (url.endsWith("/api/render-jobs") && init?.method === "POST") {
+        const body = JSON.parse(String(init?.body)) as { recipe: { imagePath: string } }
+        requestedPaths.push(body.recipe.imagePath)
+        if (firstRun && body.recipe.imagePath === "/photos/B.jpg") {
+          return jsonResponse({ jobId: "job-fail", status: "failed", error: "渲染失败" }, 500)
+        }
+        return jsonResponse({ jobId: "job-ok", status: "completed", outputPath: "/tmp/out.jpg", actualFormat: "jpeg" })
+      }
+      return jsonResponse({ error: "unexpected" }, 404)
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    ;(window as unknown as { desktop?: unknown }).desktop = {
+      selectExportDirectory: vi.fn(async () => "/tmp/out")
+    }
+
+    const itemA = makeItem()
+    const itemB = { ...makeItem(), id: "q2", filePath: "/photos/B.jpg", fileName: "B.jpg", sourcePath: "/photos/B.jpg" }
+    const itemC = { ...makeItem(), id: "q3", filePath: "/photos/C.jpg", fileName: "C.jpg", sourcePath: "/photos/C.jpg" }
+
+    const { rerender } = render(
+      <PreviewPanel
+        state={makeActiveState()}
+        settings={makeSettings()}
+        hasSelectedImage={true}
+        queueItems={[itemA, itemB, itemC]}
+        batchExportItems={[itemA, itemB]}
+        batchExportLabel="批量导出已选 2 张"
+        resolveQueueItem={vi.fn(() => ({ textOverride: null, resolvedLayers: [], brand: null }))}
+        prepareExifForExport={vi.fn(async () => {})}
+      />
+    )
+
+    // 首轮导出批次快照 = [A, B]，B 失败
+    fireEvent.click(screen.getByRole("button", { name: "批量导出已选 2 张" }))
+    await waitFor(() => {
+      expect(screen.getByText(/失败 1/)).toBeTruthy()
+    })
+    firstRun = false
+
+    // 用户改变勾选范围（batchExportItems 变为 [A, C]）
+    rerender(
+      <PreviewPanel
+        state={makeActiveState()}
+        settings={makeSettings()}
+        hasSelectedImage={true}
+        queueItems={[itemA, itemB, itemC]}
+        batchExportItems={[itemA, itemC]}
+        batchExportLabel="批量导出已选 2 张"
+        resolveQueueItem={vi.fn(() => ({ textOverride: null, resolvedLayers: [], brand: null }))}
+        prepareExifForExport={vi.fn(async () => {})}
+      />
+    )
+
+    // 重试：只重发原批次失败项 B，不重发 A，也不发新范围里的 C
+    fireEvent.click(screen.getByRole("button", { name: /重试失败项/ }))
+    await waitFor(() => {
+      expect(screen.getByText(/成功 2/)).toBeTruthy()
+    })
+    // 全部请求：首轮 A、B + 重试 B；C 从未被请求
+    expect(requestedPaths.filter((p) => p === "/photos/B.jpg")).toHaveLength(2)
+    expect(requestedPaths.filter((p) => p === "/photos/A.jpg")).toHaveLength(1)
+    expect(requestedPaths).not.toContain("/photos/C.jpg")
+  })
+
+  // ── 阶段进度（P3 默认版式与导出反馈） ────────────────────────
+  // 单图导出明确区分「准备」与「渲染」两阶段，并互斥禁用另一导出入口；
+  // 批量导出展示 current/total + 成功/失败计数。
+  // 通知规则：
+  // - 单图/批量成功或失败时通过 window.desktop.showNotification 触发系统通知；
+  // - 取消保存路径或目录时不发通知；
+  // - 浏览器模式（无 showNotification 桥接）时仍保留 inline 状态。
+  describe("单图阶段进度", () => {
+    it("准备阶段（EXIF 读取）显示「准备中…」并禁用单图与批量按钮", async () => {
+      let releasePrepare: (() => void) | undefined
+      const prepareGate = new Promise<void>((resolve) => {
+        releasePrepare = resolve
+      })
+      const fetchMock = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+        const url = String(input)
+        if (url.endsWith("/api/render-jobs")) {
+          return jsonResponse({ jobId: "j1", status: "completed", outputPath: "/tmp/o.jpg", actualFormat: "jpeg" })
+        }
+        return jsonResponse({ error: "unexpected" }, 404)
+      })
+      vi.stubGlobal("fetch", fetchMock)
+      ;(window as unknown as { desktop?: unknown }).desktop = {
+        selectExportPath: vi.fn(async () => "/tmp/o.jpg"),
+        showNotification: vi.fn(async () => true)
+      }
+
+      const secondItem = {
+        ...makeItem(), id: "q2", filePath: "/photos/B.jpg", fileName: "B.jpg", sourcePath: "/photos/B.jpg"
+      }
+      render(
+        <PreviewPanel
+          state={makeActiveState()}
+          settings={makeSettings()}
+          hasSelectedImage={true}
+          queueItems={[makeItem(), secondItem]}
+          batchExportItems={[makeItem(), secondItem]}
+          batchExportLabel="批量导出 2 张"
+          resolveQueueItem={vi.fn(() => ({ textOverride: null, resolvedLayers: [], brand: null }))}
+          prepareExifForExport={vi.fn(async () => { await prepareGate })}
+        />
+      )
+
+      const exportButton = screen.getByRole("button", { name: "导出原图" }) as HTMLButtonElement
+      const batchButton = screen.getByRole("button", { name: "批量导出 2 张" }) as HTMLButtonElement
+      fireEvent.click(exportButton)
+
+      // 准备阶段：单图按钮显示「准备中…」且 disabled；批量按钮互斥 disabled
+      await waitFor(() => {
+        expect(exportButton.disabled).toBe(true)
+      })
+      expect(exportButton.textContent).toBe("准备中…")
+      expect(batchButton.disabled).toBe(true)
+      expect(screen.getByRole("status", { name: "单图导出进度" })).toBeTruthy()
+      const progress = screen.getByRole("progressbar", { name: "单图导出进度" })
+      expect(progress.getAttribute("aria-valuenow")).toBe("1")
+      expect(progress.querySelector(".previewExportProgressFill")).toBeTruthy()
+
+      // 释放 EXIF 门后必须等到导出终态，避免悬挂的异步链路在后续测试中
+      // 触发它们自己的 showNotification mock（跨测试污染计数）
+      releasePrepare?.()
+      await waitFor(() => {
+        expect(screen.getByText(/导出完成/)).toBeTruthy()
+      })
+    })
+
+    it("渲染阶段（等待引擎响应）显示「渲染中…」并继续禁用按钮", async () => {
+      let releaseRender: (() => void) | undefined
+      const renderGate = new Promise<Response>((resolve) => {
+        releaseRender = () => resolve(jsonResponse({ jobId: "j1", status: "completed", outputPath: "/tmp/o.jpg", actualFormat: "jpeg" }))
+      })
+      const fetchMock = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+        const url = String(input)
+        if (url.endsWith("/api/render-jobs")) {
+          return renderGate
+        }
+        return jsonResponse({ error: "unexpected" }, 404)
+      })
+      vi.stubGlobal("fetch", fetchMock)
+      ;(window as unknown as { desktop?: unknown }).desktop = {
+        selectExportPath: vi.fn(async () => "/tmp/o.jpg"),
+        showNotification: vi.fn(async () => true)
+      }
+
+      render(
+        <PreviewPanel
+          state={makeActiveState()}
+          settings={makeSettings()}
+          hasSelectedImage={true}
+          queueItems={[makeItem()]}
+          batchExportItems={[]}
+          batchExportLabel=""
+          resolveQueueItem={vi.fn(() => ({ textOverride: null, resolvedLayers: [], brand: null }))}
+          prepareExifForExport={vi.fn(async () => {})}
+        />
+      )
+
+      const exportButton = screen.getByRole("button", { name: "导出原图" }) as HTMLButtonElement
+      fireEvent.click(exportButton)
+
+      // 准备完成 → 进入渲染阶段：按钮文案变为「渲染中…」
+      await waitFor(() => {
+        expect(exportButton.textContent).toBe("渲染中…")
+      })
+      expect(exportButton.disabled).toBe(true)
+      expect(screen.getByRole("status", { name: "单图导出进度" }).textContent).toContain("渲染")
+      const progress = screen.getByRole("progressbar", { name: "单图导出进度" })
+      expect(progress.getAttribute("aria-valuenow")).toBe("2")
+      expect(progress.querySelector(".previewExportProgressFill")).toBeTruthy()
+      // 等到终态再结束，防止悬挂异步链路污染后续测试的通知 mock 计数
+      releaseRender?.()
+      await waitFor(() => {
+        expect(screen.getByText(/导出完成/)).toBeTruthy()
+      })
+    })
+
+    it("单图成功：通过 window.desktop.showNotification 发送「导出完成」+ 文件名", async () => {
+      const fetchMock = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+        const url = String(input)
+        if (url.endsWith("/api/render-jobs")) {
+          return jsonResponse({ jobId: "j1", status: "completed", outputPath: "/tmp/o.jpg", actualFormat: "jpeg" })
+        }
+        return jsonResponse({ error: "unexpected" }, 404)
+      })
+      vi.stubGlobal("fetch", fetchMock)
+      const showNotification = vi.fn(async () => true)
+      ;(window as unknown as { desktop?: unknown }).desktop = {
+        selectExportPath: vi.fn(async () => "/tmp/o.jpg"),
+        showNotification
+      }
+
+      render(
+        <PreviewPanel
+          state={makeActiveState()}
+          settings={makeSettings()}
+          hasSelectedImage={true}
+          queueItems={[makeItem()]}
+          batchExportItems={[]}
+          batchExportLabel=""
+          resolveQueueItem={vi.fn(() => ({ textOverride: null, resolvedLayers: [], brand: null }))}
+          prepareExifForExport={vi.fn(async () => {})}
+        />
+      )
+
+      fireEvent.click(screen.getByRole("button", { name: "导出原图" }))
+      await waitFor(() => {
+        expect(screen.getByText(/导出完成/)).toBeTruthy()
+      })
+      expect(showNotification).toHaveBeenCalledTimes(1)
+      const callArgs = (showNotification.mock.calls[0] ?? []) as readonly unknown[]
+      const title = callArgs[0]
+      const body = callArgs[1]
+      expect(title).toBe("导出完成")
+      // body 展示文件名（不出现绝对路径）
+      expect(String(body)).toContain("A")
+      expect(String(body)).not.toContain("/photos/A.jpg")
+    })
+
+    it("单图失败：通过 showNotification 发送「导出失败」+ 错误摘要", async () => {
+      const fetchMock = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+        const url = String(input)
+        if (url.endsWith("/api/render-jobs")) {
+          return jsonResponse({ jobId: "j1", status: "failed", error: "image file not found: C:\\Users\\private\\A.jpg" }, 500)
+        }
+        return jsonResponse({ error: "unexpected" }, 404)
+      })
+      vi.stubGlobal("fetch", fetchMock)
+      const showNotification = vi.fn(async () => true)
+      ;(window as unknown as { desktop?: unknown }).desktop = {
+        selectExportPath: vi.fn(async () => "/tmp/o.jpg"),
+        showNotification
+      }
+
+      render(
+        <PreviewPanel
+          state={makeActiveState()}
+          settings={makeSettings()}
+          hasSelectedImage={true}
+          queueItems={[makeItem()]}
+          batchExportItems={[]}
+          batchExportLabel=""
+          resolveQueueItem={vi.fn(() => ({ textOverride: null, resolvedLayers: [], brand: null }))}
+          prepareExifForExport={vi.fn(async () => {})}
+        />
+      )
+
+      fireEvent.click(screen.getByRole("button", { name: "导出原图" }))
+      await waitFor(() => {
+        expect(screen.getByText(/image file not found/)).toBeTruthy()
+      })
+      expect(showNotification).toHaveBeenCalledTimes(1)
+      const callArgs = (showNotification.mock.calls[0] ?? []) as readonly unknown[]
+      const title = callArgs[0]
+      const body = callArgs[1]
+      expect(title).toBe("导出失败")
+      expect(String(body)).toContain("A")
+      expect(String(body)).not.toContain("C:\\Users\\private\\A.jpg")
+    })
+
+    it("取消保存路径：不发通知，不显示错误", async () => {
+      const showNotification = vi.fn(async () => true)
+      ;(window as unknown as { desktop?: unknown }).desktop = {
+        selectExportPath: vi.fn(async () => null),
+        showNotification
+      }
+      const fetchMock = vi.fn(async () => jsonResponse({ error: "should not be called" }, 404))
+      vi.stubGlobal("fetch", fetchMock)
+
+      render(
+        <PreviewPanel
+          state={makeActiveState()}
+          settings={makeSettings()}
+          hasSelectedImage={true}
+          queueItems={[makeItem()]}
+          batchExportItems={[]}
+          batchExportLabel=""
+          resolveQueueItem={vi.fn(() => ({ textOverride: null, resolvedLayers: [], brand: null }))}
+          prepareExifForExport={vi.fn(async () => {})}
+        />
+      )
+
+      fireEvent.click(screen.getByRole("button", { name: "导出原图" }))
+      // 回到 idle
+      await waitFor(() => {
+        expect((screen.getByRole("button", { name: "导出原图" }) as HTMLButtonElement).disabled).toBe(false)
+      })
+      expect(showNotification).not.toHaveBeenCalled()
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it("浏览器模式（无 showNotification 桥接）仍显示 inline 状态，不抛异常", async () => {
+      const fetchMock = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+        const url = String(input)
+        if (url.endsWith("/api/render-jobs")) {
+          return jsonResponse({ jobId: "j1", status: "completed", outputPath: "/tmp/o.jpg", actualFormat: "jpeg" })
+        }
+        return jsonResponse({ error: "unexpected" }, 404)
+      })
+      vi.stubGlobal("fetch", fetchMock)
+      // 浏览器模式：window.desktop 完全不存在
+      delete (window as unknown as { desktop?: unknown }).desktop
+
+      // 文件不在 /photos/ 下时浏览器模式无法推导输出路径 → 显示降级提示
+      const browserState = {
+        ...makeActiveState(),
+        filePath: "/somewhere/A.jpg",
+        fileName: "A.jpg"
+      }
+      render(
+        <PreviewPanel
+          state={browserState}
+          settings={makeSettings()}
+          hasSelectedImage={true}
+          queueItems={[]}
+          batchExportItems={[]}
+          batchExportLabel=""
+          resolveQueueItem={vi.fn(() => ({ textOverride: null, resolvedLayers: [], brand: null }))}
+          prepareExifForExport={vi.fn(async () => {})}
+        />
+      )
+
+      fireEvent.click(screen.getByRole("button", { name: "导出原图" }))
+      await waitFor(() => {
+        expect(screen.getByText(/浏览器降级模式|无法选择保存位置/)).toBeTruthy()
+      })
+    })
+  })
+
+  describe("批量导出进度 + 通知", () => {
+    it("批量进行中显示 current/total 与成功/失败计数（progressbar role）", async () => {
+      const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        const url = String(input)
+        if (url.endsWith("/api/render-jobs") && init?.method === "POST") {
+          // 延迟响应，确保 running 态的 progressbar 有足够时间渲染
+          await new Promise((resolve) => setTimeout(resolve, 80))
+          return jsonResponse({
+            jobId: "j1",
+            status: "completed",
+            outputPath: "/tmp/o.jpg",
+            actualFormat: "jpeg",
+            metadataPreservation: { status: "SKIPPED", message: "当前格式不支持 EXIF" }
+          })
+        }
+        return jsonResponse({ error: "unexpected" }, 404)
+      })
+      vi.stubGlobal("fetch", fetchMock)
+      const showNotification = vi.fn(async () => true)
+      ;(window as unknown as { desktop?: unknown }).desktop = {
+        selectExportDirectory: vi.fn(async () => "/tmp/out"),
+        showNotification
+      }
+
+      const itemA = makeItem()
+      const itemB = { ...makeItem(), id: "q2", filePath: "/photos/B.jpg", fileName: "B.jpg", sourcePath: "/photos/B.jpg" }
+      const itemC = { ...makeItem(), id: "q3", filePath: "/photos/C.jpg", fileName: "C.jpg", sourcePath: "/photos/C.jpg" }
+      render(
+        <PreviewPanel
+          state={makeActiveState()}
+          settings={makeSettings()}
+          hasSelectedImage={true}
+          queueItems={[itemA, itemB, itemC]}
+          batchExportItems={[itemA, itemB, itemC]}
+          batchExportLabel="批量导出 3 张"
+          resolveQueueItem={vi.fn(() => ({ textOverride: null, resolvedLayers: [], brand: null }))}
+          prepareExifForExport={vi.fn(async () => {})}
+        />
+      )
+
+      fireEvent.click(screen.getByRole("button", { name: "批量导出 3 张" }))
+      await waitFor(() => {
+        const bar = screen.getByRole("progressbar", { name: "批量导出进度" })
+        expect(bar.getAttribute("aria-valuetext")).toContain("3")
+        expect(bar.querySelector(".previewBatchProgressFill")).toBeTruthy()
+      })
+      // 等到批量导出终态再结束，防止悬挂异步链路在后续测试中触发它们的通知 mock
+      await waitFor(() => {
+        expect(screen.getByText(/批量导出完成/)).toBeTruthy()
+      })
+      expect(screen.getAllByText(/EXIF：当前格式不支持 EXIF/)).toHaveLength(3)
+    })
+
+    it("批量全部成功：发「批量导出完成」+ 成功数", async () => {
+      const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        const url = String(input)
+        if (url.endsWith("/api/render-jobs") && init?.method === "POST") {
+          return jsonResponse({ jobId: "j1", status: "completed", outputPath: "/tmp/o.jpg", actualFormat: "jpeg" })
+        }
+        return jsonResponse({ error: "unexpected" }, 404)
+      })
+      vi.stubGlobal("fetch", fetchMock)
+      const showNotification = vi.fn(async () => true)
+      ;(window as unknown as { desktop?: unknown }).desktop = {
+        selectExportDirectory: vi.fn(async () => "/tmp/out"),
+        showNotification
+      }
+
+      const itemA = makeItem()
+      const itemB = { ...makeItem(), id: "q2", filePath: "/photos/B.jpg", fileName: "B.jpg", sourcePath: "/photos/B.jpg" }
+      render(
+        <PreviewPanel
+          state={makeActiveState()}
+          settings={makeSettings()}
+          hasSelectedImage={true}
+          queueItems={[itemA, itemB]}
+          batchExportItems={[itemA, itemB]}
+          batchExportLabel="批量导出 2 张"
+          resolveQueueItem={vi.fn(() => ({ textOverride: null, resolvedLayers: [], brand: null }))}
+          prepareExifForExport={vi.fn(async () => {})}
+        />
+      )
+
+      fireEvent.click(screen.getByRole("button", { name: "批量导出 2 张" }))
+      await waitFor(() => {
+        expect(screen.getByText(/批量导出完成/)).toBeTruthy()
+      })
+      expect(showNotification).toHaveBeenCalledTimes(1)
+      const callArgs = (showNotification.mock.calls[0] ?? []) as readonly unknown[]
+      const title = callArgs[0]
+      const body = callArgs[1]
+      expect(title).toBe("批量导出完成")
+      expect(String(body)).toContain("2")
+    })
+
+    it("批量部分失败：发「批量导出部分失败」+ 成功/失败数", async () => {
+      let firstRun = true
+      const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        const url = String(input)
+        if (url.endsWith("/api/render-jobs") && init?.method === "POST") {
+          if (firstRun) {
+            return jsonResponse({ jobId: "j1", status: "failed", error: "渲染失败" }, 500)
+          }
+          return jsonResponse({ jobId: "j2", status: "completed", outputPath: "/tmp/o.jpg", actualFormat: "jpeg" })
+        }
+        return jsonResponse({ error: "unexpected" }, 404)
+      })
+      vi.stubGlobal("fetch", fetchMock)
+      const showNotification = vi.fn(async () => true)
+      ;(window as unknown as { desktop?: unknown }).desktop = {
+        selectExportDirectory: vi.fn(async () => "/tmp/out"),
+        showNotification
+      }
+
+      const itemA = makeItem()
+      const itemB = { ...makeItem(), id: "q2", filePath: "/photos/B.jpg", fileName: "B.jpg", sourcePath: "/photos/B.jpg" }
+      render(
+        <PreviewPanel
+          state={makeActiveState()}
+          settings={makeSettings()}
+          hasSelectedImage={true}
+          queueItems={[itemA, itemB]}
+          batchExportItems={[itemA, itemB]}
+          batchExportLabel="批量导出 2 张"
+          resolveQueueItem={vi.fn(() => ({ textOverride: null, resolvedLayers: [], brand: null }))}
+          prepareExifForExport={vi.fn(async () => {})}
+        />
+      )
+
+      fireEvent.click(screen.getByRole("button", { name: "批量导出 2 张" }))
+      await waitFor(() => {
+        expect(screen.getByText(/失败 2/)).toBeTruthy()
+      })
+      // 首轮全部失败 → 通知「批量导出部分失败」+ 成功 0 / 失败 2
+      expect(showNotification).toHaveBeenCalledTimes(1)
+      const callArgs = (showNotification.mock.calls[0] ?? []) as readonly unknown[]
+      const title = callArgs[0]
+      const body = callArgs[1]
+      expect(title).toBe("批量导出部分失败")
+      expect(String(body)).toContain("0")
+      expect(String(body)).toContain("2")
+
+      // 重试全部成功 → 再发一次「批量导出完成」
+      firstRun = false
+      fireEvent.click(screen.getByRole("button", { name: /重试失败项/ }))
+      await waitFor(() => {
+        expect(screen.getByText(/成功 2/)).toBeTruthy()
+      })
+      await waitFor(() => {
+        expect(showNotification).toHaveBeenCalledTimes(2)
+      })
+      const callArgs2 = (showNotification.mock.calls[1] ?? []) as readonly unknown[]
+      const title2 = callArgs2[0]
+      expect(title2).toBe("批量导出完成")
+    })
+
+    it("取消目录选择：不发通知，不调用 fetch", async () => {
+      const showNotification = vi.fn(async () => true)
+      ;(window as unknown as { desktop?: unknown }).desktop = {
+        selectExportDirectory: vi.fn(async () => null),
+        showNotification
+      }
+      const fetchMock = vi.fn(async () => jsonResponse({ error: "should not be called" }, 404))
+      vi.stubGlobal("fetch", fetchMock)
+
+      const itemA = makeItem()
+      const itemB = { ...makeItem(), id: "q2", filePath: "/photos/B.jpg", fileName: "B.jpg", sourcePath: "/photos/B.jpg" }
+      render(
+        <PreviewPanel
+          state={makeActiveState()}
+          settings={makeSettings()}
+          hasSelectedImage={true}
+          queueItems={[itemA, itemB]}
+          batchExportItems={[itemA, itemB]}
+          batchExportLabel="批量导出 2 张"
+          resolveQueueItem={vi.fn(() => ({ textOverride: null, resolvedLayers: [], brand: null }))}
+          prepareExifForExport={vi.fn(async () => {})}
+        />
+      )
+
+      fireEvent.click(screen.getByRole("button", { name: "批量导出 2 张" }))
+      await waitFor(() => {
+        expect((screen.getByRole("button", { name: "批量导出 2 张" }) as HTMLButtonElement).disabled).toBe(false)
+      })
+      expect(showNotification).not.toHaveBeenCalled()
+      expect(fetchMock).not.toHaveBeenCalled()
     })
   })
 })

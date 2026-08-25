@@ -7,7 +7,11 @@
     "dev": "bash scripts/dev.sh",
     "dev:frontend": "pnpm --filter frontend dev",
     "dev:electron": "pnpm --filter electron dev",
+    "prepare:electron-dev": "node scripts/prepare-electron-dev.mjs",
     "build:frontend": "pnpm --filter frontend build",
-    "typecheck": "pnpm --filter electron typecheck && pnpm --filter frontend typecheck"
+    "typecheck": "pnpm --filter electron typecheck && pnpm --filter frontend typecheck",
+    "build:engine": "bash scripts/build-engine.sh",
+    "fetch:runtime": "bash scripts/fetch-runtime.sh",
+    "package": "bash scripts/package-app.sh"
   }
 }

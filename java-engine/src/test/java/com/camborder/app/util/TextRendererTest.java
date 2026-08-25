@@ -82,6 +82,101 @@ final class TextRendererTest extends AbstractControllerTest {
         }
     }
 
+    // ---- 边框角落 placement（摄影信息卡预设布局） ------------------------------
+
+    /**
+     * border-bottom-left：文字应在底部边框区域内，且水平贴近左边框（marginX 内缩）。
+     */
+    @Test
+    void shouldDrawBorderBottomLeftTextNearLeftEdge() throws Exception {
+        // 四边边框：top=0, bottom=40, left=30, right=30
+        BorderConfig border = new BorderConfig(0, 40, 30, 30, "#FFFFFF");
+        TextItem text = new TextItem("LEFT", null, 12, "#FF0000", "border-bottom-left", 8, 0);
+        RenderRecipe recipe = new RenderRecipe(
+                writeTempImage(60, 40, Color.BLUE), border,
+                Collections.singletonList(text), null, false);
+        byte[] png = requestPreviewPng(recipe, 0, 0);
+
+        BufferedImage result = readPng(png);
+        List<Integer> redYs = redPixelYs(result);
+        assertThat(redYs).isNotEmpty();
+        // 垂直：底部边框区域 [40, 80)
+        for (int y : redYs) {
+            assertThat(y).isBetween(40, 79);
+        }
+        // 水平：文字左边缘应贴近 borderLeft + marginX = 38（允许少量抗锯齿误差）
+        int minX = Integer.MAX_VALUE;
+        for (int y = 40; y < 80; y++) {
+            for (int x = 0; x < result.getWidth(); x++) {
+                int pixel = result.getRGB(x, y);
+                int red = (pixel >> 16) & 0xFF;
+                int green = (pixel >> 8) & 0xFF;
+                int blue = pixel & 0xFF;
+                if (red > 150 && green < 100 && blue < 100) {
+                    minX = Math.min(minX, x);
+                }
+            }
+        }
+        assertThat(minX).isGreaterThanOrEqualTo(30);
+        assertThat(minX).isLessThanOrEqualTo(45);
+    }
+
+    /**
+     * border-bottom-right：文字应在底部边框区域内，且水平贴近右边框（marginX 内缩）。
+     */
+    @Test
+    void shouldDrawBorderBottomRightTextNearRightEdge() throws Exception {
+        BorderConfig border = new BorderConfig(0, 40, 30, 30, "#FFFFFF");
+        TextItem text = new TextItem("RIGHT", null, 12, "#FF0000", "border-bottom-right", 8, 0);
+        RenderRecipe recipe = new RenderRecipe(
+                writeTempImage(60, 40, Color.BLUE), border,
+                Collections.singletonList(text), null, false);
+        byte[] png = requestPreviewPng(recipe, 0, 0);
+
+        BufferedImage result = readPng(png);
+        List<Integer> redYs = redPixelYs(result);
+        assertThat(redYs).isNotEmpty();
+        for (int y : redYs) {
+            assertThat(y).isBetween(40, 79);
+        }
+        // 水平：文字右边缘应贴近 canvasWidth - borderRight - marginX = 82（允许抗锯齿误差）
+        int maxX = Integer.MIN_VALUE;
+        for (int y = 40; y < 80; y++) {
+            for (int x = 0; x < result.getWidth(); x++) {
+                int pixel = result.getRGB(x, y);
+                int red = (pixel >> 16) & 0xFF;
+                int green = (pixel >> 8) & 0xFF;
+                int blue = pixel & 0xFF;
+                if (red > 150 && green < 100 && blue < 100) {
+                    maxX = Math.max(maxX, x);
+                }
+            }
+        }
+        // 文字整体右边缘 = 82；最后字形像素可能略早结束，但必须明显远离图片区域右缘（90）
+        assertThat(maxX).isGreaterThan(65);
+        assertThat(maxX).isLessThanOrEqualTo(90);
+    }
+
+    /**
+     * border-top-left：文字应在顶部边框区域内。
+     */
+    @Test
+    void shouldDrawBorderTopLeftTextInsideTopBorder() throws Exception {
+        BorderConfig border = new BorderConfig(40, 0, 30, 30, "#FFFFFF");
+        TextItem text = new TextItem("TL", null, 12, "#FF0000", "border-top-left", 8, 0);
+        RenderRecipe recipe = new RenderRecipe(
+                writeTempImage(60, 40, Color.BLUE), border,
+                Collections.singletonList(text), null, false);
+        byte[] png = requestPreviewPng(recipe, 0, 0);
+
+        BufferedImage result = readPng(png);
+        List<Integer> redYs = redPixelYs(result);
+        assertThat(redYs).isNotEmpty();
+        for (int y : redYs) {
+            assertThat(y).isBetween(0, 39);
+        }
+    }
+
     @Test
     void shouldRejectUnsupportedPlacement() throws Exception {
         TextItem text = new TextItem("X", null, 16, "#FF0000", "diagonal-left", 0, 0);

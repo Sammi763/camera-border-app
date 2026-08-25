@@ -30,6 +30,7 @@ const mockSettings: RenderSettings = {
   preserveMetadata: false,
   preserveColorProfile: false,
   preferHighBitDepth: false,
+  borderStyle: null,
   logo: { enabled: false, mode: "auto-brand", brand: null, placement: "border-top-right", size: 14, colorMode: "auto-contrast" },
 }
 

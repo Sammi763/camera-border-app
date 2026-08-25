@@ -73,6 +73,30 @@ export type LogoConfig = {
   readonly colorMode: "auto-contrast" | "light" | "dark"
 }
 
+/**
+ * 边框风格配置（可选）。
+ * 与引擎 BorderStyle / canvasRenderer.drawBorderStyle 同一套风格 ID 与参数语义。
+ */
+export type BorderStyleConfig = {
+  readonly id: string
+  readonly intensity: number
+  readonly edgeWidth: number
+  readonly holeCount: number
+  readonly paperTone: string
+}
+
+/**
+ * 图片解码来源状态（引擎预览/导出响应返回）。
+ * - standard：标准格式由 ImageIO 直接读取；
+ * - raw-developed：RAW 经 LibRaw 完成真实显影；
+ * - embedded-preview-fallback：RAW 降级为嵌入预览，warning 说明原因。
+ */
+export type SourceDecode = {
+  readonly mode: "standard" | "raw-developed" | "embedded-preview-fallback"
+  readonly format: string
+  readonly warning: string | null
+}
+
 export type RenderRecipe = {
   readonly imagePath: string
   readonly border: BorderConfig | null
@@ -82,6 +106,8 @@ export type RenderRecipe = {
   readonly autoCrop: boolean
   /** 品牌标识配置，null 表示不绘制品牌标识。 */
   readonly logo?: LogoConfig | null
+  /** 边框风格；缺省/null/未识别 id 时引擎保持原始渲染行为。 */
+  readonly borderStyle?: BorderStyleConfig | null
 }
 
 export type PreviewRequest = {
@@ -95,6 +121,8 @@ export type PreviewResponse = {
   readonly message: string
   readonly previewAvailable: boolean
   readonly previewUrl: string
+  /** 解码来源状态；引擎未返回（旧版本）时为空。 */
+  readonly sourceDecode?: SourceDecode | null
 }
 
 /**
@@ -152,6 +180,8 @@ export type RenderJobStatusResponse = {
   readonly colorProfilePreservation?: FeatureResult
   /** 高位深输出的真实应用结果。 */
   readonly highBitDepth?: FeatureResult
+  /** 解码来源状态；引擎未返回（旧版本）时为空。 */
+  readonly sourceDecode?: SourceDecode | null
 }
 
 /**

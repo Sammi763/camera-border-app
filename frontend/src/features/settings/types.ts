@@ -18,6 +18,25 @@ export type GradientSettings = {
 }
 
 /**
+ * 边框风格配置（可选）：在纯色/渐变边框上叠加确定性装饰。
+ *
+ * 与引擎 BorderStyle / canvasRenderer.drawBorderStyle 使用同一套风格 ID、
+ * 参数语义与几何规则（几何规格见 java-engine util/BorderStyleRenderer 类注释）。
+ * - id：未识别的风格在渲染时被静默忽略（回退原始行为）
+ * - intensity：0-100，0 表示不绘制
+ * - edgeWidth：装饰特征尺寸（px）
+ * - holeCount：齿孔/刻痕数量（仅齿孔、负片边使用）
+ * - paperTone：装饰色（hex）；为空时按各风格默认色；非法颜色由引擎返回 4xx
+ */
+export type BorderStyleSettings = {
+  readonly id: string
+  readonly intensity: number
+  readonly edgeWidth: number
+  readonly holeCount: number
+  readonly paperTone: string
+}
+
+/**
  * 输出尺寸预设：
  * - original：原图尺寸（不缩放）
  * - 1080p / 2k / 4k：按长边等比缩小到对应像素
@@ -132,6 +151,8 @@ export type RenderSettings = {
   readonly filmFormat: string | null
   /** 渐变设置。 */
   readonly gradient: GradientSettings
+  /** 边框风格；null 表示不启用风格装饰（旧模板保持原行为）。 */
+  readonly borderStyle: BorderStyleSettings | null
   /** 导出格式：png / jpeg / tiff。 */
   readonly exportFormat: "png" | "jpeg" | "tiff"
   /** JPEG 导出质量（1-100），仅 exportFormat 为 jpeg 时生效。 */

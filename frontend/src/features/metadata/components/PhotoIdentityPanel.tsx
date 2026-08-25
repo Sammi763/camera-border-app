@@ -2,6 +2,8 @@ import { useCallback, useState } from "react"
 import type { PhotoAssetStore, PhotoIdentity, ShootingPreset } from "../types"
 import { captureFormatLabel } from "../constants/captureFormats"
 import { BUILT_IN_CAMERA_MODELS } from "../constants/cameraModels"
+import { IDENTITY_SOURCE_LABELS } from "../utils/resolveIdentityFieldSources"
+import type { IdentityFieldSource, IdentitySourceMap } from "../utils/resolveIdentityFieldSources"
 
 type PhotoIdentityPanelProps = {
   /** 当前选中图片的有效摄影身份（已合并覆盖 > 摄影预设 > EXIF > 空）。 */
@@ -20,6 +22,8 @@ type PhotoIdentityPanelProps = {
   readonly onClearOverride: () => void
   /** 是否有选中图片。 */
   readonly hasSelectedImage: boolean
+  /** 各展示字段的来源标识（EXIF / 摄影预设 / 每图覆盖）。 */
+  readonly sources?: IdentitySourceMap | undefined
 }
 
 /**
@@ -37,7 +41,8 @@ export const PhotoIdentityPanel = ({
   assetStore,
   onUpdateOverride,
   onClearOverride,
-  hasSelectedImage
+  hasSelectedImage,
+  sources
 }: PhotoIdentityPanelProps): JSX.Element => {
   // 所有 hook 必须在任何条件 return 之前调用（React Hooks 规则）
   const [expanded, setExpanded] = useState(false)
@@ -93,6 +98,12 @@ export const PhotoIdentityPanel = ({
             {effectiveIdentity.camera || "未设置相机"}
             {effectiveIdentity.film && ` · ${effectiveIdentity.film}`}
           </span>
+          {/* 来源标识：EXIF / 摄影预设 / 每图覆盖 */}
+          {(sources?.camera ?? null) !== null && (
+            <span className={`identitySourceBadge identitySource${sources!.camera}`}>
+              {IDENTITY_SOURCE_LABELS[sources!.camera!]}
+            </span>
+          )}
         </div>
         <span className="identityExpandToggle">{expanded ? "收起" : "展开"}</span>
       </div>
@@ -114,6 +125,7 @@ export const PhotoIdentityPanel = ({
             placeholder="例如：12"
             onChange={(v) => handleChange("frameNumber", v)}
             assetSuggestions={[]}
+            source={sources?.frameNumber ?? null}
           />
 
           {/* 内置机型快速选择 */}
@@ -150,6 +162,7 @@ export const PhotoIdentityPanel = ({
             placeholder="例如：Leica M6"
             onChange={(v) => handleChange("camera", v)}
             assetSuggestions={assetStore.cameras.map((c) => c.alias || `${c.brand} ${c.model}`)}
+            source={sources?.camera ?? null}
           />
           <IdentityField
             label="镜头"
@@ -158,6 +171,7 @@ export const PhotoIdentityPanel = ({
             placeholder="例如：Voigtlander 35mm F1.4"
             onChange={(v) => handleChange("lens", v)}
             assetSuggestions={assetStore.lenses.map((l) => `${l.brand} ${l.model}`)}
+            source={sources?.lens ?? null}
           />
           <IdentityField
             label="胶片"
@@ -166,6 +180,7 @@ export const PhotoIdentityPanel = ({
             placeholder="例如：Kodak Portra 400"
             onChange={(v) => handleChange("film", v)}
             assetSuggestions={assetStore.films.map((f) => `${f.brand} ${f.name}`)}
+            source={sources?.film ?? null}
           />
           <IdentityField
             label="拍摄地点"
@@ -174,6 +189,7 @@ export const PhotoIdentityPanel = ({
             placeholder="例如：Kyoto"
             onChange={(v) => handleChange("location", v)}
             assetSuggestions={[]}
+            source={sources?.location ?? null}
           />
 
           {hasOverride && (
@@ -196,6 +212,8 @@ type IdentityFieldProps = {
   readonly placeholder: string
   readonly onChange: (value: string) => void
   readonly assetSuggestions: readonly string[]
+  /** 字段来源标识（EXIF / 摄影预设 / 每图覆盖）。 */
+  readonly source?: IdentityFieldSource | null
 }
 
 const IdentityField = ({
@@ -204,7 +222,8 @@ const IdentityField = ({
   effectiveValue,
   placeholder,
   onChange,
-  assetSuggestions
+  assetSuggestions,
+  source
 }: IdentityFieldProps): JSX.Element => {
   const isOverridden = value.length > 0
   const datalistId = `identity-suggest-${label}`
@@ -215,7 +234,12 @@ const IdentityField = ({
         <span>
           {label}
           {isOverridden && <span className="identityFieldOverride"> (覆盖)</span>}
-          {!isOverridden && effectiveValue.length > 0 && (
+          {source !== null && source !== undefined && (
+            <span className={`identityFieldSourceBadge identitySource${source}`}>
+              {IDENTITY_SOURCE_LABELS[source]}
+            </span>
+          )}
+          {!isOverridden && source === null && effectiveValue.length > 0 && (
             <span className="identityFieldInherited"> (继承: {effectiveValue})</span>
           )}
         </span>

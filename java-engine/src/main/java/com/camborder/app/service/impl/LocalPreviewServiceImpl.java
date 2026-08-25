@@ -35,16 +35,19 @@ public final class LocalPreviewServiceImpl implements PreviewService {
     @Override
     public PreviewResponse generatePreview(final PreviewRequest request) {
         // 预览使用 maxWidth/maxHeight 做等比缩小；导出不传缩放约束
-        BufferedImage composited = imageRenderService.compose(
+        ImageRenderService.ComposeOutcome outcome = imageRenderService.compose(
                 request.getRecipe(), request.getMaxWidth(), request.getMaxHeight());
-        byte[] pngBytes = imageRenderService.toPng(composited);
+        byte[] pngBytes = imageRenderService.toPng(outcome.getImage());
 
         String previewId = previewStore.store(pngBytes);
-        return new PreviewResponse(
+        PreviewResponse response = new PreviewResponse(
                 "ok",
                 "Preview generated from local image.",
                 true,
                 "/previews/" + previewId
         );
+        // 解码来源随响应返回：界面据此展示「RAW 已真实显影」或降级原因
+        response.setSourceDecode(outcome.getSourceDecode());
+        return response;
     }
 }

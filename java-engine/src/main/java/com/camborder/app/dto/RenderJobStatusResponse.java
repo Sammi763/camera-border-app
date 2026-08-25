@@ -15,6 +15,8 @@ public final class RenderJobStatusResponse {
     private ImageEncoder.FeatureResult metadataPreservation;
     private ImageEncoder.FeatureResult colorProfilePreservation;
     private ImageEncoder.FeatureResult highBitDepth;
+    /** 解码来源状态（standard / raw-developed / embedded-preview-fallback），可为 null。 */
+    private com.camborder.app.dto.SourceDecode sourceDecode;
 
     public RenderJobStatusResponse() {
     }
@@ -66,4 +68,7 @@ public final class RenderJobStatusResponse {
 
     public ImageEncoder.FeatureResult getHighBitDepth() { return highBitDepth; }
     public void setHighBitDepth(final ImageEncoder.FeatureResult v) { this.highBitDepth = v; }
+
+    public com.camborder.app.dto.SourceDecode getSourceDecode() { return sourceDecode; }
+    public void setSourceDecode(final com.camborder.app.dto.SourceDecode v) { this.sourceDecode = v; }
 }

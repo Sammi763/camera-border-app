@@ -23,3 +23,8 @@ photos/
 exports/
 
 .pnpm-store/
+
+# 打包链路产物（scripts/fetch-runtime.sh、package-app.sh）
+runtime/
+electron/runtime-bundle/
+electron/release/

@@ -17,6 +17,8 @@ public final class RenderRecipe {
     private String filmFormat;
     private boolean autoCrop;
     private LogoConfig logo;
+    /** 可选边框风格；null 或未识别 id 时保持原始渲染行为。 */
+    private BorderStyle borderStyle;
 
     public RenderRecipe() {
     }
@@ -54,6 +56,7 @@ public final class RenderRecipe {
         this.filmFormat = filmFormat;
         this.autoCrop = autoCrop;
         this.logo = logo;
+        this.borderStyle = null;
     }
 
     public String getImagePath() {
@@ -110,5 +113,13 @@ public final class RenderRecipe {
 
     public void setLogo(final LogoConfig logo) {
         this.logo = logo;
+    }
+
+    public BorderStyle getBorderStyle() {
+        return borderStyle;
+    }
+
+    public void setBorderStyle(final BorderStyle borderStyle) {
+        this.borderStyle = borderStyle;
     }
 }

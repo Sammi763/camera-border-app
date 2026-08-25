@@ -1,6 +1,6 @@
 # java-engine — 本地图像引擎模块
 
-Spring Boot 2.7（Java 11）本地服务，默认 `http://127.0.0.1:8080`。
+Spring Boot 2.7（Java 11）本地服务，默认 `http://127.0.0.1:8099`。
 负责图片读取、预览渲染、导出渲染、EXIF 元数据读取与格式化、拍摄画幅/胶片库/字体查询。
 **不关心 UI 与前端交互细节**；UI 状态、文件对话框由 frontend / electron 负责。
 
@@ -38,12 +38,30 @@ java-engine/src/main/java/com/camborder/app/
 
 ## 渲染管线（预览与导出共用）
 
-`ImageReader`（ImageIO；RAW 走 `RawDecoder` 提取内嵌 JPEG 预览）
+`ImageReader`（ImageIO；RAW 先经 `RawDevelopService`（LibRaw 子进程）真实显影，
+失败/未配置显式降级为 `RawDecoder` 内嵌 JPEG 预览，来源随响应 sourceDecode 返回）
 → `ImageScaler`（按目标尺寸等比缩放）
-→ `BorderComposer` / `GradientPainter` / `TextRenderer` / `LogoRenderer`
+→ `BorderComposer` / `GradientPainter` / `BorderStyleRenderer` / `TextRenderer` / `LogoRenderer`
 → `ImageEncoder`（PNG/JPEG）→ `OutputPathValidator`（导出路径校验，父目录可写）。
 
 预览与导出共享同一套 `ImageRenderService` 渲染逻辑，避免「预览对、导出不对」（[ADR-0002](../docs/adr/0002-preview-export-share-recipe.md)）。
+
+### 边框风格（borderStyle）
+
+`RenderRecipe.borderStyle` 承载 8 种确定性风格（exhibition-line / polaroid-shadow /
+film-perforation / mat-double-line / torn-edge / negative-band / magazine-keyline /
+archive-label-box）。几何规格的唯一权威定义在 `util/BorderStyleRenderer` 类注释，
+前端 Canvas 逐条对应实现；未识别 id 或 null 保持原行为。
+
+### RAW 显影（LibRaw 子进程桥接）
+
+- CLI 契约：`camborder-libraw-sampler <input> <output.tiff>`；
+  路径注入 `CAMBORDER_LIBRAW_PATH`（Electron 随包提供）或配置 `app.raw.cli-path`；
+  超时 `app.raw.timeout-ms`（默认 30s，超时 destroyForcibly）。
+- 失败显式降级：sourceDecode.mode=embedded-preview-fallback + 中文 warning，
+  绝不把嵌入预览伪装成完整显影。临时输出文件 finally 清理，结果有界缓存。
+- 原生程序源码 `../native/libraw_sampler.cpp`，构建 `../scripts/build-libraw.sh`
+  （三平台产物尚未构建——见 docs/tasks.md T-04 阻塞说明）。
 
 ## 存储语义
 
@@ -55,7 +73,7 @@ java-engine/src/main/java/com/camborder/app/
 ```bash
 cd java-engine
 mvn test                 # 全量测试（controller 层必须同时覆盖 happy path 与失败路径）
-mvn spring-boot:run      # 启动后 curl http://127.0.0.1:8080/api/health
+mvn spring-boot:run      # 启动后 curl http://127.0.0.1:8099/api/health
 mvn package              # 打包 target/camera-border-engine.jar（托管模式前置）
 ```
 

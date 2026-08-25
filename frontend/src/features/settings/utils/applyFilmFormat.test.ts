@@ -26,6 +26,7 @@ const makeSettings = (): RenderSettings => ({
   preserveMetadata: true,
   preserveColorProfile: true,
   preferHighBitDepth: false,
+  borderStyle: null,
   logo: { enabled: false, mode: "auto-brand", brand: null, placement: "border-bottom-right", size: 48, colorMode: "auto-contrast" }
 })
 

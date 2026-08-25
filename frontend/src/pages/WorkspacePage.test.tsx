@@ -15,7 +15,7 @@ import type { DesktopRuntime } from "../types/runtime"
 const runtime: DesktopRuntime = {
   appName: "camera-border-app",
   platform: "darwin",
-  engine: { managed: false, baseUrl: "http://127.0.0.1:8080" }
+  engine: { managed: false, baseUrl: "http://127.0.0.1:8099" }
 }
 
 type RenderJobRecord = {
@@ -139,6 +139,9 @@ describe("WorkspacePage wiring（摄影预设 + EXIF 批量导出闭环）", () 
     const { renderJobs, metadataRequests, callLog } = setupWorkspace()
     render(<WorkspacePage runtime={runtime} />)
 
+    // 默认进入快速出图模式；预设创建与批量导出流程在「高级编辑」中完成
+    fireEvent.click(await screen.findByRole("button", { name: "高级编辑" }))
+
     // 1) 导入两张图片（A 有 EXIF，B 无 EXIF）
     fireEvent.click(await screen.findByRole("button", { name: "选择图片文件" }))
     await waitFor(() => {
@@ -172,7 +175,8 @@ describe("WorkspacePage wiring（摄影预设 + EXIF 批量导出闭环）", () 
     const presetOption = Array.from((applySelect as HTMLSelectElement).options).find((o) => o.value !== "")
     expect(presetOption).toBeDefined()
     fireEvent.change(applySelect, { target: { value: presetOption!.value } })
-    fireEvent.click(screen.getByRole("button", { name: "应用到全部图片" }))
+    fireEvent.click(screen.getByRole("button", { name: "全部图片" }))
+    fireEvent.click(screen.getByRole("button", { name: "应用全部" }))
 
     // 5) 批量导出两张
     fireEvent.click(screen.getByRole("button", { name: /批量导出 2 张/ }))
@@ -188,14 +192,14 @@ describe("WorkspacePage wiring（摄影预设 + EXIF 批量导出闭环）", () 
     expect(callLog.indexOf(`meta:${PHOTO_A}`)).toBeLessThan(callLog.indexOf(`job:${PHOTO_A}`))
     expect(callLog.indexOf(`meta:${PHOTO_B}`)).toBeLessThan(callLog.indexOf(`job:${PHOTO_B}`))
 
-    // 8) 有 EXIF 的 A：camera/lens 来自 EXIF；画幅来自预设
+    // 8) 有 EXIF 的 A：camera/lens 来自 EXIF（默认摄影信息卡模板 {Camera}·{Lens}·{Film}，
+    //    数码照片无胶片字段时自动清理多余分隔符）
     const recipeA = renderJobs.find((r) => r.imagePath === PHOTO_A)!
     expect(recipeA.texts[0]).toBe("NIKON Z6 · Nikkor 50mm")
-    expect(recipeA.texts[1]).toBe("6×10")
 
-    // 9) 无 EXIF 的 B：降级为空（camera/lens 空、图层跳过），画幅仍来自预设，不阻塞导出
+    // 9) 无 EXIF 的 B：降级为空（camera/lens 空、图层跳过），不阻塞导出
     const recipeB = renderJobs.find((r) => r.imagePath === PHOTO_B)!
-    expect(recipeB.texts).toContain("6×10")
+    expect(recipeB.texts).toHaveLength(0)
     expect(recipeB.texts.some((t) => t.includes("NIKON"))).toBe(false)
 
     // 10) 预设只提供身份：不改变边框/裁剪/导出设置（filmFormat 来自设置，保持 null）
@@ -209,8 +213,89 @@ describe("WorkspacePage wiring（摄影预设 + EXIF 批量导出闭环）", () 
     desktop.readRolls = vi.fn(async () => "[{ \"id\": \"old-roll\", \"name\": \"Old Roll\", \"camera\": \"Leica M6\" }]")
     render(<WorkspacePage runtime={runtime} />)
 
-    // 工作台正常渲染（无 Roll 面板、无扫描仪/实验室/冲洗工艺入口，不崩溃）
+    // 默认快速出图模式显示欢迎页；切到高级编辑后三栏工作台正常渲染
+    // （无 Roll 面板、无扫描仪/实验室/冲洗工艺入口，不崩溃）
+    fireEvent.click(await screen.findByRole("button", { name: "高级编辑" }))
     expect(await screen.findByText("队列")).toBeTruthy()
     expect(screen.queryByText(/Roll|扫描仪|实验室|冲洗工艺/)).toBeNull()
+  })
+})
+
+describe("WorkspacePage 快速出图模式（首屏与默认模板）", () => {
+  beforeEach(() => {
+    localStorage.clear()
+    sessionStorage.clear()
+    vi.stubGlobal("URL.createObjectURL", () => "blob:fake")
+    vi.stubGlobal("URL.revokeObjectURL", () => {})
+  })
+
+  afterEach(() => {
+    teardownWorkspace()
+    vi.restoreAllMocks()
+  })
+
+  it("空队列显示欢迎页（Electron 模式）：选择照片 / 选择文件夹 / 拖入提示 / 价值提示，无加载样片", async () => {
+    setupWorkspace()
+    render(<WorkspacePage runtime={runtime} />)
+
+    // 欢迎页入口：Electron 模式不显示「加载样片」，避免样片入口接到本机文件选择器
+    expect(await screen.findByRole("button", { name: "选择照片" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "选择文件夹" })).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "加载样片" })).toBeNull()
+    expect(screen.getByText(/把照片拖进这个窗口/)).toBeTruthy()
+    // 价值提示
+    expect(screen.getByText("本地处理")).toBeTruthy()
+    expect(screen.getByText("无需登录")).toBeTruthy()
+    expect(screen.getByText("EXIF 自动读取")).toBeTruthy()
+  })
+
+  it("浏览器降级模式欢迎页额外提供「加载样片」", async () => {
+    const harness = setupWorkspace()
+    delete (window as unknown as { desktop?: unknown }).desktop
+    render(<WorkspacePage runtime={runtime} />)
+
+    expect(await screen.findByRole("button", { name: "选择照片" })).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "选择文件夹" })).toBeNull()
+    expect(screen.getByRole("button", { name: "加载样片" })).toBeTruthy()
+    void harness
+  })
+
+  it("导入照片后自动应用「摄影信息卡」默认模板", async () => {
+    setupWorkspace()
+    render(<WorkspacePage runtime={runtime} />)
+
+    fireEvent.click(await screen.findByRole("button", { name: "选择照片" }))
+    await waitFor(() => {
+      expect(screen.getByText("A.jpg")).toBeTruthy()
+    })
+
+    // 默认模板自动应用：摄影信息卡卡片显示「已应用」
+    expect(await screen.findByText("已应用")).toBeTruthy()
+  })
+
+  it("用户手动选择过模板后，后续导入不再自动覆盖用户选择", async () => {
+    setupWorkspace()
+    render(<WorkspacePage runtime={runtime} />)
+
+    // 首次导入：自动应用摄影信息卡
+    fireEvent.click(await screen.findByRole("button", { name: "选择照片" }))
+    await waitFor(() => {
+      expect(screen.getByText("A.jpg")).toBeTruthy()
+    })
+    await screen.findByText("已应用")
+
+    // 手动应用「经典白边」
+    const findClassicCard = (): HTMLElement =>
+      screen.getByText("经典白边").closest(".quickTemplateCard") as HTMLElement
+    fireEvent.click(within(findClassicCard()).getByRole("button", { name: "使用" }))
+    expect(within(findClassicCard()).getByRole("button", { name: "已应用" })).toBeTruthy()
+
+    // 清空并重新导入：仍保持经典白边，不自动覆盖回摄影信息卡
+    fireEvent.click(screen.getByRole("button", { name: "清空" }))
+    fireEvent.click(await screen.findByRole("button", { name: "选择照片" }))
+    await waitFor(() => {
+      expect(screen.getByText("A.jpg")).toBeTruthy()
+    })
+    expect(within(findClassicCard()).getByRole("button", { name: "已应用" })).toBeTruthy()
   })
 })

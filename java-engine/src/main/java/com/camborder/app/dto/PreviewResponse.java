@@ -9,6 +9,8 @@ public final class PreviewResponse {
     private String message;
     private boolean previewAvailable;
     private String previewUrl;
+    /** 解码来源状态（standard / raw-developed / embedded-preview-fallback），可为 null。 */
+    private SourceDecode sourceDecode;
 
     public PreviewResponse() {
     }
@@ -51,5 +53,13 @@ public final class PreviewResponse {
 
     public void setPreviewUrl(final String previewUrl) {
         this.previewUrl = previewUrl;
+    }
+
+    public SourceDecode getSourceDecode() {
+        return sourceDecode;
+    }
+
+    public void setSourceDecode(final SourceDecode sourceDecode) {
+        this.sourceDecode = sourceDecode;
     }
 }

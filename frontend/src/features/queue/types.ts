@@ -1,9 +1,15 @@
 /**
  * 队列模块的 UI 状态类型。
+ *
+ * 队列状态语义（批量工作流阶段重构）：
+ * - activeItemId：当前预览图片（点击缩略图切换，驱动预览与单图编辑）；
+ * - checkedItemIds：批量操作选中图片（复选框控制，驱动预设批量应用与批量导出范围）。
+ * 两者独立维护，单一状态不再同时承担「预览」与「批量」两种语义。
  */
 
 import type { PhotoAssetStore, PhotoIdentity, ShootingPreset } from "../metadata/types"
 import type { PhotoMetadata } from "../../types/preview"
+import type { IdentitySourceMap } from "../metadata/utils/resolveIdentityFieldSources"
 
 /** 队列中的图片项。`filePath` 是引擎实际处理的路径（可能是转换后的临时文件）。 */
 export type QueueItem = {
@@ -12,12 +18,11 @@ export type QueueItem = {
   readonly filePath: string
   /** 用户可见的原始文件名。 */
   readonly fileName: string
-  readonly isSelected: boolean
   /** 原始文件路径（HEIC 转换时与 filePath 不同；非转换时与 filePath 相同）。 */
   readonly sourcePath: string
   /** 原始文件格式（如 "heic"、"jpg"）。 */
   readonly sourceFormat: string
-  /** 是否发生了格式转换（如 HEIC → JPEG）。 */
+  /** 是否发生了格式转换（如 HEIC -> JPEG）。 */
   readonly converted: boolean
   /** 转换后的工作格式（如 "jpg"），未转换时与 sourceFormat 相同。 */
   readonly workingFormat: string
@@ -28,6 +33,9 @@ export type QueueItem = {
   /** 每张图独立的摄影身份覆盖。null 表示使用摄影预设或全局默认。 */
   readonly identityOverride: Partial<PhotoIdentity> | null
 }
+
+/** 批量操作作用范围：当前预览图 / 复选框选中图片 / 全部图片。 */
+export type BatchScope = "active" | "checked" | "all"
 
 /** 导入结果（HEIC 转换反馈等）。 */
 export type ImportResult = {
@@ -44,8 +52,18 @@ export type ImportResult = {
 /** 队列控制器，暴露给 QueuePanel 使用。 */
 export type QueueController = {
   readonly items: readonly QueueItem[]
-  readonly selectedFilePath: string | null
-  readonly selectedTextOverride: string | null
+  /** 当前预览图片的 id。null 表示队列为空。 */
+  readonly activeItemId: string | null
+  /** 批量操作选中的图片 id 列表（保持勾选顺序，去重）。 */
+  readonly checkedItemIds: readonly string[]
+  /** 复选框选中数量（便捷读取）。 */
+  readonly checkedCount: number
+  /** 当前预览图片（activeItemId 对应项；队列为空时为 null）。 */
+  readonly activeItem: QueueItem | null
+  /** 当前预览图片路径（快捷读取）。 */
+  readonly activeFilePath: string | null
+  /** 当前预览图片的文字覆盖（快捷读取）。 */
+  readonly activeTextOverride: string | null
   readonly isBrowserMode: boolean
   /** 最近一次导入的结果（HEIC 转换反馈等）。 */
   readonly lastImportResult: ImportResult | null
@@ -53,22 +71,27 @@ export type QueueController = {
   readonly addImageFiles: () => Promise<void>
   readonly addImageFolder: () => Promise<void>
   readonly addFromPaths: (paths: readonly string[]) => Promise<void>
-  readonly select: (id: string) => void
+  /** 切换当前预览图片（点击缩略图）。 */
+  readonly setActive: (id: string) => void
+  /** 切换某张图片的批量选中状态（复选框）。 */
+  readonly toggleChecked: (id: string) => void
+  /** 全选 / 取消全选。 */
+  readonly checkAll: () => void
+  readonly uncheckAll: () => void
   readonly clear: () => void
-  readonly setSelectedTextOverride: (text: string | null) => void
+  /** 更新当前预览图片的文字覆盖。 */
+  readonly setActiveTextOverride: (text: string | null) => void
   readonly getEffectiveText: (id: string, globalText: string) => string
-  /** 应用摄影预设到当前选中图片（当前图片/选中图片）。 */
-  readonly assignPresetToSelected: (presetId: string | null) => void
-  /** 应用摄影预设到队列全部图片。 */
-  readonly assignPresetToAll: (presetId: string | null) => void
+  /** 应用摄影预设到指定作用范围。 */
+  readonly assignPresetToScope: (presetId: string | null, scope: BatchScope) => void
+  /** 清除指定作用范围的预设绑定。 */
+  readonly clearPresetFromScope: (scope: BatchScope) => void
   /** 清除绑定到指定预设 ID 的所有图片的预设绑定（删除预设时调用）。 */
   readonly clearPresetBinding: (presetId: string) => void
-  /** 清除当前选中图片的预设绑定。 */
-  readonly clearSelectedPreset: () => void
-  /** 清除全部图片的预设绑定。 */
-  readonly clearAllPresetBindings: () => void
-  readonly setSelectedIdentityOverride: (patch: Partial<PhotoIdentity>) => void
-  readonly clearSelectedIdentityOverride: () => void
+  /** 更新当前预览图片的摄影身份覆盖。 */
+  readonly setActiveIdentityOverride: (patch: Partial<PhotoIdentity>) => void
+  /** 清除当前预览图片的摄影身份覆盖。 */
+  readonly clearActiveIdentityOverride: () => void
   /**
    * 计算图片的有效摄影身份。
    * 优先级：每图覆盖 > 摄影预设 > EXIF（可选传入）> 空默认。
@@ -79,4 +102,14 @@ export type QueueController = {
     assetStore: PhotoAssetStore,
     exifByPath?: ReadonlyMap<string, PhotoMetadata>
   ) => PhotoIdentity
+  /**
+   * 计算图片各展示字段的来源标识（EXIF / 摄影预设 / 每图覆盖）。
+   * 判定逻辑与 getEffectiveIdentity 的合并链一致。
+   */
+  readonly getIdentitySources: (
+    itemId: string,
+    presets: readonly ShootingPreset[],
+    assetStore: PhotoAssetStore,
+    exifByPath?: ReadonlyMap<string, PhotoMetadata>
+  ) => IdentitySourceMap
 }

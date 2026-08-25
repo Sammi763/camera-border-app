@@ -213,3 +213,69 @@ P0-01
 ```
 
 并行建议：P0-02、P0-03、P0-04 可并行；P0-05 依赖画幅和资产库；P0-06 依赖 EXIF 与预设；打包任务等核心闭环稳定后进入，但应尽早建立最小打包验证，避免最后才发现 Java Runtime 或资源路径问题。
+
+## 6. 本轮新增任务（风格边框 / RAW 显影 / 打包链路修复）
+
+> 状态标注：✅ 已实现并通过自动化测试；🟡 代码已实现但未完成真实验收；⬜ 后续规划。
+
+### T-01 ✅ P0 打包与运行阻塞修复
+
+- Windows Runtime 解压剥离顶层目录，布局由 `verify_runtime_layout` 强制校验
+  （`scripts/lib/runtime-extract.sh` + `scripts/fetch-runtime.test.sh`）。
+- 打包模式禁止回退系统 Java：`requireBundledRuntime`，缺失即 `runtime-missing` 诊断；
+  仅开发模式允许系统 Java（`JavaBridge`）。
+- 引擎日志目录启动时自动创建；目录/权限问题以 `logWarning` 进入诊断消息。
+- 健康探测超时进入 `unhealthy(health-timeout)`，不再保持 running；
+  重试终止旧进程（SIGTERM → 宽限期后 SIGKILL）后重启。
+- 批量导出保存「首次目标批次快照」，改变勾选后重试仍只针对原批次失败项。
+- 欢迎页入口按模式区分：Electron 显示 选择照片/选择文件夹/拖入；
+  「加载样片」仅浏览器开发降级模式显示。
+
+### T-02 ✅ 边框风格系统（首批 8 种确定性风格）
+
+- `RenderRecipe.borderStyle`（id/intensity/edgeWidth/holeCount/paperTone），
+  旧数据无该字段时保持原行为；未识别 id 渲染层静默忽略。
+- 风格 ID：exhibition-line / polaroid-shadow / film-perforation / mat-double-line /
+  torn-edge / negative-band / magazine-keyline / archive-label-box。
+- 几何规格唯一权威定义在 `java-engine util/BorderStyleRenderer` 类注释，
+  Canvas（`canvasRenderer.drawBorderStyle`）逐条对应实现。
+- 全部确定性绘制，无随机纹理与外部素材。Java 像素级测试 + Canvas 无异常/零强度测试。
+
+### T-03 ✅ 模板卡片实时缩略图
+
+- `LiveTemplateThumbnail` 复用 `drawPreviewToCanvas`（与主预览/导出同一渲染器），
+  用当前照片渲染模板效果；无照片回退 CSS 示意缩略图。
+- 点击模板后中间预览立即更新（同一配置、同一几何）。
+
+### T-04 🟡 RAW 真实显影桥接（LibRaw 子进程）
+
+已实现并通过自动化测试：
+- `RawDevelopService` + `LibRawCliDevelopServiceImpl`：受控子进程、超时终止、
+  stderr 摘要、临时文件 finally 清理、按 路径+mtime 的有界缓存。
+- `ImageReader` 路由：显影成功 → `raw-developed`；失败/未配置 → 显式降级
+  `embedded-preview-fallback` 并携带中文原因；绝不伪装成完整显影。
+- `sourceDecode {mode, format, warning}` 随预览/导出响应返回；
+  界面显示「RAW 已真实显影」徽标或降级原因（预览元信息栏 + 导出摘要）。
+- Electron 注入：随包 `<resources>/libraw/camborder-libraw-sampler(.exe)` 经
+  `CAMBORDER_LIBRAW_PATH` 环境变量传给引擎；前端不直接调用 LibRaw。
+- 测试覆盖 NEF/CR2/CR3/ARW/RAF/DNG/ORF/RW2/PEF 九种扩展名的路由与降级。
+
+未完成真实验收（阻塞项，如实声明）：
+- ⬜ LibRaw 原生程序三平台产物未构建（`native/libraw_sampler.cpp` +
+  `scripts/build-libraw.sh` 已就绪，需各平台工具链执行）；当前打包产物
+  未携带 sampler，RAW 全部走嵌入预览降级路径（界面如实提示）。
+- ⬜ 真实 RAW 样片的端到端显影验证依赖上述产物。
+
+### T-05 🟡 打包产物构建与验收
+
+已完成：
+- macOS arm64 `.dmg` 与 x64 `.dmg` 真实产出（JRE 架构一一对应）。
+- arm64 dmg 在本机冒烟通过：DMG 安装 → 启动 → 随包 JRE 启动引擎 → 健康检查 OK
+  （`scripts/smoke-test.sh`，端口经 `CAMBORDER_SMOKE_PORT` 绕开本机 8099 占用）。
+- 签名策略固化：afterPack 对嵌套 framework/helper 与外层 ad-hoc 签名，
+  **不重签 java-runtime**（--deep 覆盖 JRE 签名会导致内核 SIGKILL，已实测定位）。
+
+未完成真实验收：
+- ⬜ x64 dmg 本机冒烟未跑通（x64 应用内引擎启动链路待查；x64 JRE+jar 手动组合验证可行）。
+- ⬜ Windows x64 `.exe` 未在本环境构建（需 Windows 或交叉验证环境）。
+- ⬜ 无 Node/Maven/Java 的干净机器全流程验收、卸载保留 userData 验证。

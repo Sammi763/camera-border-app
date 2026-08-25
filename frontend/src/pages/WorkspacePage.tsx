@@ -1,15 +1,21 @@
 /**
- * 工作台页面：三栏布局的主工作区。
+ * 工作台页面：快速出图 / 高级编辑两种模式共享同一套状态装配。
  *
- * 布局：左（源图片队列）、中（主预览）、右（检查器）。
- * - 左右两栏宽度可拖拽调整，并持久化到 sessionStorage，会话内保持。
- * - 右栏可折叠为竖条，给预览区让出空间。
- * - 检查器用折叠分组承载：渲染设置 / 摄影信息 / 模板 / 摄影预设 / 资产库。
+ * 模式：
+ * - 快速出图（默认）：空队列显示欢迎页；有照片时显示「当前照片 + 模板卡片 +
+ *   摄影信息摘要 + 导出」。隐藏详细编辑能力。
+ * - 高级编辑：原有三栏专业工作台（左队列 / 中预览 / 右检查器）。
+ *
+ * 两条模式共享同一份 RenderRecipe、身份合并链与导出逻辑（不复制渲染实现）：
+ * 预览（Canvas/引擎）、单图导出、批量导出统一走 buildRecipeFromSettings 与
+ * resolveQueueItem 解析，确保四条链路结果一致。
+ *
  * 所有业务状态在此组装，各面板只接收 props。
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { TopBar } from "../components/layout/TopBar"
+import type { WorkspaceMode } from "../components/layout/TopBar"
 import { StatusPanel } from "../components/layout/StatusPanel"
 import { InspectorPanel } from "../components/layout/InspectorPanel"
 import type { InspectorSection } from "../components/layout/InspectorPanel"
@@ -34,13 +40,20 @@ import { usePhotoAssets } from "../features/metadata/hooks/usePhotoAssets"
 import { useExifIndex } from "../features/metadata/hooks/useExifIndex"
 import { resolveEffectiveText } from "../features/metadata/utils/resolveEffectiveText"
 import { detectBrandFromIdentity } from "../features/settings/utils/brandDetection"
-import { BUILT_IN_TEMPLATES } from "../features/template/presets/builtInTemplates"
+import { BUILT_IN_TEMPLATES, PHOTO_INFO_CARD_TEMPLATE_IDS } from "../features/template/presets/builtInTemplates"
 import { fetchFilmStocks } from "../services/engine/filmStocksApi"
+import { QuickWelcome } from "../features/quick/components/QuickWelcome"
+import { EngineFailureView } from "../features/engineHealth/EngineFailureView"
+import { QuickWorkspace } from "../features/quick/components/QuickWorkspace"
+import type { PresetDraft } from "../features/quick/components/QuickInfoSummary"
+import { buildPresetFromText } from "../features/quick/utils/buildPresetFromText"
+import { recommendTemplateId, orientationFromSize } from "../features/quick/utils/recommendTemplate"
 import type { DesktopRuntime } from "../types/runtime"
 import type { RenderSettings } from "../features/settings/types"
 import type { Template } from "../features/template/types"
 import type { FilmStock } from "../features/metadata/types"
 import type { QueueItem } from "../features/queue/types"
+import type { BatchScope } from "../features/queue/types"
 
 type WorkspacePageProps = {
   readonly runtime: DesktopRuntime
@@ -58,6 +71,7 @@ const RIGHT_COLLAPSED_WIDTH = 40
 
 const SESSION_KEY_LEFT = "workspace.colLeft"
 const SESSION_KEY_RIGHT = "workspace.colRight"
+const SESSION_KEY_MODE = "workspace.mode"
 
 /** 读取 sessionStorage 中的分栏宽度，回退到默认值。 */
 const readColumnWidth = (key: string, fallback: number): number => {
@@ -82,19 +96,35 @@ const writeColumnWidth = (key: string, value: number): void => {
   }
 }
 
+/** 读取上次会话的工作台模式；默认快速出图。 */
+const readMode = (): WorkspaceMode => {
+  try {
+    return sessionStorage.getItem(SESSION_KEY_MODE) === "advanced" ? "advanced" : "quick"
+  } catch {
+    return "quick"
+  }
+}
+
 const clampWidth = (value: number, min: number, max: number): number =>
   Math.min(max, Math.max(min, value))
+
+/** 摄影信息卡默认模板的 settingsPatch（导入照片后自动应用）。 */
+const PHOTO_INFO_CARD_DEFAULT_PATCH: Partial<RenderSettings> =
+  BUILT_IN_TEMPLATES.find((t) => t.id === PHOTO_INFO_CARD_TEMPLATE_IDS.centerWhite)?.settingsPatch ?? {}
 
 export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
   const health = useEngineHealth()
   const queue = useQueue()
   const settings = useSettings()
   const userModifiedRef = useRef(false)
+  const defaultTemplateAppliedRef = useRef(false)
+  const prevQueueLenRef = useRef(0)
   const presets = useShootingPresets()
   const assets = usePhotoAssets()
   const exif = useExifIndex()
   const [filmStocks, setFilmStocks] = useState<readonly FilmStock[]>([])
   const [activePresetId, setActivePresetId] = useState<string | null>(null)
+  const [mode, setMode] = useState<WorkspaceMode>(readMode)
 
   // ---- 可调分栏状态 -------------------------------------------------------
   const [colLeft, setColLeft] = useState<number>(() => readColumnWidth(SESSION_KEY_LEFT, LEFT_DEFAULT))
@@ -112,6 +142,16 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
     writeColumnWidth(SESSION_KEY_LEFT, colLeft)
     writeColumnWidth(SESSION_KEY_RIGHT, colRight)
   }, [colLeft, colRight, resizing])
+
+  // 模式切换持久化
+  const handleModeChange = useCallback((nextMode: WorkspaceMode): void => {
+    setMode(nextMode)
+    try {
+      sessionStorage.setItem(SESSION_KEY_MODE, nextMode)
+    } catch {
+      // 写入失败静默忽略
+    }
+  }, [])
 
   // 全局指针监听：拖拽期间跟随光标更新宽度，松开结束
   useEffect(() => {
@@ -168,6 +208,23 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
     return () => { active = false }
   }, [])
 
+  // 导入照片后自动应用「摄影信息卡」默认模板：
+  // 仅当队列从空变为非空、且用户尚未手动修改过设置/模板、且没有已保存的默认模板时。
+  // 用户手动选择过模板后（userModifiedRef=true），后续导入不再自动覆盖。
+  useEffect(() => {
+    const prevLen = prevQueueLenRef.current
+    prevQueueLenRef.current = queue.items.length
+    const grewFromEmpty = prevLen === 0 && queue.items.length > 0
+    if (!grewFromEmpty) {
+      return
+    }
+    if (userModifiedRef.current || defaultTemplateAppliedRef.current) {
+      return
+    }
+    settings.update(normalizeTemplatePatch(PHOTO_INFO_CARD_DEFAULT_PATCH))
+    setActivePresetId(PHOTO_INFO_CARD_TEMPLATE_IDS.centerWhite)
+  }, [queue.items.length, settings])
+
   // 应用内置视觉模板 patch，同时更新活跃模板 id。
   // 内置模板可能含旧单段字段（textContent 等），统一走 normalizeTemplatePatch 迁移。
   const handleApplyPreset = useCallback((patch: Partial<RenderSettings>): void => {
@@ -175,6 +232,17 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
     settings.update(normalizeTemplatePatch(patch))
     const matched = BUILT_IN_TEMPLATES.find((t) => t.settingsPatch === patch)
     setActivePresetId(matched?.id ?? null)
+  }, [settings])
+
+  /** 应用摄影信息卡指定变体（快速模式模板卡片变体切换）。 */
+  const handleApplyInfoCardVariant = useCallback((variantId: string): void => {
+    const template = BUILT_IN_TEMPLATES.find((t) => t.id === variantId)
+    if (template === undefined) {
+      return
+    }
+    userModifiedRef.current = true
+    settings.update(normalizeTemplatePatch(template.settingsPatch))
+    setActivePresetId(variantId)
   }, [settings])
 
   // 包装 update，标记用户已主动修改设置（阻止默认模板覆盖）
@@ -237,11 +305,13 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
   }, [settings])
 
   // 默认模板自动应用回调：仅在用户未手动修改过设置时生效。
+  // 生效时记录 defaultTemplateAppliedRef，避免随后导入再被摄影信息卡覆盖。
   // 默认模板也可能是旧格式，走 normalizeTemplateSettings 迁移。
   const handleDefaultLoaded = useCallback((templateSettings: RenderSettings): void => {
     if (userModifiedRef.current) {
       return
     }
+    defaultTemplateAppliedRef.current = true
     settings.update(normalizeTemplateSettings(templateSettings))
   }, [settings])
 
@@ -266,11 +336,6 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
     presets.deletePreset(presetId)
   }, [queue, presets])
 
-  // 清除全部图片的预设绑定
-  const handleClearAllPresetBindings = useCallback((): void => {
-    queue.clearAllPresetBindings()
-  }, [queue])
-
   // 计算各预设被队列中多少张图片引用（用于预设面板展示应用范围）
   const presetUsageCounts = useMemo(() => {
     const counts = new Map<string, number>()
@@ -282,14 +347,14 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
     return counts
   }, [queue.items])
 
-  // 获取当前选中图片的信息
-  const selectedItem = queue.items.find((item) => item.isSelected)
-  const selectedTextOverride = selectedItem?.textOverride ?? null
+  // 获取当前预览图片的信息
+  const activeItem = queue.activeItem
+  const activeTextOverride = activeItem?.textOverride ?? null
 
-  // 选中图片变化时惰性读取 EXIF（供身份链与变量解析使用）
+  // 预览图片变化时惰性读取 EXIF（供身份链与变量解析使用）
   useEffect(() => {
-    exif.ensureExif(queue.selectedFilePath)
-  }, [exif.ensureExif, queue.selectedFilePath])
+    exif.ensureExif(queue.activeFilePath)
+  }, [exif.ensureExif, queue.activeFilePath])
 
   // 阻止窗口级默认拖放行为：拖图片到预览区等空白处时，
   // 避免 Electron/浏览器直接导航打开文件（拖入队列由 QueuePanel 处理）。
@@ -306,22 +371,27 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
   }, [])
 
   // 计算当前图片的有效摄影身份（每图覆盖 > 摄影预设 > EXIF > 空）
-  // getExifByPath() 读取最新缓存：导出等待 EXIF 期间刚到达的数据也能即时生效
-  const selectedIdentity = selectedItem !== undefined
-    ? queue.getEffectiveIdentity(selectedItem.id, presets.presets, assets.store, exif.getExifByPath())
+  const selectedIdentity = activeItem !== null
+    ? queue.getEffectiveIdentity(activeItem.id, presets.presets, assets.store, exif.getExifByPath())
     : null
 
-  // 快捷文字覆盖：当前图片的独立文字覆盖。
-  // 用于 buildTextsFromSettings 中覆盖 textLayers[0].content。
-  // 变量解析后传给 usePreview 和 PreviewPanel。
-  const resolvedTextOverride = useMemo(() => {
-    if (selectedTextOverride === null) {
+  // 计算当前图片各展示字段的来源标识（EXIF / 摄影预设 / 每图覆盖）
+  const identitySources = useMemo(() => {
+    if (activeItem === null) {
       return null
     }
-    return resolveEffectiveText(selectedTextOverride, selectedIdentity)
-  }, [selectedTextOverride, selectedIdentity])
+    return queue.getIdentitySources(activeItem.id, presets.presets, assets.store, exif.getExifByPath())
+  }, [queue, activeItem, presets.presets, assets.store, exif])
 
-  // 多段文字图层变量解析：对当前选中图片的每个 textLayer 解析变量
+  // 快捷文字覆盖：当前图片的独立文字覆盖。
+  const resolvedTextOverride = useMemo(() => {
+    if (activeTextOverride === null) {
+      return null
+    }
+    return resolveEffectiveText(activeTextOverride, selectedIdentity)
+  }, [activeTextOverride, selectedIdentity])
+
+  // 多段文字图层变量解析：对当前预览图片的每个 textLayer 解析变量
   const resolvedTextLayers = useMemo(() => {
     return settings.settings.textLayers.map((layer) => {
       if (!layer.enabled || layer.content.length === 0) {
@@ -341,7 +411,7 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
   }, [selectedIdentity])
 
   const preview = usePreview(
-    queue.selectedFilePath,
+    queue.activeFilePath,
     settings.settings,
     settings.settingsVersion,
     resolvedTextOverride,
@@ -386,7 +456,84 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
     [queue, presets.presets, assets.store, settings.settings.textLayers]
   )
 
-  // ---- 右侧检查器折叠分组 ---------------------------------------------------
+  // 确定性模板推荐：只改变「建议模板」标记，不修改用户设置。
+  // 依据：方向（横/竖）、是否胶片、画幅、信息完整度。
+  const recommendedTemplateId = useMemo(() => {
+    if (activeItem === null || selectedIdentity === null) {
+      return null
+    }
+    const currentImage = preview.kind === "active" ? preview.currentImage : null
+    return recommendTemplateId({
+      orientation: orientationFromSize(currentImage?.naturalWidth, currentImage?.naturalHeight),
+      isFilm: selectedIdentity.film.trim().length > 0,
+      captureFormatId: selectedIdentity.captureFormat.length > 0 ? selectedIdentity.captureFormat : null,
+      hasCameraOrLens: selectedIdentity.camera.trim().length > 0 || selectedIdentity.lens.trim().length > 0
+    })
+  }, [activeItem, selectedIdentity, preview])
+
+  // ---- 摄影预设作用域应用（当前 / 已选 / 全部） --------------------------------
+  const handleApplyPresetToScope = useCallback((presetId: string, scope: BatchScope): void => {
+    queue.assignPresetToScope(presetId, scope)
+  }, [queue])
+
+  const handleClearPresetFromScope = useCallback((scope: BatchScope): void => {
+    queue.clearPresetFromScope(scope)
+  }, [queue])
+
+  /** 快速流程「创建摄影预设」：文本录入 -> 资产 + 预设 -> 应用到指定范围。 */
+  const handleCreatePresetFromText = useCallback((draft: PresetDraft, scope: BatchScope): void => {
+    const result = buildPresetFromText(draft, assets.store)
+    if (result === null) {
+      return
+    }
+    for (const camera of result.newCameras) {
+      assets.saveCamera(camera)
+    }
+    for (const lens of result.newLenses) {
+      assets.saveLens(lens)
+    }
+    for (const film of result.newFilms) {
+      assets.saveFilm(film)
+    }
+    presets.savePreset(result.preset)
+    queue.assignPresetToScope(result.preset.id, scope)
+  }, [assets, presets, queue])
+
+  // ---- 批量导出作用范围 --------------------------------------------------------
+  // 勾选了图片则导出勾选；未勾选且多于一张则导出全部；单张未勾选不显示批量导出。
+  const batchExportItems = useMemo(() => {
+    if (queue.checkedItemIds.length > 0) {
+      const checkedSet = new Set(queue.checkedItemIds)
+      return queue.items.filter((item) => checkedSet.has(item.id))
+    }
+    return queue.items.length > 1 ? queue.items : []
+  }, [queue.items, queue.checkedItemIds])
+
+  const batchExportLabel = useMemo(() => {
+    if (queue.checkedItemIds.length > 0) {
+      return `批量导出已选 ${queue.checkedItemIds.length} 张`
+    }
+    return `批量导出 ${queue.items.length} 张`
+  }, [queue.checkedItemIds.length, queue.items.length])
+
+  // 快速模式空队列：欢迎页入口
+  const handleWelcomePickFiles = useCallback((): void => {
+    void queue.addImageFiles()
+  }, [queue])
+
+  const handleWelcomePickFolder = useCallback((): void => {
+    void queue.addImageFolder()
+  }, [queue])
+
+  const handleWelcomeLoadSamples = useCallback((): void => {
+    void queue.addImages()
+  }, [queue])
+
+  const handleWelcomeDropFiles = useCallback((paths: readonly string[]): void => {
+    void queue.addFromPaths(paths)
+  }, [queue])
+
+  // ---- 右侧检查器折叠分组（高级编辑模式） ---------------------------------------
   // 顺序：渲染设置 / 摄影信息 / 模板 / 摄影预设 / 资产库。默认仅展开渲染设置。
   const inspectorSections = useMemo((): readonly InspectorSection[] => [
     {
@@ -403,10 +550,10 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
             resetTextLayers: handleResetTextLayers,
             replaceTextLayers: handleReplaceTextLayers
           }}
-          hasSelectedImage={queue.selectedFilePath !== null}
-          selectedFilePath={queue.selectedFilePath}
-          textOverride={queue.selectedTextOverride}
-          setTextOverride={queue.setSelectedTextOverride}
+          hasSelectedImage={queue.activeFilePath !== null}
+          selectedFilePath={queue.activeFilePath}
+          textOverride={queue.activeTextOverride}
+          setTextOverride={queue.setActiveTextOverride}
           detectedBrandLabel={detectedBrand?.label ?? null}
         />
       )
@@ -414,16 +561,17 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
     {
       id: "photo-identity",
       label: "摄影信息",
-      content: selectedItem !== undefined && selectedIdentity !== null ? (
+      content: activeItem !== null && selectedIdentity !== null ? (
         <PhotoIdentityPanel
           effectiveIdentity={selectedIdentity}
-          identityOverride={selectedItem.identityOverride}
-          presetId={selectedItem.presetId}
+          identityOverride={activeItem.identityOverride}
+          presetId={activeItem.presetId}
           presets={presets.presets}
           assetStore={assets.store}
-          onUpdateOverride={queue.setSelectedIdentityOverride}
-          onClearOverride={queue.clearSelectedIdentityOverride}
+          onUpdateOverride={queue.setActiveIdentityOverride}
+          onClearOverride={queue.clearActiveIdentityOverride}
           hasSelectedImage={true}
+          sources={identitySources ?? undefined}
         />
       ) : (
         <p className="settingsCapabilityHint">请先选择一张图片。</p>
@@ -437,6 +585,8 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
           <BuiltInTemplatePanel
             onApply={handleApplyPreset}
             activePresetId={activePresetId}
+            currentImage={preview.kind === "active" ? preview.currentImage : null}
+            currentSettings={settings.settings}
           />
           <TemplatePanel
             templateController={templates}
@@ -458,12 +608,11 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
           onDuplicatePreset={presets.duplicatePreset}
           onDeletePreset={handleDeletePreset}
           onClearError={presets.clearError}
-          onApplyToSelected={queue.assignPresetToSelected}
-          onApplyToAll={queue.assignPresetToAll}
-          onClearSelectedPreset={queue.clearSelectedPreset}
-          onClearAllPresetBindings={handleClearAllPresetBindings}
-          hasSelectedImage={queue.selectedFilePath !== null}
+          onApplyToScope={handleApplyPresetToScope}
+          onClearScope={handleClearPresetFromScope}
+          hasSelectedImage={queue.activeFilePath !== null}
           queueCount={queue.items.length}
+          checkedCount={queue.checkedCount}
           assetStore={assets.store}
           presetUsageCounts={presetUsageCounts}
         />
@@ -483,8 +632,8 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
     settings, handleSettingsUpdate, handleSettingsUpdateNumber, handleUpdateTextLayer,
     handleResetTextLayers, handleReplaceTextLayers,
     templates, handleLoadTemplate, handleApplyPreset, activePresetId, handleImportTemplate,
-    queue, selectedItem, selectedIdentity, presets, assets, filmStocks,
-    handleDeletePreset, handleClearAllPresetBindings, presetUsageCounts
+    queue, activeItem, selectedIdentity, identitySources, presets, assets, filmStocks,
+    handleDeletePreset, presetUsageCounts, handleApplyPresetToScope, handleClearPresetFromScope
   ])
 
   const workspaceStyle = {
@@ -492,66 +641,124 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
     "--ws-right": `${rightCollapsed ? RIGHT_COLLAPSED_WIDTH : colRight}px`
   } as React.CSSProperties
 
+  // 快速模式空态：队列为空或当前预览图缺失（防御性回退，避免空白屏）
+  const isEmpty = queue.items.length === 0 || queue.activeItem === null
+  const showWelcome = mode === "quick" && isEmpty
+
   return (
     <div className="workspaceShell">
-      <TopBar runtime={runtime} health={health} />
-      <main className={`workspace ${resizing !== null ? "workspaceResizing" : ""}`} style={workspaceStyle}>
-        <div className="workspaceLeft">
-          <QueuePanel queue={queue} />
-        </div>
-        <div className="workspaceCenter">
-          <PreviewPanel
-            state={preview}
+      <TopBar runtime={runtime} health={health} mode={mode} onModeChange={handleModeChange} />
+
+      {/* 快速出图模式：空队列显示欢迎页 */}
+      {showWelcome && (
+        <main className="quickWelcomeHost">
+          <QuickWelcome
+            isBrowserMode={queue.isBrowserMode}
+            onPickFiles={handleWelcomePickFiles}
+            onPickFolder={handleWelcomePickFolder}
+            onLoadSamples={handleWelcomeLoadSamples}
+            onDropFiles={handleWelcomeDropFiles}
+          />
+        </main>
+      )}
+
+      {/* 快速出图模式：有照片 */}
+      {mode === "quick" && !isEmpty && activeItem !== null && selectedIdentity !== null && (
+        <main className="quickModeHost">
+          <QuickWorkspace
+            queue={queue}
+            preview={preview}
             settings={settings.settings}
-            hasSelectedImage={queue.selectedFilePath !== null}
-            queueItems={queue.items}
+            activeItem={activeItem}
+            selectedIdentity={selectedIdentity}
+            identitySources={identitySources ?? null}
+            presets={presets.presets}
+            activePresetId={activePresetId}
+            recommendedTemplateId={recommendedTemplateId}
+            currentImage={preview.kind === "active" ? preview.currentImage : null}
             resolveQueueItem={resolveQueueItem}
             prepareExifForExport={exif.ensureExifForExport}
             resolvedBrand={resolvedBrand}
             resolvedTextOverride={resolvedTextOverride}
             resolvedTextLayers={resolvedTextLayers}
+            onApplyTemplate={handleApplyPreset}
+            onApplyInfoCardVariant={handleApplyInfoCardVariant}
+            onApplyPreset={handleApplyPresetToScope}
+            onClearPreset={handleClearPresetFromScope}
+            onCreatePresetFromText={handleCreatePresetFromText}
+            batchExportItems={batchExportItems}
+            batchExportLabel={batchExportLabel}
           />
-        </div>
-        <div className="workspaceRight">
-          {rightCollapsed ? (
-            <div className="collapsedRight">
-              <button
-                type="button"
-                className="inspectorReopen"
-                onClick={() => setRightCollapsed(false)}
-                aria-label="展开检查器"
-              >
-                <span className="inspectorReopenChevron" aria-hidden="true">«</span>
-                <span>展开检查器</span>
-              </button>
-            </div>
-          ) : (
-            <InspectorPanel
-              sections={inspectorSections}
-              onToggleCollapse={() => setRightCollapsed(true)}
-            />
-          )}
-        </div>
+        </main>
+      )}
 
-        {/* 左栏拖拽手柄（贴近左栏右边界） */}
-        <div
-          className="resizeHandle resizeHandleLeft"
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="调整源图片栏宽度"
-          onPointerDown={startResize("left")}
-        />
-        {/* 右栏拖拽手柄（折叠时隐藏） */}
-        {!rightCollapsed && (
+      {/* 高级编辑模式：三栏专业工作台 */}
+      {mode === "advanced" && (
+        <main className={`workspace ${resizing !== null ? "workspaceResizing" : ""}`} style={workspaceStyle}>
+          <div className="workspaceLeft">
+            <QueuePanel queue={queue} />
+          </div>
+          <div className="workspaceCenter">
+            <PreviewPanel
+              state={preview}
+              settings={settings.settings}
+              hasSelectedImage={queue.activeFilePath !== null}
+              queueItems={queue.items}
+              batchExportItems={batchExportItems}
+              batchExportLabel={batchExportLabel}
+              resolveQueueItem={resolveQueueItem}
+              prepareExifForExport={exif.ensureExifForExport}
+              resolvedBrand={resolvedBrand}
+              resolvedTextOverride={resolvedTextOverride}
+              resolvedTextLayers={resolvedTextLayers}
+              autoOpenExportDirectory
+            />
+          </div>
+          <div className="workspaceRight">
+            {rightCollapsed ? (
+              <div className="collapsedRight">
+                <button
+                  type="button"
+                  className="inspectorReopen"
+                  onClick={() => setRightCollapsed(false)}
+                  aria-label="展开检查器"
+                >
+                  <span className="inspectorReopenChevron" aria-hidden="true">«</span>
+                  <span>展开检查器</span>
+                </button>
+              </div>
+            ) : (
+              <InspectorPanel
+                sections={inspectorSections}
+                onToggleCollapse={() => setRightCollapsed(true)}
+              />
+            )}
+          </div>
+
+          {/* 左栏拖拽手柄（贴近左栏右边界） */}
           <div
-            className="resizeHandle resizeHandleRight"
+            className="resizeHandle resizeHandleLeft"
             role="separator"
             aria-orientation="vertical"
-            aria-label="调整检查器栏宽度"
-            onPointerDown={startResize("right")}
+            aria-label="调整源图片栏宽度"
+            onPointerDown={startResize("left")}
           />
-        )}
-      </main>
+          {/* 右栏拖拽手柄（折叠时隐藏） */}
+          {!rightCollapsed && (
+            <div
+              className="resizeHandle resizeHandleRight"
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="调整检查器栏宽度"
+              onPointerDown={startResize("right")}
+            />
+          )}
+        </main>
+      )}
+
+      {/* 托管模式引擎启动失败页面：健康检查持续失败时覆盖整个工作台 */}
+      {runtime.engine.managed && health.kind === "error" && <EngineFailureView />}
+
       <StatusPanel
         runtime={runtime}
         health={health}

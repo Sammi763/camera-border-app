@@ -10,11 +10,11 @@ import { WorkspacePage } from "../pages/WorkspacePage"
 import type { DesktopRuntime } from "../types/runtime"
 
 const FALLBACK_RUNTIME: DesktopRuntime = {
-  appName: "相机边框工具",
+  appName: "Camera Border",
   platform: "unknown",
   engine: {
     managed: false,
-    baseUrl: "http://127.0.0.1:8080"
+    baseUrl: "http://127.0.0.1:8099"
   }
 }
 

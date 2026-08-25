@@ -7,19 +7,25 @@ import { createEmptyIdentity } from "../../metadata/types"
 import { mergeIdentityChain, resolvePresetIdentity } from "../../metadata/utils/resolveIdentity"
 import type { PhotoAssetStore, PhotoIdentity, ShootingPreset } from "../../metadata/types"
 import type { PhotoMetadata } from "../../../types/preview"
-import type { ImportResult, QueueController, QueueItem } from "../types"
+import type { BatchScope, ImportResult, QueueController, QueueItem } from "../types"
+import { resolveIdentityFieldSources } from "../../metadata/utils/resolveIdentityFieldSources"
 
 /**
- * 维护图片队列及其选中状态。
+ * 维护图片队列及「当前预览图 / 批量选中」两组独立状态。
+ *
+ * 状态语义：
+ * - activeItemId：点击缩略图切换，驱动预览与单图编辑；入队首张自动激活；
+ * - checkedItemIds：复选框控制的批量选中集合，驱动预设批量应用与批量导出范围；
+ *   清空队列时两组状态一并重置。
  *
  * 模式检测逻辑：
  * - Electron 模式：window.desktop 存在，使用系统文件/文件夹选择器
  * - 浏览器模式：window.desktop 不存在，降级调用 GET /api/dev/photos 获取样片
- *
- * 两种模式下队列行为一致：图片入队、首张自动选中、切换触发预览。
  */
 export const useQueue = (): QueueController => {
   const [items, setItems] = useState<readonly QueueItem[]>([])
+  const [activeItemId, setActiveItemId] = useState<string | null>(null)
+  const [checkedItemIds, setCheckedItemIds] = useState<readonly string[]>([])
   const [lastImportResult, setLastImportResult] = useState<ImportResult | null>(null)
   const isBrowserMode = window.desktop === undefined
 
@@ -29,7 +35,7 @@ export const useQueue = (): QueueController => {
     return dotIndex > 0 ? filePath.slice(dotIndex + 1).toLowerCase() : ""
   }
 
-  /** 将路径列表追加到队列，首张自动选中。HEIC 文件自动转换。 */
+  /** 将路径列表追加到队列。队列原本为空时自动激活首张。HEIC 文件自动转换。 */
   const appendPaths = useCallback(async (paths: readonly string[]): Promise<void> => {
     if (paths.length === 0) {
       return
@@ -58,24 +64,27 @@ export const useQueue = (): QueueController => {
       return
     }
 
-    setItems((previous) => {
-      const isFirstSelection = previous.length === 0
-      const added = validItems.map((item, index) => ({
-        id: crypto.randomUUID(),
-        filePath: item.resolved!,
-        fileName: toFileName(item.original),
-        sourcePath: item.original,
-        sourceFormat: extractFormat(item.original),
-        converted: item.converted,
-        workingFormat: item.converted ? "jpg" : extractFormat(item.original),
-        isSelected: isFirstSelection && index === 0,
-        textOverride: null,
-        presetId: null,
-        identityOverride: null
-      }))
-      return [...previous, ...added]
-    })
-  }, [])
+    const added = validItems.map((item) => ({
+      id: crypto.randomUUID(),
+      filePath: item.resolved!,
+      fileName: toFileName(item.original),
+      sourcePath: item.original,
+      sourceFormat: extractFormat(item.original),
+      converted: item.converted,
+      workingFormat: item.converted ? "jpg" : extractFormat(item.original),
+      textOverride: null,
+      presetId: null,
+      identityOverride: null
+    }))
+
+    // 队列原本为空（首次导入或清空后重新导入）时自动激活第一张；
+    // 后续导入不改变当前预览图，也不改变批量选中集合。
+    const wasEmpty = items.length === 0
+    setItems((previous) => [...previous, ...added])
+    if (wasEmpty && added.length > 0) {
+      setActiveItemId(added[0]!.id)
+    }
+  }, [items.length])
 
   /** 统一入口：Electron 模式用 selectImageSources，浏览器模式降级。 */
   const addImages = useCallback(async (): Promise<void> => {
@@ -150,26 +159,44 @@ export const useQueue = (): QueueController => {
     }
   }, [appendPaths])
 
-  const select = useCallback((id: string): void => {
-    setItems((previous) =>
-      previous.map((item) => ({
-        ...item,
-        isSelected: item.id === id
-      }))
+  /** 切换当前预览图片。不改变批量选中集合。 */
+  const setActive = useCallback((id: string): void => {
+    setActiveItemId(id)
+  }, [])
+
+  /** 切换某张图片的批量选中状态。不影响当前预览图。 */
+  const toggleChecked = useCallback((id: string): void => {
+    setCheckedItemIds((previous) =>
+      previous.includes(id)
+        ? previous.filter((checkedId) => checkedId !== id)
+        : [...previous, id]
     )
+  }, [])
+
+  /** 全选队列全部图片。 */
+  const checkAll = useCallback((): void => {
+    setCheckedItemIds(items.map((item) => item.id))
+  }, [items])
+
+  /** 取消全选。 */
+  const uncheckAll = useCallback((): void => {
+    setCheckedItemIds([])
   }, [])
 
   const clear = useCallback((): void => {
     setItems([])
+    setActiveItemId(null)
+    setCheckedItemIds([])
   }, [])
 
-  const setSelectedTextOverride = useCallback((text: string | null): void => {
+  /** 更新当前预览图片的文字覆盖。 */
+  const setActiveTextOverride = useCallback((text: string | null): void => {
     setItems((previous) =>
       previous.map((item) =>
-        item.isSelected ? { ...item, textOverride: text } : item
+        item.id === activeItemId ? { ...item, textOverride: text } : item
       )
     )
-  }, [])
+  }, [activeItemId])
 
   const getEffectiveText = useCallback((id: string, globalText: string): string => {
     const item = items.find((i) => i.id === id)
@@ -179,19 +206,35 @@ export const useQueue = (): QueueController => {
     return globalText
   }, [items])
 
-  const assignPresetToSelected = useCallback((presetId: string | null): void => {
-    setItems((previous) =>
-      previous.map((item) =>
-        item.isSelected ? { ...item, presetId } : item
-      )
-    )
+  /** 解析作用范围对应的图片 id 集合。 */
+  const resolveScopeIds = useCallback((scope: BatchScope, currentItems: readonly QueueItem[], currentActiveId: string | null, currentCheckedIds: readonly string[]): readonly string[] => {
+    switch (scope) {
+      case "active":
+        return currentActiveId !== null ? [currentActiveId] : []
+      case "checked":
+        return currentCheckedIds
+      case "all":
+        return currentItems.map((item) => item.id)
+    }
   }, [])
 
-  const assignPresetToAll = useCallback((presetId: string | null): void => {
-    setItems((previous) =>
-      previous.map((item) => ({ ...item, presetId }))
-    )
-  }, [])
+  /** 应用摄影预设到指定作用范围（当前预览图 / 已选图片 / 全部图片）。 */
+  const assignPresetToScope = useCallback((presetId: string | null, scope: BatchScope): void => {
+    setItems((previous) => {
+      const targetIds = new Set(resolveScopeIds(scope, previous, activeItemId, checkedItemIds))
+      if (targetIds.size === 0) {
+        return previous
+      }
+      return previous.map((item) =>
+        targetIds.has(item.id) ? { ...item, presetId } : item
+      )
+    })
+  }, [activeItemId, checkedItemIds, resolveScopeIds])
+
+  /** 清除指定作用范围的预设绑定。 */
+  const clearPresetFromScope = useCallback((scope: BatchScope): void => {
+    assignPresetToScope(null, scope)
+  }, [assignPresetToScope])
 
   /** 清除绑定到指定预设 ID 的所有图片的预设绑定（删除预设时调用）。 */
   const clearPresetBinding = useCallback((presetId: string): void => {
@@ -202,26 +245,11 @@ export const useQueue = (): QueueController => {
     )
   }, [])
 
-  /** 清除当前选中图片的预设绑定。 */
-  const clearSelectedPreset = useCallback((): void => {
-    setItems((previous) =>
-      previous.map((item) =>
-        item.isSelected ? { ...item, presetId: null } : item
-      )
-    )
-  }, [])
-
-  /** 清除全部图片的预设绑定。 */
-  const clearAllPresetBindings = useCallback((): void => {
-    setItems((previous) =>
-      previous.map((item) => ({ ...item, presetId: null }))
-    )
-  }, [])
-
-  const setSelectedIdentityOverride = useCallback((patch: Partial<PhotoIdentity>): void => {
+  /** 更新当前预览图片的摄影身份覆盖。 */
+  const setActiveIdentityOverride = useCallback((patch: Partial<PhotoIdentity>): void => {
     setItems((previous) =>
       previous.map((item) => {
-        if (!item.isSelected) {
+        if (item.id !== activeItemId) {
           return item
         }
         const current = item.identityOverride ?? {}
@@ -235,16 +263,16 @@ export const useQueue = (): QueueController => {
         return { ...item, identityOverride: hasValues ? cleaned : null }
       })
     )
-  }, [])
+  }, [activeItemId])
 
-  /** 清除当前选中图片的摄影身份覆盖。 */
-  const clearSelectedIdentityOverride = useCallback((): void => {
+  /** 清除当前预览图片的摄影身份覆盖。 */
+  const clearActiveIdentityOverride = useCallback((): void => {
     setItems((previous) =>
       previous.map((item) =>
-        item.isSelected ? { ...item, identityOverride: null } : item
+        item.id === activeItemId ? { ...item, identityOverride: null } : item
       )
     )
-  }, [])
+  }, [activeItemId])
 
   const getEffectiveIdentity = useCallback((
     itemId: string,
@@ -271,32 +299,61 @@ export const useQueue = (): QueueController => {
     })
   }, [items])
 
-  const selected = items.find((item) => item.isSelected)
-  const selectedFilePath = selected === undefined ? null : selected.filePath
-  const selectedTextOverride = selected?.textOverride ?? null
+  /** 计算各展示字段的来源标识（判定逻辑与 getEffectiveIdentity 的合并链一致）。 */
+  const getIdentitySources = useCallback((
+    itemId: string,
+    presets: readonly ShootingPreset[],
+    assetStore: PhotoAssetStore,
+    exifByPath?: ReadonlyMap<string, PhotoMetadata>
+  ): ReturnType<typeof resolveIdentityFieldSources> => {
+    const item = items.find((i) => i.id === itemId)
+    if (item === undefined) {
+      return resolveIdentityFieldSources({ override: null, preset: null, exif: null })
+    }
+    const preset = item.presetId !== null
+      ? presets.find((p) => p.id === item.presetId) ?? null
+      : null
+    const presetIdentity = preset !== null ? resolvePresetIdentity(preset, assetStore) : null
+    const exif = exifByPath?.get(item.filePath) ?? null
+    return resolveIdentityFieldSources({
+      override: item.identityOverride,
+      preset: presetIdentity,
+      exif
+    })
+  }, [items])
+
+  const activeItem = items.find((item) => item.id === activeItemId) ?? null
+  const activeFilePath = activeItem === null ? null : activeItem.filePath
+  const activeTextOverride = activeItem?.textOverride ?? null
 
   return {
     items,
-    selectedFilePath,
-    selectedTextOverride,
+    activeItemId,
+    checkedItemIds,
+    checkedCount: checkedItemIds.length,
+    activeItem,
+    activeFilePath,
+    activeTextOverride,
     isBrowserMode,
     lastImportResult,
     addImages,
     addImageFiles,
     addImageFolder,
     addFromPaths: appendPaths,
-    select,
+    setActive,
+    toggleChecked,
+    checkAll,
+    uncheckAll,
     clear,
-    setSelectedTextOverride,
+    setActiveTextOverride,
     getEffectiveText,
-    assignPresetToSelected,
-    assignPresetToAll,
+    assignPresetToScope,
+    clearPresetFromScope,
     clearPresetBinding,
-    clearSelectedPreset,
-    clearAllPresetBindings,
-    setSelectedIdentityOverride,
-    clearSelectedIdentityOverride,
-    getEffectiveIdentity
+    setActiveIdentityOverride,
+    clearActiveIdentityOverride,
+    getEffectiveIdentity,
+    getIdentitySources
   }
 }
 

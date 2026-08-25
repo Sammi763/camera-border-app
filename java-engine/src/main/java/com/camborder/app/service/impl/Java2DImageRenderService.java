@@ -3,6 +3,7 @@ package com.camborder.app.service.impl;
 import com.camborder.app.dto.ExportSettings;
 import com.camborder.app.model.RenderRecipe;
 import com.camborder.app.service.ImageRenderService;
+import com.camborder.app.util.BorderStyleRenderer;
 import com.camborder.app.util.BorderComposer;
 import com.camborder.app.util.ImageEncoder;
 import com.camborder.app.util.ImageReader;
@@ -15,13 +16,12 @@ import java.awt.image.BufferedImage;
 
 /**
  * 图像渲染服务 Java 2D 实现（service.impl 层）。
- * 编排各 util 组件完成渲染流水线：读取 -> 缩放 -> 边框 -> 文字 -> 品牌标识 -> 编码。
+ * 编排各 util 组件完成渲染流水线：读取 -> 缩放 -> 边框 -> 边框风格 -> 文字 -> 品牌标识 -> 编码。
  * 本类只做编排，不承担具体渲染逻辑（各职责已在 util 包拆分）。
  *
  * 设计原则：
  * - 不复制渲染逻辑，预览与导出都从这里拿合成后的 BufferedImage。
  * - 不引入数据库、队列中间件、Redis，纯 CPU + Java 2D。
- * - 当前阶段仅支持单段文字（texts[0]）的简单排版，不做多段复杂排版。
  */
 @Service
 public final class Java2DImageRenderService implements ImageRenderService {
@@ -29,6 +29,7 @@ public final class Java2DImageRenderService implements ImageRenderService {
     private final ImageReader imageReader;
     private final ImageScaler imageScaler;
     private final BorderComposer borderComposer;
+    private final BorderStyleRenderer borderStyleRenderer;
     private final TextRenderer textRenderer;
     private final ImageEncoder imageEncoder;
     private final LogoRenderer logoRenderer;
@@ -36,28 +37,36 @@ public final class Java2DImageRenderService implements ImageRenderService {
     public Java2DImageRenderService(final ImageReader imageReader,
                                     final ImageScaler imageScaler,
                                     final BorderComposer borderComposer,
+                                    final BorderStyleRenderer borderStyleRenderer,
                                     final TextRenderer textRenderer,
                                     final ImageEncoder imageEncoder,
                                     final LogoRenderer logoRenderer) {
         this.imageReader = imageReader;
         this.imageScaler = imageScaler;
         this.borderComposer = borderComposer;
+        this.borderStyleRenderer = borderStyleRenderer;
         this.textRenderer = textRenderer;
         this.imageEncoder = imageEncoder;
         this.logoRenderer = logoRenderer;
     }
 
     @Override
-    public BufferedImage compose(final RenderRecipe recipe, final int maxWidth, final int maxHeight) {
-        BufferedImage source = imageReader.read(recipe.getImagePath());
+    public ComposeOutcome compose(final RenderRecipe recipe, final int maxWidth, final int maxHeight) {
+        // 读取并记录解码来源（标准格式 / RAW 真实显影 / 嵌入预览降级）
+        final ImageReader.ReadResult read = imageReader.readWithSource(recipe.getImagePath());
+        BufferedImage source = read.getImage();
         BufferedImage scaled = imageScaler.scale(source, maxWidth, maxHeight);
         BufferedImage canvas = borderComposer.compose(scaled, recipe.getBorder(), recipe.getGradient());
+        // 边框风格装饰：绘制在边框背景之上、文字与品牌标识之下；
+        // 未识别的风格 id 或 null 时保持原始行为
+        borderStyleRenderer.draw(canvas, recipe.getBorderStyle(), recipe.getBorder(),
+                scaled.getWidth(), scaled.getHeight());
         // 文字定位需要区分「图片区域」与「边框区域」，传入边框配置与缩放后图片尺寸
         textRenderer.draw(canvas, recipe.getTexts(), recipe.getBorder(),
                 scaled.getWidth(), scaled.getHeight());
         // 品牌标识绘制（如果启用）
         logoRenderer.draw(canvas, recipe.getLogo(), recipe.getBorder());
-        return canvas;
+        return new ComposeOutcome(canvas, read.getSourceDecode());
     }
 
     @Override

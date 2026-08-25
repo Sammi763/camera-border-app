@@ -23,6 +23,21 @@ export type ImageSourceResult = {
 }
 
 /**
+ * 引擎托管诊断信息（引擎启动失败页面使用）。
+ * 字段与 Electron 主进程 engineDiagnostics 一致，前端独立维护副本。
+ */
+export type EngineDiagnostics = {
+  /** 诊断分类。 */
+  readonly code: "ok" | "jar-missing" | "runtime-missing" | "start-failed" | "port-conflict" | "health-timeout" | "unknown"
+  /** 面向用户的中文描述。 */
+  readonly message: string
+  /** 引擎日志文件绝对路径（可为空）。 */
+  readonly logPath: string | null
+  /** 引擎进程是否存活。 */
+  readonly processAlive: boolean
+}
+
+/**
  * preload 暴露的精选运行时能力。渲染进程调用这些轻量桥接方法，
  * 真正的工作由主进程执行，从而确保渲染进程永远无法直接访问
  * 文件系统（ARCHITECTURE.md §1）。
@@ -114,6 +129,24 @@ export type DesktopBridge = {
    * 返回字体族名称数组；获取失败时返回空数组。
    */
   readonly listSystemFonts: () => Promise<readonly string[]>
+  /**
+   * 在系统文件管理器中打开指定目录（批量导出后查看产物）。
+   * 目录不存在或打开失败时返回 false，不会抛出异常。
+   */
+  readonly openDirectory: (dirPath: string) => Promise<boolean>
+  /**
+   * 读取引擎托管诊断信息（引擎启动失败页面使用）。
+   * 仅托管模式下有意义；未托管或桌面桥不存在时返回 null。
+   */
+  readonly getEngineDiagnostics: () => Promise<EngineDiagnostics | null>
+  /** 请求桌面壳重试启动引擎（引擎启动失败页面使用）。 */
+  readonly retryEngineStart: () => Promise<boolean>
+  /**
+   * 展示系统通知（导出完成/失败反馈）。
+   * title/body 必须是字符串且非空；参数非法或平台不支持时返回 false，
+   * 不会抛出异常。通知只展示文件名等简短文案，不展示绝对路径。
+   */
+  readonly showNotification: (title: string, body: string) => Promise<boolean>
 }
 
 declare global {

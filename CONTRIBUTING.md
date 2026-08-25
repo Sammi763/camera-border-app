@@ -31,13 +31,13 @@ pnpm install
 # 1. 先启动 Java 引擎（dev 模式不会自动启动 jar）
 cd java-engine && mvn spring-boot:run
 #   或在 IDEA 中运行 java-engine/src/main/java/com/camborder/app/CameraBorderApplication.java
-#   引擎地址：http://127.0.0.1:8080
+#   引擎地址：http://127.0.0.1:8099
 
 # 2. 再一键启动前端 + Electron
 cd .. && pnpm dev
 ```
 
-`pnpm dev` 执行 `scripts/dev.sh`：启动 Vite（127.0.0.1:5173，`strictPort`），
+`pnpm dev` 执行 `scripts/dev.sh`：启动 Vite（127.0.0.1:5174，`strictPort`），
 就绪探测最多 20 秒后启动 Electron 并加载 Vite 页面。
 **若 Java 引擎未启动，预览的引擎同步会失败，界面降级到 Canvas 即时预览**（详见排障）。
 
@@ -46,16 +46,24 @@ cd .. && pnpm dev
 ```bash
 # Java 引擎
 cd java-engine
-mvn spring-boot:run        # http://127.0.0.1:8080
+mvn spring-boot:run        # http://127.0.0.1:8099
 
 # 前端（另一个终端）
 cd frontend
-pnpm dev                   # http://127.0.0.1:5173，Vite 代理 /api 与 /previews → 8080
+pnpm dev                   # http://127.0.0.1:5174，Vite 代理 /api 与 /previews → 8099
 
 # Electron（第三个终端）
 cd electron
-pnpm dev                   # 加载 Vite 页面，连接外部 Java 引擎
+pnpm dev                   # 先准备 macOS Electron 开发运行时，再加载 Vite 页面，连接外部 Java 引擎
 ```
+
+macOS 如果之前安装依赖时 Electron 二进制下载或解压中断，可在根目录手动恢复一次：
+
+```bash
+pnpm prepare:electron-dev
+```
+
+该命令只处理 `node_modules` 中的本地开发 Electron，不会修改正式打包的签名策略。
 
 ### 托管模式（验证 Electron 管理 jar 的行为，更接近打包后运行方式）
 
@@ -80,12 +88,43 @@ cd electron && pnpm dev:managed   # Electron 自行启动 jar + 加载 frontend/
 | `cd electron && pnpm dev:managed` | Electron 托管模式 |
 | `pnpm typecheck` | 根目录快捷：electron + frontend 类型检查 |
 | `pnpm build:frontend` | 根目录快捷：构建 frontend |
+| `pnpm build:engine` | 构建 Java 引擎 jar（`scripts/build-engine.sh`） |
+| `pnpm fetch:runtime` | 下载随包 Java Runtime（`scripts/fetch-runtime.sh`，打包前置步骤） |
+| `pnpm package` | 一键打包桌面应用（前端 + jar + JRE → electron-builder，`scripts/package-app.sh`） |
+| `bash scripts/smoke-test.sh <可执行文件>` | 打包产物冒烟测试（启动应用并等待引擎就绪） |
+
+## 打包链路（可安装产物）
+
+```bash
+# 1. 下载随包 Java Runtime（一次性；TARGETS="macos-arm64 macos-x64 win-x64" 可一次拉全）
+pnpm fetch:runtime
+
+# 2. 一键打包：前端构建 → 引擎 jar → 组装资源目录 → electron-builder
+pnpm package
+# macOS 指定架构：ARCH=arm64 pnpm run package / ARCH=x64 pnpm run package
+# macOS 交叉构建 Windows x64：TARGET_OS=win ARCH=x64 pnpm run package
+
+# 3. 冒烟测试（见 docs/release-checklist.md 的完整干净机器验收清单）
+bash scripts/smoke-test.sh "electron/release/<平台目录>/Camera Border.app/Contents/MacOS/Camera Border"
+```
+
+打包资源布局（extraResources，位于应用 resources 目录下）：
+`frontend/`（app:// 协议加载）、`java-engine/camera-border-engine.jar`、
+`java-runtime/`（Temurin JRE，由 `JavaBridge` 直接 spawn，用户无需安装 Java）。
+路径解析见 `electron/src/paths/paths.ts` 与 `engine/engineRuntime.ts`。
+安装包由 Electron 自带运行时启动，朋友的电脑不需要安装 Node.js 或 Python；
+Node/pnpm、JDK/Maven 仅是开发者构建安装包时需要的工具。
+
+Windows NSIS 交叉构建需要宿主机有可用的 Wine；electron-builder 通常会自动下载
+兼容工具链，离线环境需提前准备。即使构建成功，也要在真实 Windows 机器完成安装、
+启动、导入照片和导出验收。未签名的测试包可能触发 SmartScreen，这是当前发布限制，
+不代表应用运行失败。
 
 ## 验证路径（改哪跑哪）
 
 | 改动范围 | 最小验证 | 提交前全量验证 |
 |---|---|---|
-| java-engine 的 controller/service/util | `cd java-engine && mvn test` | `mvn test` + 冒烟：`curl http://127.0.0.1:8080/api/health`、`POST /api/preview` |
+| java-engine 的 controller/service/util | `cd java-engine && mvn test` | `mvn test` + 冒烟：`curl http://127.0.0.1:8099/api/health`、`POST /api/preview` |
 | frontend 功能/工具函数/组件 | `pnpm --filter frontend test` | `pnpm --filter frontend typecheck && pnpm --filter frontend test && pnpm --filter frontend build` |
 | electron 主进程/preload/IPC | `pnpm --filter electron typecheck` | `pnpm --filter electron typecheck` + dev 模式冒烟（导入 → 预览 → 导出） |
 | 跨子系统 API 契约（新增端点/DTO） | 两端 typecheck + 两端对应测试 | 完整 dev 冒烟：导入 → 预览一致 → 单图/批量导出 |
@@ -98,9 +137,10 @@ cd electron && pnpm dev:managed   # Electron 自行启动 jar + 加载 frontend/
 
 | 现象 | 原因 | 恢复 |
 |---|---|---|
-| 预览区显示「引擎未同步」或一直用 Canvas 降级预览 | Java 引擎没启动（dev 模式不自动起 jar） | 启动 java-engine（127.0.0.1:8080）后刷新 |
-| Electron 窗口空白/加载失败 | Vite 未就绪（dev.sh 20 秒超时仍会尝试启动 Electron） | 确认 5173 无占用（`strictPort`，占用即失败）、重跑 `pnpm dev` |
-| 8080 / 5173 端口被占用 | 其他进程占用 | 释放端口；改端口需同时改 `vite.config.ts` 与 `electron/src/engine/engineConfig.ts`（ENGINE_BASE_URL） |
+| 预览区显示「引擎未同步」或一直用 Canvas 降级预览 | Java 引擎没启动（dev 模式不自动起 jar） | 启动 java-engine（127.0.0.1:8099）后刷新 |
+| Electron 窗口空白/加载失败 | Vite 未就绪（dev.sh 20 秒超时仍会尝试启动 Electron） | 确认 5174 无占用（`strictPort`，占用即失败）、重跑 `pnpm dev` |
+| macOS 提示已阻止 Electron 或“恶意软件” | Electron npm 开发二进制不完整或 ad-hoc 签名未被当前系统接受 | 执行 `pnpm prepare:electron-dev`，再重跑 `cd electron && pnpm dev` |
+| 8099 / 5174 端口被占用 | 其他进程占用 | 释放端口；临时用 `CAMBORDER_ENGINE_PORT` / `CAMBORDER_FRONTEND_PORT` 覆盖 |
 | 托管模式启动失败 | 缺少 jar 或 frontend/dist | 按「托管模式」顺序先 `mvn package` 与 `pnpm build` |
 | HEIC 图片导入后该项失败（resolved=null） | HEIC 转换仅 macOS（`sips`）；Windows/Linux 不支持 | 先转成 JPG/PNG；或确认平台为 macOS |
 | `GET /api/render-jobs/{jobId}` 返回 404 | 任务状态在内存（`RenderJobStore`），引擎重启即丢失 | 重新发起导出任务；批量导出重跑即可 |

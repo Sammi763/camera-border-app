@@ -72,6 +72,7 @@ const DEFAULT_SETTINGS: RenderSettings = {
       { offset: 1, color: "#ffffff" }
     ]
   },
+  borderStyle: null,
   exportFormat: "png",
   jpegQuality: 95,
   outputSizePreset: "original",

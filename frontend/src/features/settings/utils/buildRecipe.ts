@@ -74,7 +74,8 @@ export const buildRecipeFromSettings = (
     texts: buildTextsFromSettings(settings, textOverride, resolvedTexts),
     filmFormat: settings.filmFormat,
     autoCrop: settings.autoCrop,
-    logo
+    logo,
+    borderStyle: settings.borderStyle
   }
 }
 

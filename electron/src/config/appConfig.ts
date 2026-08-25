@@ -6,7 +6,7 @@
  */
 
 /** 应用名称，用于窗口标题等。 */
-export const APP_NAME = "相机边框工具"
+export const APP_NAME = "Camera Border"
 
 /** 主窗口默认宽度。 */
 export const WINDOW_DEFAULT_WIDTH = 1400

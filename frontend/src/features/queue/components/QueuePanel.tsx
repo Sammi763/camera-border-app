@@ -13,13 +13,19 @@ type QueuePanelProps = {
 const QueueRow = ({
   item,
   thumbUrl,
-  onSelect
+  isActive,
+  isChecked,
+  onSelect,
+  onToggleCheck
 }: {
   readonly item: QueueItem
   readonly thumbUrl: string | undefined
+  readonly isActive: boolean
+  readonly isChecked: boolean
   readonly onSelect: (id: string) => void
+  readonly onToggleCheck: (id: string) => void
 }): JSX.Element => {
-  const rowClassName = item.isSelected ? "queueItem isSelected" : "queueItem"
+  const rowClassName = isActive ? "queueItem isActive" : "queueItem"
   const hasPreset = item.presetId !== null
   const hasIdentity = item.identityOverride !== null && Object.keys(item.identityOverride).length > 0
 
@@ -36,6 +42,15 @@ const QueueRow = ({
         }
       }}
     >
+      {/* 批量选中复选框：点击只切换勾选，不切换当前预览图 */}
+      <input
+        type="checkbox"
+        className="queueItemCheck"
+        aria-label={`批量选中 ${item.fileName}`}
+        checked={isChecked}
+        onChange={() => onToggleCheck(item.id)}
+        onClick={(e) => e.stopPropagation()}
+      />
       {thumbUrl !== undefined ? (
         <img className="queueThumbImg" src={thumbUrl} alt="" aria-hidden="true" />
       ) : (
@@ -70,7 +85,7 @@ const QueueRow = ({
         <span className="queueSub" title={item.filePath}>{toDirPath(item.filePath)}</span>
       </span>
       <span className="queueSelectBadge">
-        {item.isSelected ? "当前" : "选择"}
+        {isActive ? "当前" : "选择"}
       </span>
     </li>
   )
@@ -88,6 +103,13 @@ export const QueuePanel = ({ queue }: QueuePanelProps): JSX.Element => {
   )
 
   const thumbnails = useThumbnails(filePaths)
+
+  const checkedIdSet = useMemo(
+    () => new Set(queue.checkedItemIds),
+    [queue.checkedItemIds]
+  )
+
+  const allChecked = !isEmpty && queue.checkedCount === queue.items.length
 
   /** 选择文件夹导入，空文件夹时显示中文提示。 */
   const handleAddFolder = useCallback(async (): Promise<void> => {
@@ -218,16 +240,32 @@ export const QueuePanel = ({ queue }: QueuePanelProps): JSX.Element => {
               key={item.id}
               item={item}
               thumbUrl={thumbnails.get(item.filePath)}
-              onSelect={queue.select}
+              isActive={item.id === queue.activeItemId}
+              isChecked={checkedIdSet.has(item.id)}
+              onSelect={queue.setActive}
+              onToggleCheck={queue.toggleChecked}
             />
           ))}
         </ul>
       )}
 
-      {/* 底部操作 */}
+      {/* 底部操作：批量选择状态 + 全选/取消全选 + 清空 */}
       {!isEmpty && (
         <div className="queueActions">
-          <span className="queueCount">{queue.items.length} 张图片</span>
+          <span className="queueCount">
+            {queue.items.length} 张图片
+            {queue.checkedCount > 0 && (
+              <span className="queueCheckedCount"> · 已选 {queue.checkedCount} 张</span>
+            )}
+          </span>
+          <button
+            type="button"
+            className="ghostButton"
+            onClick={allChecked ? queue.uncheckAll : queue.checkAll}
+            title={allChecked ? "取消全选" : "全选队列全部图片"}
+          >
+            {allChecked ? "取消全选" : "全选"}
+          </button>
           <button type="button" className="ghostButton" onClick={queue.clear}>
             清空
           </button>

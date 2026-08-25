@@ -21,8 +21,16 @@ export const isDevMode: boolean = typeof rendererUrlEnv === "string"
  */
 export const rendererUrl: string = rendererUrlEnv ?? "app://app/index.html"
 
-/** 引擎基础 URL，开发和生产均指向本地 8080。 */
-export const engineBaseUrl: string = "http://127.0.0.1:8080"
+/**
+ * 引擎端口：默认 8099；可用环境变量 CAMBORDER_ENGINE_PORT 覆盖。
+ * 用途：开发模式与 Electron 托管模式共用同一端口配置。
+ */
+const enginePortEnv = process.env["CAMBORDER_ENGINE_PORT"]
+export const enginePort: string =
+  enginePortEnv !== undefined && /^\d+$/.test(enginePortEnv) ? enginePortEnv : "8099"
+
+/** 引擎基础 URL，开发和生产均指向本地引擎端口。 */
+export const engineBaseUrl: string = `http://127.0.0.1:${enginePort}`
 
 /**
  * 引擎是否由桌面壳管理。

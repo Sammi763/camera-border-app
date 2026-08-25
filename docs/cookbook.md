@@ -153,3 +153,45 @@ grep -rn '](\.' README.md AGENTS.md CONTRIBUTING.md ARCHITECTURE.md DESIGN.md do
 ```
 
 **可验证终点**：以上命令全部通过；无指向不存在文件的相对链接。
+
+## 新增一种边框风格（Canvas + Java2D 双端）
+
+风格几何规格的唯一权威定义在 `java-engine/src/main/java/com/camborder/app/util/BorderStyleRenderer`
+的类注释。新增风格必须双端同步实现：
+
+1. **Java 端**：在 `BorderStyleRenderer.draw` 的 switch 中增加 case 与私有绘制方法，
+   遵循公共约定（intensity 因子 fi、edgeWidth=ew、paperTone 经 ColorParser 解析）；
+2. **Canvas 端**：在 `frontend/src/features/preview/canvas/canvasRenderer.ts` 的
+   `drawBorderStyle` switch 中按同一几何公式实现；
+3. **测试**：Java 侧参照 `BorderStyleRendererTest` 做像素断言；前端在
+   `renderConsistency.test.ts` 的风格用例中把新 id 加入「不抛异常」列表；
+4. **模板**：如需内置模板，在 `builtInTemplates.ts` 的 `STYLE_TEMPLATES` 中追加，
+   `settingsPatch.borderStyle` 携带新 id。
+
+注意：未识别的 id 两端都必须静默忽略（回退原行为）；`intensity=0` 不绘制任何内容。
+
+## 新增/调整 RAW 显影链路
+
+- 引擎入口：`service/RawDevelopService` + `impl/LibRawCliDevelopServiceImpl`
+  （CLI 契约：`camborder-libraw-sampler <input> <output.tiff>`，超时 `app.raw.timeout-ms`，
+  路径注入 `CAMBORDER_LIBRAW_PATH` 或配置 `app.raw.cli-path`）。
+- 路由与降级：`util/ImageReader.readWithSource`——显影成功 `raw-developed`；
+  失败/未配置显式降级 `embedded-preview-fallback` 并携带中文 warning。
+- 原生程序源码：`native/libraw_sampler.cpp`；构建：`bash scripts/build-libraw.sh`。
+  默认输出到 `dist-libraw/<platform>-<arch>/`，目录名需与打包目标一致（macOS 使用
+  `macos-arm64` / `macos-x64`，Windows 使用 `win-x64`）。
+- 测试：`LibRawCliDevelopServiceImplTest`（成功/失败/超时/临时文件清理）、
+  `ImageReaderRoutingTest`（9 种 RAW 扩展名路由与降级）。
+
+## 打包与冒烟
+
+```bash
+pnpm fetch:runtime                       # 下载对应平台 JRE（可 TARGETS=... 多平台）
+ARCH=arm64 pnpm run package              # 每次一个架构（JRE 必须匹配）
+TARGET_OS=win ARCH=x64 pnpm run package  # macOS 交叉构建 Windows x64（需可用 Wine）
+CAMBORDER_SMOKE_PORT=8091 bash scripts/smoke-test.sh <app 可执行文件>
+```
+
+签名要点（macOS）：electron-builder 的 afterPack 钩子对嵌套 framework/helper 与外层
+做 ad-hoc 签名，**绝不重签 Resources/java-runtime**（覆盖 Temurin 原始 hardened-runtime
+签名会导致 java 进程被内核 SIGKILL）。正式分发替换为开发者证书 + 公证。

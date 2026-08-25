@@ -12,7 +12,7 @@
 
 - `electron/`：桌面壳。窗口生命周期、系统能力（文件选择/保存）、启动与管理本地 Java 引擎。**不实现业务渲染逻辑。**
 - `frontend/`：工作台 UI。交互、状态、Canvas 即时预览、任务状态展示。**不直接操作本地文件系统和 Java 进程**（只能经 preload 暴露的 `window.desktop` 或 Java HTTP API）。
-- `java-engine/`：本地图像引擎（Spring Boot，端口 8080）。读取、渲染、导出、EXIF。**不关心 UI。**
+- `java-engine/`：本地图像引擎（Spring Boot，端口 8099）。读取、渲染、导出、EXIF。**不关心 UI。**
 
 跨子系统通信只能走明确接口（preload/IPC 或 HTTP API），禁止隐式耦合。
 

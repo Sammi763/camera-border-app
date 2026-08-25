@@ -35,13 +35,17 @@ import java.util.List;
  *   坐标以对应边框区域为基准，水平在整张画布内居中，垂直在边框区域内居中。
  *   marginY 为相对边框区域垂直中心的向下偏移（非负）。
  *   边框高度不足以放下文字时仍按公式计算基线，不抛异常。
+ * - 边框角落（摄影信息卡预设布局）：border-top-left / border-top-right /
+ *   border-bottom-left / border-bottom-right
+ *   垂直与对应边框区域居中对齐；水平贴近对应角落，marginX 为距左右边框
+ *   外边缘的内缩距离（左对齐贴 borderLeft，右对齐贴 borderRight）。
  * - 旧值兼容：
  *   - top-center：保持旧行为，相对整张画布顶部定位。
  *   - center：映射为 image-center。
  *   - bottom-center：保持旧行为，相对整张画布底部定位。
  * - 未识别的非空 placement：抛受控异常。
  *
- * marginX 暂不参与居中排版。
+ * marginX 仅在角落 placement（border-*-left / border-*-right）参与水平定位。
  */
 @Component
 public final class TextRenderer {
@@ -66,6 +70,7 @@ public final class TextRenderer {
         int borderTop = insets[0];
         int borderBottom = insets[1];
         int borderLeft = insets[2];
+        int borderRight = insets[3];
         int imageX = borderLeft;
         int imageY = borderTop;
         int canvasWidth = canvas.getWidth();
@@ -93,7 +98,7 @@ public final class TextRenderer {
 
                 drawSingleText(graphics, text, placement, content,
                         imageX, imageY, imageWidth, imageHeight,
-                        borderTop, borderBottom,
+                        borderTop, borderBottom, borderLeft, borderRight,
                         canvasWidth, canvasHeight);
             }
         } finally {
@@ -102,13 +107,14 @@ public final class TextRenderer {
     }
 
     /**
-     * 绘制单段文字：计算坐标 → 画背景条 → 画阴影 → 画描边 → 画正文。
+     * 绘制单段文字：计算坐标 -> 画背景条 -> 画阴影 -> 画描边 -> 画正文。
      */
     private void drawSingleText(final Graphics2D graphics, final TextItem text,
                                 final String placement, final String content,
                                 final int imageX, final int imageY,
                                 final int imageWidth, final int imageHeight,
                                 final int borderTop, final int borderBottom,
+                                final int borderLeft, final int borderRight,
                                 final int canvasWidth, final int canvasHeight) {
         int fontSize = text.getFontSize() > 0 ? text.getFontSize() : 16;
         String family = text.getFontFamily();
@@ -121,6 +127,7 @@ public final class TextRenderer {
         int ascent = metrics.getAscent();
         int descent = metrics.getDescent();
         int marginY = Math.max(0, text.getMarginY());
+        int marginX = Math.max(0, text.getMarginX());
 
         // 计算文字基线坐标
         int x;
@@ -144,6 +151,22 @@ public final class TextRenderer {
                 break;
             case "border-bottom-center":
                 x = (canvasWidth - textWidth) / 2;
+                y = (canvasHeight - borderBottom) + (borderBottom - textHeight) / 2 + ascent + marginY;
+                break;
+            case "border-top-left":
+                x = borderLeft + marginX;
+                y = (borderTop - textHeight) / 2 + ascent + marginY;
+                break;
+            case "border-top-right":
+                x = canvasWidth - borderRight - marginX - textWidth;
+                y = (borderTop - textHeight) / 2 + ascent + marginY;
+                break;
+            case "border-bottom-left":
+                x = borderLeft + marginX;
+                y = (canvasHeight - borderBottom) + (borderBottom - textHeight) / 2 + ascent + marginY;
+                break;
+            case "border-bottom-right":
+                x = canvasWidth - borderRight - marginX - textWidth;
                 y = (canvasHeight - borderBottom) + (borderBottom - textHeight) / 2 + ascent + marginY;
                 break;
             case "top-center":

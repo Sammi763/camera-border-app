@@ -76,30 +76,30 @@ final class DevPhotoControllerTest {
     class DevCorsPolicy {
 
         @Test
-        void shouldAllowLocalhost5173Origin() throws Exception {
+        void shouldAllowLocalhost5174Origin() throws Exception {
             // 预检请求来自允许的 origin，应返回对应 CORS 头
             mockMvc.perform(options("/api/dev/photos")
-                            .header("Origin", "http://localhost:5173")
+                            .header("Origin", "http://localhost:5174")
                             .header("Access-Control-Request-Method", "GET"))
                     .andExpect(status().isOk())
                     .andExpect(header().string("Access-Control-Allow-Origin",
-                            "http://localhost:5173"));
+                            "http://localhost:5174"));
         }
 
         @Test
-        void shouldAllowLoopback1275173Origin() throws Exception {
+        void shouldAllowLoopback1275174Origin() throws Exception {
             mockMvc.perform(options("/api/dev/photos")
-                            .header("Origin", "http://127.0.0.1:5173")
+                            .header("Origin", "http://127.0.0.1:5174")
                             .header("Access-Control-Request-Method", "GET"))
                     .andExpect(status().isOk())
                     .andExpect(header().string("Access-Control-Allow-Origin",
-                            "http://127.0.0.1:5173"));
+                            "http://127.0.0.1:5174"));
         }
 
         @Test
         void shouldEchoAllowedMethodsForPreflight() throws Exception {
             mockMvc.perform(options("/api/dev/photos")
-                            .header("Origin", "http://localhost:5173")
+                            .header("Origin", "http://localhost:5174")
                             .header("Access-Control-Request-Method", "POST"))
                     .andExpect(status().isOk())
                     .andExpect(header().string("Access-Control-Allow-Methods",
@@ -110,10 +110,10 @@ final class DevPhotoControllerTest {
         void shouldAttachCorsHeaderOnActualGet() throws Exception {
             // 真实 GET 请求带允许的 Origin 时也应回带 CORS 头
             mockMvc.perform(get("/api/dev/photos")
-                            .header("Origin", "http://localhost:5173"))
+                            .header("Origin", "http://localhost:5174"))
                     .andExpect(status().isOk())
                     .andExpect(header().string("Access-Control-Allow-Origin",
-                            "http://localhost:5173"));
+                            "http://localhost:5174"));
         }
 
         @Test

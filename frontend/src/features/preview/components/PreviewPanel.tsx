@@ -8,7 +8,7 @@ import { buildRecipeFromSettings } from "../../settings/utils/buildRecipe"
 import { resolveOutputSizeFromSettings } from "../../settings/utils/outputSizePresets"
 import type { RenderSettings } from "../../settings/types"
 import type { EngineSyncStatus, PreviewState } from "../types"
-import type { ExportSettings, FeatureResult, RenderJobRequest, RenderJobStatusResponse } from "../../../types/preview"
+import type { ExportSettings, FeatureResult, RenderJobRequest, RenderJobStatusResponse, SourceDecode } from "../../../types/preview"
 import { buildResolvedRenderSettings } from "../../settings/utils/buildTexts"
 import type { QueueItem } from "../../queue/types"
 
@@ -16,8 +16,12 @@ type PreviewPanelProps = {
   readonly state: PreviewState
   readonly settings: RenderSettings
   readonly hasSelectedImage: boolean
-  /** 队列图片（批量导出数据源，逐项惰性解析）。 */
+  /** 队列图片（单图导出数据源，逐项惰性解析）。 */
   readonly queueItems: readonly QueueItem[]
+  /** 批量导出目标图片（由父层按作用范围计算：勾选图片或全部图片）。 */
+  readonly batchExportItems: readonly QueueItem[]
+  /** 批量导出按钮文案（含作用范围说明，例如「批量导出已选 2 张」）。 */
+  readonly batchExportLabel: string
   /** 单张图片的批量导出解析器：文字覆盖 + 多段文字变量 + 品牌。 */
   readonly resolveQueueItem: (item: QueueItem) => ResolvedQueueItem
   /**
@@ -31,6 +35,8 @@ type PreviewPanelProps = {
   readonly resolvedTextOverride?: string | null
   /** 当前选中图片的已解析多段文字图层内容数组。 */
   readonly resolvedTextLayers?: readonly (string | null)[] | null
+  /** 批量导出完成后是否自动打开输出目录（桌面模式，失败静默）。 */
+  readonly autoOpenExportDirectory?: boolean
 }
 
 /** 单张图片的批量导出解析结果（与 WorkspacePage.resolveQueueItem 对齐）。 */
@@ -55,6 +61,24 @@ const featureResultLabel = (result: FeatureResult | undefined): string | null =>
   }
 }
 
+/** 解码来源状态的展示文案。 */
+export const sourceDecodeLabel = (sourceDecode: SourceDecode): string | null => {
+  switch (sourceDecode.mode) {
+    case "raw-developed":
+      return "RAW 已真实显影（LibRaw）"
+    case "embedded-preview-fallback":
+      return sourceDecode.warning ?? "RAW 已降级为嵌入预览"
+    default:
+      return null
+  }
+}
+
+/** 系统通知不展示本机绝对路径，避免把用户目录泄露到通知正文。 */
+const sanitizeNotificationBody = (body: string): string => {
+  const absolutePathPattern = /(?:file:\/\/)?(?:\/|[A-Za-z]:[\\/])[^()\n\r]*?(?=[）)\n\r]|$)/g
+  return body.replace(absolutePathPattern, "相关文件")
+}
+
 /** 从 RenderJobStatusResponse 构建导出摘要。 */
 const buildExportSummary = (result: RenderJobStatusResponse): readonly string[] => {
   const lines: string[] = []
@@ -64,6 +88,10 @@ const buildExportSummary = (result: RenderJobStatusResponse): readonly string[] 
   if (icc !== null) lines.push(`ICC：${icc}`)
   const bitDepth = featureResultLabel(result.highBitDepth)
   if (bitDepth !== null) lines.push(`高位深：${bitDepth}`)
+  const decode = result.sourceDecode !== undefined && result.sourceDecode !== null
+    ? sourceDecodeLabel(result.sourceDecode)
+    : null
+  if (decode !== null) lines.push(decode)
   return lines
 }
 
@@ -77,7 +105,7 @@ type ExportJobState =
   | { readonly kind: "error"; readonly message: string }
 
 /** 批量导出单项结果。 */
-type BatchExportItemResult = {
+export type BatchExportItemResult = {
   readonly fileName: string
   readonly success: boolean
   readonly actualFormat: string | null
@@ -90,7 +118,7 @@ type BatchExportState =
   | { readonly kind: "idle" }
   | { readonly kind: "preparing"; readonly total: number }
   | { readonly kind: "running"; readonly total: number; readonly current: number; readonly success: number; readonly failed: number }
-  | { readonly kind: "completed"; readonly total: number; readonly success: number; readonly failed: number; readonly results: readonly BatchExportItemResult[] }
+  | { readonly kind: "completed"; readonly total: number; readonly success: number; readonly failed: number; readonly results: readonly BatchExportItemResult[]; readonly dirPath: string }
   | { readonly kind: "error"; readonly message: string }
 
 /** 引擎同步状态对应的中文文案。 */
@@ -133,6 +161,27 @@ const deriveBrowserExportPath = (filePath: string, exportFileName: string): stri
       const root = filePath.slice(0, idx)
       return `${root}/exports/${exportFileName}`
     }
+  }
+  return null
+}
+
+/** 解码来源徽标：真实显影为绿色，降级为警示色并显示原因。 */
+const DecodeSourceBadge = ({ sourceDecode }: { readonly sourceDecode: SourceDecode | null }): JSX.Element | null => {
+  if (sourceDecode === null || sourceDecode === undefined) {
+    return null
+  }
+  if (sourceDecode.mode === "raw-developed") {
+    return <span className="decodeBadge decodeBadgeDeveloped">RAW 已真实显影</span>
+  }
+  if (sourceDecode.mode === "embedded-preview-fallback") {
+    return (
+      <span
+        className="decodeBadge decodeBadgeFallback"
+        title={sourceDecode.warning ?? "RAW 已降级为嵌入预览"}
+      >
+        RAW 已降级为嵌入预览
+      </span>
+    )
   }
   return null
 }
@@ -344,6 +393,8 @@ const CanvasPreview = ({
         {syncLabel.length > 0 && (
           <span className={syncClassName}>{syncLabel}</span>
         )}
+        {/* RAW 解码来源徽标：真实显影 / 显式降级说明 */}
+        <DecodeSourceBadge sourceDecode={state.engineResponse?.sourceDecode ?? null} />
         <span className="previewViewportControls">
           <button type="button" className="ghostButton previewViewportBtn" onClick={viewport.resetToFit}>适应</button>
           <span className="previewZoomLabel">{modeLabel}</span>
@@ -379,20 +430,65 @@ export const PreviewPanel = ({
   settings,
   hasSelectedImage,
   queueItems,
+  batchExportItems,
+  batchExportLabel,
   resolveQueueItem,
   prepareExifForExport,
   resolvedBrand,
   resolvedTextOverride,
-  resolvedTextLayers
+  resolvedTextLayers,
+  autoOpenExportDirectory = false
 }: PreviewPanelProps): JSX.Element => {
   const [exportJob, setExportJob] = useState<ExportJobState>({ kind: "idle" })
   const [batchExport, setBatchExport] = useState<BatchExportState>({ kind: "idle" })
+
+  // 批量导出跨轮（含失败重试）持久状态：输出目录、已用文件名集合、结果数组、
+  // 以及「首次导出时的目标批次快照」——用户之后改变勾选范围，
+  // 重试仍然只针对原批次的失败项，结果与统计对应同一批次。
+  const dirPathRef = useRef<string | null>(null)
+  const usedNamesRef = useRef<Set<string>>(new Set())
+  const resultsRef = useRef<BatchExportItemResult[]>([])
+  const batchSnapshotRef = useRef<readonly QueueItem[]>([])
 
   // 构建已解析的渲染态 settings，供 Canvas 和单图导出共用。
   // 确保文字变量、textOverride、auto-brand 品牌在同一处合并。
   const resolvedSettings = buildResolvedRenderSettings(
     settings, resolvedTextOverride, resolvedTextLayers, resolvedBrand
   )
+
+  /** 桌面模式在输出目录中打开系统文件管理器（失败静默，不打断导出流程）。 */
+  const openExportDirectory = useCallback((dirPath: string): void => {
+    const openDirectory = window.desktop?.openDirectory
+    if (openDirectory === undefined) {
+      return
+    }
+    void openDirectory(dirPath).catch(() => {
+      // 打开目录失败静默
+    })
+  }, [])
+
+  /**
+   * 发送系统通知（桌面模式）。浏览器模式或旧版 Electron 无此能力时静默跳过，
+   * 工作台内状态始终保留作为持续可见反馈；通知失败不影响导出结果。
+   */
+  const notifySystem = useCallback((title: string, body: string): void => {
+    const showNotification = window.desktop?.showNotification
+    if (showNotification === undefined) {
+      return
+    }
+    void showNotification(title, sanitizeNotificationBody(body)).catch(() => {
+      // 通知失败静默降级
+    })
+  }, [])
+
+  /** 批量结束后按最终统计发送对应系统通知（全部成功 / 部分失败）。 */
+  const notifyBatchResult = useCallback((success: number, failed: number): void => {
+    if (failed === 0) {
+      notifySystem("批量导出完成", `成功导出 ${success} 张`)
+    } else {
+      notifySystem("批量导出部分失败", `成功 ${success} 张，失败 ${failed} 张`)
+    }
+  }, [notifySystem])
 
   const handleHighQualityExport = useCallback(async () => {
     if (state.kind !== "active") {
@@ -413,10 +509,12 @@ export const PreviewPanel = ({
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "无法选择导出位置"
       setExportJob({ kind: "error", message })
+      notifySystem("导出失败", `${state.fileName}（${message}）`)
       return
     }
 
     if (outputPath === null) {
+      // 用户取消保存路径：不发送通知，静默回到空闲态
       if (window.desktop !== undefined) {
         setExportJob({ kind: "idle" })
       } else {
@@ -434,6 +532,7 @@ export const PreviewPanel = ({
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "读取照片 EXIF 失败"
       setExportJob({ kind: "error", message })
+      notifySystem("导出失败", `${state.fileName}（${message}）`)
       return
     }
 
@@ -467,20 +566,22 @@ export const PreviewPanel = ({
           actualFormat: result.actualFormat ?? settings.exportFormat,
           summary: buildExportSummary(result)
         })
+        notifySystem("导出完成", state.fileName)
       } else {
-        setExportJob({
-          kind: "error",
-          message: result.error ?? "导出失败，未知错误。"
-        })
+        const message = result.error ?? "导出失败，未知错误。"
+        setExportJob({ kind: "error", message })
+        notifySystem("导出失败", `${state.fileName}（${message}）`)
       }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "导出请求失败"
       setExportJob({ kind: "error", message })
+      notifySystem("导出失败", `${state.fileName}（${message}）`)
     }
-  }, [state, queueItems, resolveQueueItem, prepareExifForExport, settings])
+  }, [state, queueItems, resolveQueueItem, prepareExifForExport, settings, notifySystem])
 
   const handleBatchExport = useCallback(async () => {
-    if (queueItems.length === 0) {
+    const items = batchExportItems
+    if (items.length === 0) {
       return
     }
 
@@ -494,7 +595,7 @@ export const PreviewPanel = ({
     }
 
     const ext = settings.exportFormat === "jpeg" ? "jpg" : settings.exportFormat === "tiff" ? "tif" : "png"
-    const total = queueItems.length
+    const total = items.length
 
     // 先锁定批量导出，再选择目录和读取 EXIF，避免用户重复点击造成并行批量任务。
     setBatchExport({ kind: "preparing", total })
@@ -516,32 +617,63 @@ export const PreviewPanel = ({
     // 批量导出关键修复：先逐张读取队列中全部图片的 EXIF（含失败降级），
     // 全部完成后才开始构建 RenderRecipe，保证每张图都能用上自己的 EXIF。
     try {
-      await prepareExifForExport(queueItems.map((item) => item.filePath))
+      await prepareExifForExport(items.map((item) => item.filePath))
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "读取照片 EXIF 失败"
       setBatchExport({ kind: "error", message })
       return
     }
 
+    // 重置跨轮持久状态：输出目录、已用文件名、结果数组（结果数组保持与目标图片下标对齐）、
+    // 目标批次快照（重试以本批次为准，不受后续勾选变化影响）。
+    dirPathRef.current = dirPath
+    usedNamesRef.current = new Set()
+    resultsRef.current = new Array(total)
+    batchSnapshotRef.current = items
+
+    // 逐个导出；完成后自动打开输出目录（桌面模式）。
+    const completed = await runBatchExport(items, Array.from({ length: total }, (_, i) => i))
+    setBatchExport({ kind: "completed", total, success: completed.success, failed: completed.failed, results: completed.results, dirPath })
+    notifyBatchResult(completed.success, completed.failed)
+    if (autoOpenExportDirectory) {
+      openExportDirectory(dirPath)
+    }
+  }, [batchExportItems, resolveQueueItem, settings, prepareExifForExport, autoOpenExportDirectory, openExportDirectory, notifyBatchResult])
+
+  /**
+   * 并发导出指定范围的图片（第 0 轮为全部目标图片，重试轮为失败项）。
+   * indexes 与 items 一一对应：items[i] 的结果写入 resultsRef.current[indexes[i]]，
+   * 保证重试轮（失败下标不连续）仍能写回与目标图片对齐的位置。
+   * 返回本轮成功/失败数与最新结果数组。
+   */
+  const runBatchExport = useCallback(async (
+    items: readonly QueueItem[],
+    indexes: readonly number[]
+  ): Promise<{ success: number; failed: number; results: readonly BatchExportItemResult[] }> => {
+    const dirPath = dirPathRef.current
+    if (dirPath === null) {
+      return { success: 0, failed: items.length, results: resultsRef.current }
+    }
+
+    const ext = settings.exportFormat === "jpeg" ? "jpg" : settings.exportFormat === "tiff" ? "tif" : "png"
+    const total = items.length
     let success = 0
     let failed = 0
     let done = 0
-    const usedNames = new Set<string>()
-    // 保持结果与队列顺序一致（并发完成顺序不定）
-    const itemResults: BatchExportItemResult[] = new Array(total)
 
     setBatchExport({ kind: "running", total, current: 0, success: 0, failed: 0 })
 
     /**
      * 导出单张图片：惰性解析文字/品牌（EXIF 已并入身份链），
-     * 提交同步渲染任务并写回结果。
+     * 提交同步渲染任务并写回结果（写入与队列顺序一致的原始下标）。
      */
     const exportOne = async (index: number): Promise<void> => {
-      const item = queueItems[index]!
+      const item = items[index]!
+      const resultIndex = indexes[index]!
       const fileName = item.fileName
       const dotIndex = fileName.lastIndexOf(".")
       const baseName = dotIndex > 0 ? fileName.slice(0, dotIndex) : fileName
-      const outputPath = buildUniqueExportPath(dirPath, baseName, ext, usedNames)
+      const outputPath = buildUniqueExportPath(dirPath, baseName, ext, usedNamesRef.current)
 
       const { textOverride, resolvedLayers, brand } = resolveQueueItem(item)
 
@@ -560,7 +692,7 @@ export const PreviewPanel = ({
         const result = await submitAndWaitForRenderJob(request)
         if (result.status === "completed") {
           success++
-          itemResults[index] = {
+          resultsRef.current[resultIndex] = {
             fileName,
             success: true,
             actualFormat: result.actualFormat ?? settings.exportFormat,
@@ -569,7 +701,7 @@ export const PreviewPanel = ({
           }
         } else {
           failed++
-          itemResults[index] = {
+          resultsRef.current[resultIndex] = {
             fileName,
             success: false,
             actualFormat: null,
@@ -580,7 +712,7 @@ export const PreviewPanel = ({
       } catch (error: unknown) {
         failed++
         const message = error instanceof Error ? error.message : "导出请求失败"
-        itemResults[index] = {
+        resultsRef.current[resultIndex] = {
           fileName,
           success: false,
           actualFormat: null,
@@ -610,13 +742,54 @@ export const PreviewPanel = ({
     }
     await Promise.all(workers)
 
-    setBatchExport({ kind: "completed", total, success, failed, results: itemResults })
-  }, [queueItems, resolveQueueItem, settings, prepareExifForExport])
+    return { success, failed, results: resultsRef.current }
+  }, [resolveQueueItem, settings])
+
+  /**
+   * 批量导出完成后，仅重试「首次导出批次」的失败项。
+   * 使用 batchSnapshotRef 快照而非当前 props：用户之后改变勾选范围，
+   * 重试的对象、结果数组与统计仍然对应原批次。
+   */
+  const handleRetryFailed = useCallback(async () => {
+    if (batchExport.kind !== "completed" || batchExport.failed === 0) {
+      return
+    }
+    const snapshot = batchSnapshotRef.current
+    if (snapshot.length !== resultsRef.current.length) {
+      // 防御：快照与结果数组不一致时不重试，避免写错位置
+      return
+    }
+    const failedIndexes = snapshot
+      .map((_, index) => index)
+      .filter((index) => {
+        const result = resultsRef.current[index]
+        return result === undefined || !result.success
+      })
+    if (failedIndexes.length === 0) {
+      return
+    }
+    const failedItems = failedIndexes.map((index) => snapshot[index]!)
+    await runBatchExport(failedItems, failedIndexes)
+
+    // 重试后从快照批次的结果数组重新统计（resultsRef 已包含重试成功项，不能叠加轮次计数）
+    const finalResults = resultsRef.current
+    const successCount = finalResults.filter((r) => r !== undefined && r.success).length
+    const failedCount = snapshot.length - successCount
+    setBatchExport({
+      kind: "completed",
+      total: snapshot.length,
+      success: successCount,
+      failed: failedCount,
+      results: finalResults,
+      dirPath: dirPathRef.current ?? ""
+    })
+    notifyBatchResult(successCount, failedCount)
+  }, [batchExport, runBatchExport, notifyBatchResult])
 
   const canExport = state.kind === "active" && state.currentImage !== null
   const isExporting = exportJob.kind === "preparing" || exportJob.kind === "submitting" || exportJob.kind === "running"
   const isBatchExporting = batchExport.kind === "preparing" || batchExport.kind === "running"
-  const hasBatchItems = queueItems.length > 1
+  const hasBatchItems = batchExportItems.length > 0
 
   return (
     <Panel label="预览" title="预览区域" className="previewPanel">
@@ -633,34 +806,56 @@ export const PreviewPanel = ({
         <button
           type="button"
           className="ghostButton previewExportButton"
-          disabled={!canExport || isExporting}
+          disabled={!canExport || isExporting || isBatchExporting}
           onClick={() => void handleHighQualityExport()}
         >
-          {exportJob.kind === "preparing" ? "读取 EXIF…" : isExporting ? "导出中…" : "导出原图"}
+          {exportJob.kind === "preparing" ? "准备中…" : isExporting ? "渲染中…" : "导出原图"}
         </button>
         {hasBatchItems && (
           <button
             type="button"
             className="ghostButton previewExportButton"
-            disabled={isBatchExporting}
+            disabled={isBatchExporting || isExporting}
             onClick={() => void handleBatchExport()}
           >
             {batchExport.kind === "preparing"
               ? "读取 EXIF…"
               : isBatchExporting
               ? `批量导出中 ${batchExport.current}/${batchExport.total}…`
-              : `批量导出 ${queueItems.length} 张`}
+              : batchExportLabel}
           </button>
         )}
 
-        <span className="previewExportStatus">
+        <span className="previewExportStatus" aria-live="polite">
           {!hasSelectedImage && "请先选择一张图片"}
+          {/* 单图导出阶段进度：准备（选路径 + 读 EXIF）→ 渲染（引擎渲染写盘）。
+              不伪造引擎内部百分比，仅展示阶段语义。 */}
+          {(exportJob.kind === "preparing" || exportJob.kind === "submitting") && (
+            <span
+              className="previewExportPhase"
+              role="progressbar"
+              aria-label="单图导出进度"
+              aria-valuemin={0}
+              aria-valuemax={3}
+              aria-valuenow={exportJob.kind === "preparing" ? 1 : 2}
+              aria-valuetext={exportJob.kind === "preparing" ? "准备阶段（1/3）" : "引擎渲染阶段（2/3）"}
+            >
+              <span className="previewExportProgressTrack" aria-hidden="true">
+                <span
+                  className="previewExportProgressFill"
+                  style={{ width: exportJob.kind === "preparing" ? "33%" : "66%" }}
+                />
+              </span>
+              <span role="status" aria-label="单图导出进度">
+                {exportJob.kind === "preparing" ? "正在读取 EXIF…" : "正在渲染…"}
+              </span>
+            </span>
+          )}
           {hasSelectedImage && exportJob.kind === "idle" && batchExport.kind === "idle" && (
             window.desktop === undefined
               ? "浏览器降级模式：导出能力受限，建议启动桌面应用。"
               : "导出使用原图尺寸，由引擎渲染。"
           )}
-          {exportJob.kind === "preparing" && "正在读取 EXIF…"}
           {exportJob.kind === "completed" && (
             <span className="previewExportSuccess">
               导出完成（{exportJob.actualFormat.toUpperCase()}）：{exportJob.outputPath}
@@ -673,27 +868,81 @@ export const PreviewPanel = ({
             <span className="previewExportError">{exportJob.message}</span>
           )}
           {batchExport.kind === "running" && (
-            `进度 ${batchExport.current}/${batchExport.total}　成功 ${batchExport.success}　失败 ${batchExport.failed}`
+            // determinate 进度条：current/total + 成功/失败计数，辅助技术可读
+            <span
+              className="previewBatchProgress"
+              role="progressbar"
+              aria-label="批量导出进度"
+              aria-valuemin={0}
+              aria-valuemax={batchExport.total}
+              aria-valuenow={batchExport.current}
+              aria-valuetext={`已完成 ${batchExport.current}/${batchExport.total}，成功 ${batchExport.success} 张，失败 ${batchExport.failed} 张`}
+              aria-live="polite"
+            >
+              <span className="previewBatchProgressTrack" aria-hidden="true">
+                <span
+                  className="previewBatchProgressFill"
+                  style={{ width: `${batchExport.total > 0 ? (batchExport.current / batchExport.total) * 100 : 0}%` }}
+                />
+              </span>
+              <span className="previewBatchProgressLabel">
+                进度 {batchExport.current}/{batchExport.total}　成功 {batchExport.success}　失败 {batchExport.failed}
+              </span>
+            </span>
           )}
           {batchExport.kind === "preparing" && "正在读取 EXIF…"}
           {batchExport.kind === "completed" && (
-            <span className={batchExport.failed > 0 ? "previewExportError" : "previewExportSuccess"}>
-              批量导出完成：共 {batchExport.total} 张，成功 {batchExport.success}，失败 {batchExport.failed}
-              {batchExport.results.some((r) => r.summary.length > 0 || !r.success) && (
-                <span className="previewBatchDetails">
-                  {"（"}
-                  {batchExport.results.filter((r) => !r.success || r.summary.length > 0).map((r, idx) => (
+            <>
+              <span className={batchExport.failed > 0 ? "previewExportError" : "previewExportSuccess"}>
+                批量导出完成：共 {batchExport.total} 张，成功 {batchExport.success}，失败 {batchExport.failed}
+              </span>
+              {/* 失败文件明细 + 操作 */}
+              {batchExport.failed > 0 && (
+                <span className="previewBatchFailures">
+                  <span className="previewBatchFailureTitle">失败文件：</span>
+                  {batchExport.results.filter((r) => !r.success).map((r, idx) => (
                     <span key={idx}>
                       {idx > 0 && "；"}
-                      {r.fileName}：{r.success ? r.actualFormat?.toUpperCase() ?? "?" : "失败"}
-                      {!r.success && r.error !== null ? `（${r.error}）` : ""}
-                      {r.summary.length > 0 ? ` [${r.summary.join("，")}]` : ""}
+                      {r.fileName}
+                      {r.error !== null ? `（${r.error}）` : ""}
                     </span>
                   ))}
-                  {"）"}
                 </span>
               )}
-            </span>
+              {/* 引擎返回的 EXIF/ICC/高位深/RAW 摘要仍需在批量终态保留，便于用户发现降级。 */}
+              {batchExport.results.filter((result) => result.summary.length > 0).length > 0 && (
+                <span className="previewBatchSummaries">
+                  <span className="previewBatchSummaryTitle">导出摘要：</span>
+                  {batchExport.results.filter((result) => result.summary.length > 0).map((result, idx) => (
+                    <span key={`${result.fileName}-summary`}>
+                      {idx > 0 && "；"}
+                      {result.fileName}：{result.summary.join("；")}
+                    </span>
+                  ))}
+                </span>
+              )}
+              {/* 操作：打开目录 / 重试失败项 */}
+              <span className="previewBatchActions">
+                {window.desktop?.openDirectory !== undefined && (
+                  <button
+                    type="button"
+                    className="ghostButton previewBatchActionBtn"
+                    onClick={() => openExportDirectory(batchExport.dirPath)}
+                  >
+                    打开目录
+                  </button>
+                )}
+                {batchExport.failed > 0 && (
+                  <button
+                    type="button"
+                    className="ghostButton previewBatchActionBtn"
+                    onClick={() => void handleRetryFailed()}
+                  >
+                    重试失败项（{batchExport.failed}）
+                  </button>
+                )}
+              </span>
+            </>
           )}
           {batchExport.kind === "error" && (
             <span className="previewExportError">{batchExport.message}</span>
