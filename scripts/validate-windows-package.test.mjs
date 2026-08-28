@@ -122,3 +122,55 @@ test("构建清单记录安装包与目标平台", async () => {
     await rm(temp, { recursive: true, force: true })
   }
 })
+
+test("FORCE_UNSIGNED=1 时 manifest 标记 signed=false（未签名测试包明确标记）", async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), "camborder-package-test-"))
+  const prevForce = process.env.FORCE_UNSIGNED
+  const prevLink = process.env.CSC_LINK
+  const prevKey = process.env.CSC_KEY_PASSWORD
+  try {
+    const installer = path.join(temp, "Camera-Border-Setup-0.1.0-x64.exe")
+    await writeFile(installer, "MZ-test")
+    process.env.FORCE_UNSIGNED = "1"
+    delete process.env.CSC_LINK
+    delete process.env.CSC_KEY_PASSWORD
+    const manifest = await createWindowsManifest({
+      installerPath: installer,
+      version: "0.1.0",
+      commit: "abc123",
+      outputDir: temp
+    })
+    assert.equal(manifest.signed, false)
+  } finally {
+    if (prevForce === undefined) delete process.env.FORCE_UNSIGNED; else process.env.FORCE_UNSIGNED = prevForce
+    if (prevLink === undefined) delete process.env.CSC_LINK; else process.env.CSC_LINK = prevLink
+    if (prevKey === undefined) delete process.env.CSC_KEY_PASSWORD; else process.env.CSC_KEY_PASSWORD = prevKey
+    await rm(temp, { recursive: true, force: true })
+  }
+})
+
+test("提供 CSC_LINK + CSC_KEY_PASSWORD 且未强制未签名时 manifest 标记 signed=true", async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), "camborder-package-test-"))
+  const prevForce = process.env.FORCE_UNSIGNED
+  const prevLink = process.env.CSC_LINK
+  const prevKey = process.env.CSC_KEY_PASSWORD
+  try {
+    const installer = path.join(temp, "Camera-Border-Setup-0.1.0-x64.exe")
+    await writeFile(installer, "MZ-test")
+    delete process.env.FORCE_UNSIGNED
+    process.env.CSC_LINK = "/tmp/fake-cert.p12"
+    process.env.CSC_KEY_PASSWORD = "secret"
+    const manifest = await createWindowsManifest({
+      installerPath: installer,
+      version: "0.1.0",
+      commit: "abc123",
+      outputDir: temp
+    })
+    assert.equal(manifest.signed, true)
+  } finally {
+    if (prevForce === undefined) delete process.env.FORCE_UNSIGNED; else process.env.FORCE_UNSIGNED = prevForce
+    if (prevLink === undefined) delete process.env.CSC_LINK; else process.env.CSC_LINK = prevLink
+    if (prevKey === undefined) delete process.env.CSC_KEY_PASSWORD; else process.env.CSC_KEY_PASSWORD = prevKey
+    await rm(temp, { recursive: true, force: true })
+  }
+})

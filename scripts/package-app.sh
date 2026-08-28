@@ -195,10 +195,9 @@ fi
 npx electron-builder "${BUILDER_ARGS[@]}"
 
 if [ "$OS_TAG" = "win" ]; then
-  COMMIT="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo local)"
-  if [ -n "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ]; then
-    COMMIT="${COMMIT}-dirty"
-  fi
+  # 写入完整 40 位 commit（git rev-parse HEAD），不得用短 hash 或附加 -dirty，
+  # 便于验收方把 manifest.commit 与本阶段 HEAD 精确比对。
+  COMMIT="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo local)"
   node "$ROOT/scripts/validate-windows-package.mjs" \
     --output "$OUTPUT_DIR" \
     --version "$PACKAGE_VERSION" \

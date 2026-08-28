@@ -108,7 +108,6 @@ export const createWindowsManifest = async ({ installerPath, version, commit, ou
     signed: process.env.FORCE_UNSIGNED === "1" || process.env.FORCE_UNSIGNED === "true"
       ? false
       : Boolean(process.env.CSC_LINK && process.env.CSC_KEY_PASSWORD),
-    signed: false,
     installerType: "nsis",
     generatedAt: new Date().toISOString()
   }
