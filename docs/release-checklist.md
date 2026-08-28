@@ -3,6 +3,38 @@
 > 适用范围：`pnpm run package` 产出的 macOS `.dmg` 与 Windows `.exe`。
 > 打包链路见 [CONTRIBUTING.md](../CONTRIBUTING.md)；架构约束见 [ARCHITECTURE.md](../ARCHITECTURE.md)。
 
+## 验收分阶段
+
+### T-05A：Windows 打包实现验收
+
+在 macOS 开发机完成 workflow、electron-builder、打包脚本、图标、产物校验、Windows
+冒烟脚本和相关测试/文档的实现验收。必须通过仓库规定的本地命令、脚本合成测试、范围
+审计和 `git diff --check`；不宣称 Windows 原生安装或真实用户路径已通过。
+
+```text
+STAGE: T-05A Windows packaging implementation
+VERDICT: PASS
+WINDOWS_NATIVE_ACCEPTANCE: DEFERRED_EXTERNAL
+NEXT_STAGE_ALLOWED: yes
+```
+
+### T-05B：Windows 平台验收
+
+由外部 Windows x64 runner、云主机或其他验收方执行。触发最终 HEAD 的
+`windows-package.yml`，配置 `RUNTIME_SHA256_WIN_X64`，保存 workflow URL、构建日志、
+冒烟日志和 installer，并按下方「干净机器验证」完成安装、启动、导入、预览、导出、
+重启、断网、中文/空格路径及卸载验收。没有 Windows runner 时保持 `BLOCKED`，不得用
+macOS 交叉构建结果冒充原生通过。
+
+```text
+STAGE: T-05B Windows native acceptance
+VERDICT: PASS | BLOCKED
+WINDOWS_RUN_URL: ...
+NATIVE_INSTALL_SMOKE: pass | not-run
+REAL_USER_PATH: pass | not-run
+NEXT_STAGE_ALLOWED: yes | no
+```
+
 ## 1. 打包前检查
 
 - [ ] `bash scripts/fetch-runtime.sh` 已下载目标平台 Java Runtime
@@ -11,10 +43,11 @@
 - [ ] `pnpm --filter frontend typecheck && pnpm --filter frontend test` 全量通过；
 - [ ] `pnpm --filter electron typecheck` 通过。
 
-## 2. 构建与冒烟
+## 2. 构建与 T-05A 实现检查
 
 Windows 正式测试包应在原生 Windows x64 runner 或 Windows x64 构建机上生成；仓库提供
-`.github/workflows/windows-package.yml` 手动构建流程。macOS 上的
+`.github/workflows/windows-package.yml` 手动构建流程。T-05A 可在 macOS 上检查
+配置与资源契约，但 macOS 上的
 `TARGET_OS=win ARCH=x64 pnpm run package` 只作为本地资源/配置检查，交叉构建结果不能替代
 Windows 安装验收。
 
@@ -88,6 +121,9 @@ CAMBORDER_SMOKE_PORT=8091 bash scripts/smoke-test.sh "/tmp/Camera Border.app/Con
 
 目标环境：**无 Node、无 pnpm、无 Python、无 Maven、无 Java、无登录**的干净系统
 （建议用全新虚拟机或未装开发工具的物理机）。
+
+下方 Windows 安装、启动、照片流程、断网、重启和卸载条目属于 T-05B；macOS 条目仍按
+对应平台单独记录，不计入 Windows 原生验收。
 
 ### 安装与启动
 

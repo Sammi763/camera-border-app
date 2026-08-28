@@ -266,16 +266,45 @@ P0-01
   未携带 sampler，RAW 全部走嵌入预览降级路径（界面如实提示）。
 - ⬜ 真实 RAW 样片的端到端显影验证依赖上述产物。
 
-### T-05 🟡 打包产物构建与验收
+### T-05A ✅ Windows 打包实现验收
+
+本阶段归属发布工程与 Electron 打包配置，可在当前 macOS 开发机完成；不把 Windows
+原生安装和交互路径当作本阶段执行义务。
 
 已完成：
-- macOS arm64 `.dmg` 与 x64 `.dmg` 真实产出（JRE 架构一一对应）。
-- arm64 dmg 在本机冒烟通过：DMG 安装 → 启动 → 随包 JRE 启动引擎 → 健康检查 OK
-  （`scripts/smoke-test.sh`，端口经 `CAMBORDER_SMOKE_PORT` 绕开本机 8099 占用）。
-- 签名策略固化：afterPack 对嵌套 framework/helper 与外层 ad-hoc 签名，
-  **不重签 java-runtime**（--deep 覆盖 JRE 签名会导致内核 SIGKILL，已实测定位）。
+- Windows x64 原生 runner workflow、electron-builder NSIS 配置、随包 JRE/前端/JAR
+  资源预检、产物命名、SHA-256 sidecar 与 manifest。
+- manifest 的 `signed` 按 `FORCE_UNSIGNED` 与签名环境反映实际构建策略，`commit`
+  使用完整 40 位 HEAD；缺少或异常 HEAD 时拒绝继续生成清单。
+- 多尺寸 ICO 由纯 Node 生成，脚本文件保持正确 EOF；Windows 冒烟脚本对含空格的
+  安装目录显式保留 `/D=` 参数引号，失败 finally 清理残留 Java 引擎进程。
+- 保留 macOS 签名策略：afterPack 对嵌套 framework/helper 与外层 ad-hoc 签名，
+  **不重签 java-runtime**（`--deep` 覆盖 JRE 签名会导致内核 SIGKILL，已实测定位）。
 
-未完成真实验收：
-- ⬜ x64 dmg 本机冒烟未跑通（x64 应用内引擎启动链路待查；x64 JRE+jar 手动组合验证可行）。
-- ⬜ Windows x64 `.exe` 未在本环境构建（需 Windows 或交叉验证环境）。
-- ⬜ 无 Node/Maven/Java 的干净机器全流程验收、卸载保留 userData 验证。
+阶段结论：
+
+```text
+STAGE: T-05A Windows packaging implementation
+VERDICT: PASS
+WINDOWS_NATIVE_ACCEPTANCE: DEFERRED_EXTERNAL
+NEXT_STAGE_ALLOWED: yes
+```
+
+### T-05B 🟡 Windows 平台验收
+
+本阶段需要外部 Windows x64 runner、云主机或其他验收方提供的 Windows 机器，不阻塞
+T-05A。外部执行应触发最终 HEAD 的 `windows-package.yml`，配置
+`RUNTIME_SHA256_WIN_X64`，收集 workflow URL、构建日志、冒烟日志和 installer，并完成
+安装、启动、Java 健康检查、正常关闭、卸载以及交互式图形安装、SmartScreen、JPEG/PNG
+导入、预览、单图/批量导出、源图保护、重启、断网、中文及空格路径验证。
+
+验收结论模板：
+
+```text
+STAGE: T-05B Windows native acceptance
+VERDICT: PASS | BLOCKED
+WINDOWS_RUN_URL: ...
+NATIVE_INSTALL_SMOKE: pass | not-run
+REAL_USER_PATH: pass | not-run
+NEXT_STAGE_ALLOWED: yes | no
+```

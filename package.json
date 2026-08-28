@@ -12,7 +12,7 @@
     "typecheck": "pnpm --filter electron typecheck && pnpm --filter frontend typecheck",
     "build:engine": "bash scripts/build-engine.sh",
     "fetch:runtime": "bash scripts/fetch-runtime.sh",
-    "test:scripts": "node scripts/create-windows-icon.test.mjs && node scripts/validate-windows-package.test.mjs && node scripts/prepare-electron-dev.test.mjs && bash scripts/fetch-runtime.test.sh",
+    "test:scripts": "node scripts/create-windows-icon.test.mjs && node scripts/validate-windows-package.test.mjs && node scripts/smoke-test-windows.test.mjs && node scripts/package-app.test.mjs && node scripts/prepare-electron-dev.test.mjs && bash scripts/fetch-runtime.test.sh",
     "package": "bash scripts/package-app.sh"
   }
 }

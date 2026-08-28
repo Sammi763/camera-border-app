@@ -188,7 +188,7 @@ grep -rn '](\.' README.md AGENTS.md CONTRIBUTING.md ARCHITECTURE.md DESIGN.md do
 ```bash
 pnpm fetch:runtime                       # 下载对应平台 JRE（可 TARGETS=... 多平台）
 ARCH=arm64 pnpm run package              # 每次一个架构（JRE 必须匹配）
-TARGET_OS=win ARCH=x64 pnpm run package  # macOS 交叉构建 Windows x64（需可用 Wine）
+TARGET_OS=win ARCH=x64 pnpm run package  # 仅作本地资源/配置检查；正式包由 Windows x64 runner 构建
 CAMBORDER_SMOKE_PORT=8091 bash scripts/smoke-test.sh <app 可执行文件>
 ```
 

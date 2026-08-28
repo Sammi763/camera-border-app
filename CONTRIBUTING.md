@@ -123,6 +123,8 @@ Windows 交付使用原生 Windows x64 runner 生成 NSIS 安装器，避免把 
 当作正式测试包。GitHub Actions 手动流程见 `.github/workflows/windows-package.yml`，产物只
 上传 `Camera-Border-Setup-*.exe`、校验和与清单。当前不配置商业或自签名证书，测试包可能触发
 SmartScreen；按「更多信息 → 仍要运行」继续，不关闭 Defender、不添加白名单、不修改安全策略。
+T-05A 只验收打包实现和可在本机执行的合成检查；安装、启动、照片流程、断网、重启和卸载
+属于 T-05B，必须由外部 Windows x64 环境执行并保存 workflow/installer/冒烟证据。
 在真实 Windows 机器仍需完成安装、启动、导入照片、导出、重启和卸载验收。
 
 ## 验证路径（改哪跑哪）

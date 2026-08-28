@@ -197,7 +197,14 @@ npx electron-builder "${BUILDER_ARGS[@]}"
 if [ "$OS_TAG" = "win" ]; then
   # 写入完整 40 位 commit（git rev-parse HEAD），不得用短 hash 或附加 -dirty，
   # 便于验收方把 manifest.commit 与本阶段 HEAD 精确比对。
-  COMMIT="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo local)"
+  if ! COMMIT="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null)"; then
+    echo "无法读取当前 HEAD commit，Windows manifest 拒绝继续生成" >&2
+    exit 1
+  fi
+  if [[ ! "$COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    echo "当前 HEAD commit 不是完整 40 位 hash，Windows manifest 拒绝继续生成：$COMMIT" >&2
+    exit 1
+  fi
   node "$ROOT/scripts/validate-windows-package.mjs" \
     --output "$OUTPUT_DIR" \
     --version "$PACKAGE_VERSION" \

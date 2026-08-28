@@ -13,4 +13,14 @@ test("生成包含 Windows 常用尺寸的 ICO", () => {
     [16, 32, 0]
   )
   assert.ok(ico.length > 1000)
+
+  for (let index = 0; index < 3; index += 1) {
+    const entryOffset = 6 + index * 16
+    const imageSize = ico.readUInt32LE(entryOffset + 8)
+    const imageOffset = ico.readUInt32LE(entryOffset + 12)
+    assert.equal(ico.readUInt16LE(entryOffset + 4), 1)
+    assert.equal(ico.readUInt16LE(entryOffset + 6), 32)
+    assert.ok(imageOffset >= 54)
+    assert.ok(imageOffset + imageSize <= ico.length)
+  }
 })

@@ -103,14 +103,24 @@ else
   fail=$((fail + 1)); echo "FAIL - 未配置时应返回空：$result"
 fi
 
-echo "== 用例 8：发布模式未配置 SHA-256 时拒绝继续 =="
+echo "== 用例 8：发布模式未配置 Windows x64 SHA-256 时拒绝继续 =="
+unset RUNTIME_SHA256_WIN_X64
 export REQUIRE_RUNTIME_SHA256=1
-if verify_runtime_archive "$TEST_ARCHIVE" darwin-arm64 >/dev/null 2>&1; then
+if verify_runtime_archive "$TEST_ARCHIVE" win-x64 >/dev/null 2>&1; then
   fail=$((fail + 1)); echo "FAIL - 发布模式缺少 hash 时不应继续"
 else
   pass=$((pass + 1)); echo "ok   - 发布模式缺少 hash 时被拒绝"
 fi
 unset REQUIRE_RUNTIME_SHA256
+
+echo "== 用例 9：Windows x64 SHA-256 被篡改时拒绝继续 =="
+export RUNTIME_SHA256_WIN_X64="$WRONG"
+if verify_runtime_archive "$TEST_ARCHIVE" win-x64 >/dev/null 2>&1; then
+  fail=$((fail + 1)); echo "FAIL - Windows x64 hash 被篡改时不应继续"
+else
+  pass=$((pass + 1)); echo "ok   - Windows x64 hash 被篡改时校验失败"
+fi
+unset RUNTIME_SHA256_WIN_X64
 
 echo
 if [ "$fail" -eq 0 ]; then

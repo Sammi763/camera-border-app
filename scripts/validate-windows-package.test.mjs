@@ -1,8 +1,10 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises"
+import { execFileSync } from "node:child_process"
+import { mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { fileURLToPath } from "node:url"
 
 import {
   findWindowsInstaller,
@@ -118,6 +120,37 @@ test("构建清单记录安装包与目标平台", async () => {
     assert.equal(manifest.version, "0.1.0")
     assert.equal(manifest.installer.file, path.basename(installer))
     assert.match(manifest.installer.sha256, /^[0-9a-f]{64}$/)
+    assert.equal(manifest.commit, "abc123")
+
+    const sidecar = await readFile(`${installer}.sha256`, "utf8")
+    assert.equal(sidecar, `${manifest.installer.sha256}  ${path.basename(installer)}\n`)
+    const manifestFile = JSON.parse(
+      await readFile(path.join(temp, "Camera-Border-Setup-0.1.0-x64.manifest.json"), "utf8")
+    )
+    assert.deepEqual(manifestFile, manifest)
+  } finally {
+    await rm(temp, { recursive: true, force: true })
+  }
+})
+
+test("构建清单可以记录完整 40 位 HEAD commit", async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), "camborder-package-test-"))
+  try {
+    const installer = path.join(temp, "Camera-Border-Setup-0.1.0-x64.exe")
+    const headCommit = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."),
+      encoding: "utf8"
+    }).trim()
+    await writeFile(installer, "MZ-test")
+    const manifest = await createWindowsManifest({
+      installerPath: installer,
+      version: "0.1.0",
+      commit: headCommit,
+      outputDir: temp
+    })
+    assert.match(headCommit, /^[0-9a-f]{40}$/)
+    assert.match(manifest.commit, /^[0-9a-f]{40}$/)
+    assert.equal(manifest.commit, headCommit)
   } finally {
     await rm(temp, { recursive: true, force: true })
   }

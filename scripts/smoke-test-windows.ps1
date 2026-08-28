@@ -83,10 +83,13 @@ function Get-JavaEngineProcesses {
     Where-Object { $_.CommandLine -like "*camera-border-engine.jar*" }
 }
 
-$installer = Find-Installer
-$versionMatch = [regex]::Match($installer.BaseName, "^Camera-Border-Setup-(?<version>.+)-x64$")
-if (-not $versionMatch.Success) { Fail "安装包文件名不符合 Windows x64 约定：$($installer.Name)" }
+function Stop-JavaEngineProcesses {
+  foreach ($process in @(Get-JavaEngineProcesses)) {
+    Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+  }
+}
 
+$installer = $null
 $smokeRoot = Join-Path $env:TEMP "Camera-Border-Smoke-$PID"
 $installDir = Join-Path $smokeRoot "Camera Border"
 $userDataRoot = Join-Path $env:APPDATA "Camera Border"
@@ -96,11 +99,18 @@ $appExe = Join-Path $installDir "Camera Border.exe"
 $uninstaller = Join-Path $installDir "Uninstall Camera Border.exe"
 $engineLog = Join-Path $userDataRoot "logs\engine.log"
 $appProcess = $null
+$smokeSucceeded = $false
 
 try {
+  $installer = Find-Installer
+  $versionMatch = [regex]::Match($installer.BaseName, "^Camera-Border-Setup-(?<version>.+)-x64$")
+  if (-not $versionMatch.Success) { Fail "安装包文件名不符合 Windows x64 约定：$($installer.Name)" }
+
   New-Item -ItemType Directory -Path $smokeRoot -Force | Out-Null
   Write-Host "[windows-smoke] 安装：$($installer.FullName)"
-  $install = Start-Process -FilePath $installer.FullName -ArgumentList @("/S", "/D=$installDir") -Wait -PassThru
+  # Start-Process 不会自动保留含空格参数的外层引号，必须显式写入转义双引号。
+  $installArguments = "/S /D=`"$installDir`""
+  $install = Start-Process -FilePath $installer.FullName -ArgumentList $installArguments -Wait -PassThru
   if ($install.ExitCode -ne 0) { Fail "NSIS 安装失败，退出码：$($install.ExitCode)" }
 
   if (-not (Test-Path -LiteralPath $appExe -PathType Leaf)) { Fail "安装后缺少应用主程序：$appExe" }
@@ -164,10 +174,15 @@ try {
   } else {
     Write-Host "[windows-smoke] 已保留安装：$installDir"
   }
+  $smokeSucceeded = $true
 } finally {
   # 超时清理兜底：仅当主流程失败且进程仍在时强制终止，不参与主验收路径
   if ($appProcess -and -not $appProcess.HasExited) {
     Stop-Process -Id $appProcess.Id -Force -ErrorAction SilentlyContinue
+  }
+  if (-not $smokeSucceeded) {
+    # 安装、启动、健康检查或卸载任一步失败时，清理本次冒烟残留的 Java 引擎。
+    Stop-JavaEngineProcesses
   }
   if (-not $KeepInstalled -and (Test-Path -LiteralPath $smokeRoot)) {
     Remove-Item -LiteralPath $smokeRoot -Recurse -Force -ErrorAction SilentlyContinue
