@@ -2,6 +2,8 @@
   "name": "electron",
   "private": true,
   "version": "0.1.0",
+  "description": "A local photo border and photography information tool.",
+  "author": "Camera Border",
   "main": "dist/main/main.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",

@@ -4,7 +4,7 @@
 # 用法：
 #   bash scripts/package-app.sh              # 当前平台默认架构
 #   ARCH=arm64 bash scripts/package-app.sh   # macOS 指定架构（arm64 / x64）
-#   TARGET_OS=win ARCH=x64 bash scripts/package-app.sh  # 在 macOS 上交叉构建 Windows x64
+#   TARGET_OS=win ARCH=x64 bash scripts/package-app.sh  # Windows x64
 #
 # 前置条件：
 #   - Node/pnpm、JDK+Maven（构建机需要；最终用户不需要）
@@ -12,7 +12,8 @@
 #     （TARGETS="macos-arm64 macos-x64 win-x64" 可一次拉全）
 #
 # 产物：
-#   electron/release/*.dmg（macOS arm64/x64）、*.exe（Windows x64）
+#   electron/release/macos-*/Camera-Border-*.dmg
+#   electron/release/win-x64/Camera-Border-Setup-*.exe
 
 set -euo pipefail
 
@@ -60,6 +61,8 @@ fi
 
 RUNTIME_KEY="${OS_TAG}-${ARCH}"
 RUNTIME_DIR="$ROOT/runtime/$RUNTIME_KEY"
+OUTPUT_DIR="$ROOT/electron/release/$RUNTIME_KEY"
+PACKAGE_VERSION="$(node -p 'require("./electron/package.json").version')"
 
 echo "[package] 目标平台：$RUNTIME_KEY"
 
@@ -69,6 +72,15 @@ if [ ! -d "$RUNTIME_DIR" ] || [ -z "$(ls -A "$RUNTIME_DIR")" ]; then
   echo "  请先执行 TARGETS=$RUNTIME_KEY bash scripts/fetch-runtime.sh" >&2
   exit 1
 fi
+
+case "$OUTPUT_DIR" in
+  "$ROOT/electron/release/"*) ;;
+  *) echo "内部错误：输出目录不在 electron/release 下：$OUTPUT_DIR" >&2; exit 1 ;;
+esac
+
+# 每个平台/架构使用独立输出目录，避免旧版本、旧中文包或其它架构产物混入交付目录。
+rm -rf "$OUTPUT_DIR"
+mkdir -p "$OUTPUT_DIR"
 
 # ---- 1. 前端产物 -----------------------------------------------------------
 echo "[package] 构建前端产物..."
@@ -85,6 +97,10 @@ mkdir -p "$BUNDLE"
 cp -R "$ROOT/frontend/dist" "$BUNDLE/frontend"
 cp "$ROOT/java-engine/target/camera-border-engine.jar" "$BUNDLE/java-engine.jar"
 cp -R "$RUNTIME_DIR" "$BUNDLE/java-runtime"
+
+if [ "$OS_TAG" = "win" ]; then
+  node "$ROOT/scripts/validate-windows-package.mjs" --bundle "$BUNDLE"
+fi
 
 # 随包 LibRaw 原生程序（RAW 真实显影）；只取与当前目标平台-架构匹配的产物，
 # 避免先构建 arm64 再打 x64 包时把错误架构的二进制带进安装包。
@@ -122,6 +138,11 @@ echo "[package] electron-builder 打包（$OS_TAG ${ARCH}，宿主 ${HOST_OS}）
 cd "$ROOT/electron"
 npx tsc -p tsconfig.json
 
+if [ "$OS_TAG" = "win" ]; then
+  # 使用内置生成器创建多尺寸 ICO，不引入 ImageMagick 等外部依赖。
+  node "$ROOT/scripts/create-windows-icon.mjs" "$ROOT/electron/build/icon.ico"
+fi
+
 BUILD_ARCH="$ARCH"
 if [ "$OS_TAG" = "win" ]; then
   BUILD_ARCH="x64"
@@ -132,7 +153,57 @@ if [ "$OS_TAG" = "win" ]; then
   BUILDER_PLATFORM="--win"
 fi
 
-npx electron-builder --config electron-builder.yml "$BUILDER_PLATFORM" --"$BUILD_ARCH" --publish never
+# ---- 代码签名 ---------------------------------------------------------------
+# electron-builder 通过环境变量读取证书自动签名：
+#   - macOS：CSC_LINK / CSC_KEY_PASSWORD（Developer ID Application .p12）；
+#            公证另设 APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID
+#   - Windows：CSC_LINK / CSC_KEY_PASSWORD（代码签名证书 .p12）
+# 签名策略：
+# - 提供 CSC_LINK + CSC_KEY_PASSWORD → 允许正式签名（macOS 与 Windows 都启用）；
+# - FORCE_UNSIGNED=1（由 workflow / 调用方明确控制，如 Windows 冒烟测试包）→ 强制未签名，
+#   清除签名环境变量并关闭自动发现，不生成自签名证书，也不修改 Windows 安全策略；
+# - 未提供证书且未强制未签名：macOS 本地未签名（adhoc），Windows 未签名测试包。
+SIGN_FLAGS=()
+FORCE_UNSIGNED="${FORCE_UNSIGNED:-0}"
+if [ "$FORCE_UNSIGNED" = "1" ] || [ "$FORCE_UNSIGNED" = "true" ]; then
+  if [ "$OS_TAG" = "macos" ]; then
+    SIGN_FLAGS+=(--config.mac.identity=null)
+  fi
+  unset CSC_LINK CSC_KEY_PASSWORD WIN_CSC_LINK WIN_CSC_KEY_PASSWORD
+  export CSC_IDENTITY_AUTO_DISCOVERY=false
+  echo "[package] FORCE_UNSIGNED=1：生成未签名测试包（$OS_TAG；SmartScreen/Gatekeeper 需手动放行）"
+elif [ -n "${CSC_LINK:-}" ] && [ -n "${CSC_KEY_PASSWORD:-}" ]; then
+  echo "[package] 检测到代码签名证书（CSC_LINK/CSC_KEY_PASSWORD），本次构建将启用正式签名（$OS_TAG）"
+elif [ "$OS_TAG" = "macos" ]; then
+  SIGN_FLAGS+=(--config.mac.identity=null)
+  echo "[package] 未配置 CSC_LINK，macOS 使用本地未签名（adhoc）构建；"
+  echo "         正式分发请设置 CSC_LINK/CSC_KEY_PASSWORD（并视需要设置公证 APPLE_* 环境变量）"
+else
+  echo "[package] 未配置 CSC_LINK，Windows 生成未签名测试包（SmartScreen 需手动放行）"
+fi
 
-echo "[package] 完成。产物位于 electron/release/"
-ls -1 "$ROOT/electron/release" 2>/dev/null || true
+BUILDER_ARGS=(
+  --config electron-builder.yml
+  "$BUILDER_PLATFORM"
+  --"$BUILD_ARCH"
+  --publish never
+  "-c.directories.output=$OUTPUT_DIR"
+)
+if [ "${#SIGN_FLAGS[@]}" -gt 0 ]; then
+  BUILDER_ARGS+=("${SIGN_FLAGS[@]}")
+fi
+npx electron-builder "${BUILDER_ARGS[@]}"
+
+if [ "$OS_TAG" = "win" ]; then
+  COMMIT="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo local)"
+  if [ -n "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ]; then
+    COMMIT="${COMMIT}-dirty"
+  fi
+  node "$ROOT/scripts/validate-windows-package.mjs" \
+    --output "$OUTPUT_DIR" \
+    --version "$PACKAGE_VERSION" \
+    --commit "$COMMIT"
+fi
+
+echo "[package] 完成。产物位于 $OUTPUT_DIR"
+ls -1 "$OUTPUT_DIR" 2>/dev/null || true

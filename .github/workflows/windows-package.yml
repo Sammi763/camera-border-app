@@ -1,0 +1,107 @@
+# Windows 原生 x64 安装包：不签名，不修改测试机安全策略。
+# 通过 Actions 手动运行，或在发布 tag 上运行；产物只上传一个 Setup.exe、校验和与清单。
+
+name: Windows package
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Native Windows x64 NSIS package
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.0.0
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: 安装 JDK 11
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 11
+          cache: maven
+
+      - name: 安装项目依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 脚本级测试（图标/产物校验/运行时解压布局）
+        shell: bash
+        run: pnpm test:scripts
+
+      - name: 下载并校验 Windows x64 Java Runtime（fail-closed）
+        shell: bash
+        env:
+          TARGETS: win-x64
+          RUNTIME_SHA256_WIN_X64: ${{ vars.RUNTIME_SHA256_WIN_X64 }}
+        run: |
+          set -euo pipefail
+          # fail-closed：强制开启归档哈希校验；缺少变量或哈希非法时直接失败，绝不打印警告后继续打包。
+          export REQUIRE_RUNTIME_SHA256=1
+          if [ -z "${RUNTIME_SHA256_WIN_X64:-}" ]; then
+            echo "错误：未配置仓库变量 RUNTIME_SHA256_WIN_X64，无法校验 Temurin Windows x64 Runtime，构建中止。" >&2
+            exit 1
+          fi
+          if ! printf '%s' "$RUNTIME_SHA256_WIN_X64" | grep -Eq '^[0-9a-fA-F]{64}$'; then
+            echo "错误：RUNTIME_SHA256_WIN_X64 不是 64 位十六进制哈希，构建中止。" >&2
+            exit 1
+          fi
+          echo "使用仓库变量校验 Temurin Windows x64 Runtime（REQUIRE_RUNTIME_SHA256=1）。"
+          bash scripts/fetch-runtime.sh
+
+      - name: 前端验证与构建
+        run: |
+          pnpm --filter frontend typecheck
+          pnpm --filter frontend test
+          pnpm --filter frontend build
+
+      - name: Electron 验证
+        run: |
+          pnpm --filter electron typecheck
+          pnpm --filter electron test
+
+      - name: Java 引擎测试
+        run: mvn -B test
+        working-directory: java-engine
+
+      - name: 构建 Windows x64 安装包（未签名测试包由本 workflow 明确控制）
+        shell: bash
+        env:
+          TARGET_OS: win
+          ARCH: x64
+          # 明确生成未签名测试包：package-app.sh 依据 FORCE_UNSIGNED=1 关闭签名。
+          # 正式签名应移除本变量并提供 CSC_LINK / CSC_KEY_PASSWORD（见 docs/release-checklist.md）。
+          FORCE_UNSIGNED: "true"
+        run: bash scripts/package-app.sh
+
+      - name: Windows 安装/启动/卸载冒烟
+        shell: pwsh
+        run: .\scripts\smoke-test-windows.ps1 -InstallerDirectory "${{ github.workspace }}\electron\release\win-x64"
+
+      - name: 上传单个 Windows 安装包和校验文件
+        uses: actions/upload-artifact@v4
+        with:
+          name: Camera-Border-windows-x64
+          if-no-files-found: error
+          path: |
+            electron/release/win-x64/Camera-Border-Setup-*.exe
+            electron/release/win-x64/Camera-Border-Setup-*.exe.sha256
+            electron/release/win-x64/Camera-Border-Setup-*.manifest.json
+          compression-level: 0

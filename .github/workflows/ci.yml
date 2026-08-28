@@ -1,13 +1,14 @@
 # CI：每次推送/PR 自动跑全量回归
 #
-# 两个并行 job：
-# - frontend：前端 typecheck + 前端全量测试 + Electron typecheck
+# 三个并行 job：
+# - frontend：前端 typecheck + 前端全量测试 + Electron typecheck + Electron 全量测试 + 脚本级测试
 # - java：Java 引擎全量测试（Maven，JDK 11 与 pom.xml 声明一致）
 #
-# 测试数量以 mvn test / pnpm test 实际输出为准，不在注释维护数字。
+# 测试数量以 mvn test / pnpm test / 脚本测试实际输出为准，不在注释维护数字。
 # 本地等价命令：
 #   pnpm --filter frontend typecheck && pnpm --filter frontend test
-#   pnpm --filter electron typecheck
+#   pnpm --filter electron typecheck && pnpm --filter electron test
+#   pnpm test:scripts
 #   cd java-engine && mvn test
 
 name: CI
@@ -47,6 +48,12 @@ jobs:
 
       - name: Electron typecheck
         run: pnpm --filter electron typecheck
+
+      - name: Electron 测试
+        run: pnpm --filter electron test
+
+      - name: 脚本级测试（打包/运行时/图标/解压布局）
+        run: pnpm test:scripts
 
   java:
     name: Java Engine · tests

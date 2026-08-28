@@ -22,7 +22,7 @@ directories:
   output: release
   buildResources: build
 
-# DMG 制作前对外层 .app 做 ad-hoc 签名（保留 java-runtime 原始签名，见 build-hooks/afterPack.cjs）
+# macOS 本地构建的 ad-hoc 签名钩子；Windows 不使用签名。
 afterPack: ./build-hooks/afterPack.cjs
 
 # 只打包 electron 编译产物与 package.json；
@@ -46,16 +46,31 @@ mac:
   # 架构由命令行 --arm64 / --x64 指定（scripts/package-app.sh 每次装配对应架构的 JRE）
   target:
     - dmg
-  # 未配置签名证书时跳过签名（本地分发）；正式发布需补充 codesign + notarize
-  identity: null
+  # 代码签名（环境变量驱动，不要写死 identity: null，否则正式签名永远无法启用）：
+  # - 配置 CSC_LINK（Developer ID Application 证书 .p12）+ CSC_KEY_PASSWORD 即自动签名；
+  # - 公证另设 APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID。
+  # 未配置证书时 scripts/package-app.sh 显式传 --config.mac.identity=null 保持本地未签名构建。
 
 win:
+  artifactName: "Camera-Border-Setup-${version}-${arch}.${ext}"
+  icon: build/icon.ico
   target:
     - target: nsis
       arch:
         - x64
+  # 代码签名：配置 CSC_LINK（Windows 代码签名证书 .p12，EV 或 OV）+ CSC_KEY_PASSWORD
+  # 后 electron-builder 自动对 NSIS 安装包签名（显著减少 SmartScreen 拦截）。未配置时不签名。
 
 nsis:
   oneClick: false
+  perMachine: false
+  allowElevation: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Camera Border
+  runAfterFinish: true
+  deleteAppDataOnUninstall: false
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeaderIcon: build/icon.ico

@@ -28,3 +28,6 @@ exports/
 runtime/
 electron/runtime-bundle/
 electron/release/
+
+# Windows 图标生成产物（scripts/create-windows-icon.mjs；每次打包前重新生成）
+electron/build/

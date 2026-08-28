@@ -141,7 +141,7 @@ camera-border-app/
 ├── frontend/       # React + TypeScript + Vite 前端，负责工作台 UI（快速出图/高级编辑）、状态和即时预览
 ├── java-engine/    # Spring Boot 本地图像引擎，负责预览、渲染、导出、EXIF 读取
 ├── docs/           # PRD（prd.md）、任务清单（tasks.md）、决策记录（adr/）、操作手册（cookbook.md）、发布验收清单
-├── scripts/        # 开发与打包脚本（dev.sh、fetch-runtime.sh、build-engine.sh、package-app.sh、smoke-test.sh）
+├── scripts/        # 开发与打包脚本（含 Windows 资源预检、图标生成与安装冒烟）
 ├── photos/         # 开发样片（/api/dev/photos 扫描）
 ├── AGENTS.md       # 每次任务必读的工程规则速览
 ├── ARCHITECTURE.md # 项目架构规范
@@ -182,7 +182,9 @@ camera-border-app/
 - 自动更新、代码签名和公证
 
 Windows `.exe` 和 macOS `.dmg` 的打包脚本已就绪（`pnpm fetch:runtime && pnpm package`，
-随包 Java Runtime，最终用户无需安装 Java、Node.js 或 Python）；部分平台产物和干净机器验收仍按
-[docs/release-checklist.md](docs/release-checklist.md) 待完成。代码签名、公证与自动更新未配置。
+随包 Java Runtime，最终用户无需安装 Java、Node.js 或 Python）。Windows x64 测试包推荐通过
+原生 Windows workflow 生成，产物为单个未签名 NSIS `Camera-Border-Setup-<version>-x64.exe`；
+安装、SmartScreen、核心流程和干净机器验收仍按
+[docs/release-checklist.md](docs/release-checklist.md) 执行。代码签名、公证与自动更新未配置。
 Roll、冲洗、扫描、暗房和接触表明确延期。完整任务拆分见 [docs/tasks.md](docs/tasks.md)，
 产品规划与优先级见 [docs/prd.md](docs/prd.md)。

@@ -85,13 +85,16 @@ cd electron && pnpm dev:managed   # Electron 自行启动 jar + 加载 frontend/
 | `pnpm --filter frontend typecheck` | 前端类型检查 |
 | `pnpm --filter frontend build` | 前端构建（`tsc --noEmit && vite build`） |
 | `pnpm --filter electron typecheck` | Electron 类型检查 |
+| `pnpm --filter electron test` | Electron 全量测试（Vitest） |
+| `pnpm test:scripts` | 脚本级测试：Windows 图标生成、打包产物校验、Electron 开发运行时准备、Java Runtime 解压布局（`scripts/*.test.*`） |
 | `cd electron && pnpm dev:managed` | Electron 托管模式 |
 | `pnpm typecheck` | 根目录快捷：electron + frontend 类型检查 |
 | `pnpm build:frontend` | 根目录快捷：构建 frontend |
 | `pnpm build:engine` | 构建 Java 引擎 jar（`scripts/build-engine.sh`） |
 | `pnpm fetch:runtime` | 下载随包 Java Runtime（`scripts/fetch-runtime.sh`，打包前置步骤） |
 | `pnpm package` | 一键打包桌面应用（前端 + jar + JRE → electron-builder，`scripts/package-app.sh`） |
-| `bash scripts/smoke-test.sh <可执行文件>` | 打包产物冒烟测试（启动应用并等待引擎就绪） |
+| `bash scripts/smoke-test.sh <可执行文件>` | macOS 打包产物冒烟测试（启动应用并等待引擎就绪） |
+| `powershell -ExecutionPolicy Bypass -File scripts/smoke-test-windows.ps1` | Windows 原生安装/启动/卸载冒烟 |
 
 ## 打包链路（可安装产物）
 
@@ -102,7 +105,8 @@ pnpm fetch:runtime
 # 2. 一键打包：前端构建 → 引擎 jar → 组装资源目录 → electron-builder
 pnpm package
 # macOS 指定架构：ARCH=arm64 pnpm run package / ARCH=x64 pnpm run package
-# macOS 交叉构建 Windows x64：TARGET_OS=win ARCH=x64 pnpm run package
+# Windows 原生 x64 构建（推荐；Windows runner/构建机执行）
+TARGET_OS=win ARCH=x64 bash scripts/package-app.sh
 
 # 3. 冒烟测试（见 docs/release-checklist.md 的完整干净机器验收清单）
 bash scripts/smoke-test.sh "electron/release/<平台目录>/Camera Border.app/Contents/MacOS/Camera Border"
@@ -115,10 +119,11 @@ bash scripts/smoke-test.sh "electron/release/<平台目录>/Camera Border.app/Co
 安装包由 Electron 自带运行时启动，朋友的电脑不需要安装 Node.js 或 Python；
 Node/pnpm、JDK/Maven 仅是开发者构建安装包时需要的工具。
 
-Windows NSIS 交叉构建需要宿主机有可用的 Wine；electron-builder 通常会自动下载
-兼容工具链，离线环境需提前准备。即使构建成功，也要在真实 Windows 机器完成安装、
-启动、导入照片和导出验收。未签名的测试包可能触发 SmartScreen，这是当前发布限制，
-不代表应用运行失败。
+Windows 交付使用原生 Windows x64 runner 生成 NSIS 安装器，避免把 macOS 交叉构建结果
+当作正式测试包。GitHub Actions 手动流程见 `.github/workflows/windows-package.yml`，产物只
+上传 `Camera-Border-Setup-*.exe`、校验和与清单。当前不配置商业或自签名证书，测试包可能触发
+SmartScreen；按「更多信息 → 仍要运行」继续，不关闭 Defender、不添加白名单、不修改安全策略。
+在真实 Windows 机器仍需完成安装、启动、导入照片、导出、重启和卸载验收。
 
 ## 验证路径（改哪跑哪）
 

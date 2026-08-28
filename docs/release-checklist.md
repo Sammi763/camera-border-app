@@ -13,13 +13,16 @@
 
 ## 2. 构建与冒烟
 
-macOS 可通过 `TARGET_OS=win ARCH=x64 pnpm run package` 交叉构建 Windows NSIS，
-前提是宿主机有可用 Wine（electron-builder 通常会自动下载兼容工具链）；交叉构建
-产物仍需在真实 Windows 机器验收。
+Windows 正式测试包应在原生 Windows x64 runner 或 Windows x64 构建机上生成；仓库提供
+`.github/workflows/windows-package.yml` 手动构建流程。macOS 上的
+`TARGET_OS=win ARCH=x64 pnpm run package` 只作为本地资源/配置检查，交叉构建结果不能替代
+Windows 安装验收。
 
 ```bash
-pnpm run package          # 每次一个架构：ARCH=arm64 或 ARCH=x64
-                          # （随包 JRE 必须与目标架构一致，脚本按 ARCH 装配）
+pnpm run package          # 每次一个架构：macOS 用 ARCH=arm64 或 ARCH=x64
+# Windows 原生 x64 构建机：
+TARGET_OS=win ARCH=x64 bash scripts/package-app.sh
+                          # （Windows 随包 JRE 固定为 x64）
 ```
 
 正式发布下载 Runtime 时还应启用完整性校验：
@@ -32,7 +35,9 @@ pnpm fetch:runtime
 
 多平台构建时为每个目标分别提供对应的 `RUNTIME_SHA256_*`，不能依赖开发模式下的跳过提示。
 
-- [ ] 产物生成于 `electron/release/`，文件名带架构后缀（`-arm64` / `-x64`）；
+- [ ] Windows 交付目录只包含一个 `Camera-Border-Setup-<version>-x64.exe`，并生成同名
+      `.sha256` 与 `.manifest.json`；不向测试用户发送 `win-unpacked`、`.blockmap` 或源码；
+- [ ] Windows 安装器输出于 `electron/release/win-x64/`，macOS 产物输出于对应平台目录；
 - [ ] 冒烟测试通过（启动应用 → 随包 JRE 启动托管引擎 → 健康端点就绪）：
 
 ```bash
@@ -49,7 +54,7 @@ CAMBORDER_SMOKE_PORT=8091 bash scripts/smoke-test.sh "/tmp/Camera Border.app/Con
 |---|---|
 | `Camera-Border-0.1.0-arm64.dmg` | ✅ 已生成（英文名称；真实干净机验收待做） |
 | `Camera-Border-0.1.0-x64.dmg` | ✅ 已生成（英文名称；真实干净机验收待做） |
-| `Camera-Border-0.1.0-x64.exe` | ✅ 已生成（英文名称；真实 Windows 安装/运行验收待做） |
+| `Camera-Border-Setup-0.1.0-x64.exe` | ✅ 已由 macOS 交叉生成；原生 Windows x64 安装/运行验收待做 |
 | RAW 原生程序随包 | ⬜ 未构建（未装 LibRaw 工具链；引擎自动降级嵌入预览并提示） |
 
 ### macOS 签名结论（实测）
@@ -59,6 +64,26 @@ CAMBORDER_SMOKE_PORT=8091 bash scripts/smoke-test.sh "/tmp/Camera Border.app/Con
   hardened-runtime 签名覆盖为 ad-hoc，触发内核 SIGKILL（exit 137），已实测定位；
 - 正式分发前替换为开发者证书签名 + 公证。
 
+### 代码签名（环境变量驱动，`electron-builder.yml` + `scripts/package-app.sh`）
+
+正式签名**不需要改配置**，构建时提供证书环境变量即可：
+
+- **macOS**：`CSC_LINK`（Developer ID Application 证书 `.p12`）+ `CSC_KEY_PASSWORD`
+  自动签名；公证另设 `APPLE_ID` / `APPLE_APP_SPECIFIC_PASSWORD` / `APPLE_TEAM_ID`。
+- **Windows**：如未来需要正式签名，可设置 `CSC_LINK` + `CSC_KEY_PASSWORD`（EV/OV
+  代码签名证书）自动签名 NSIS；本轮明确不配置证书。
+- 未配置证书时 `package-app.sh` 对 macOS 显式传 `--config.mac.identity=null`
+  （本地未签名 + afterPack adhoc）；`afterPack` 钩子**仅当对产物 `codesign -dv`
+  确认正式发布签名（Authority=Developer ID Application）时才跳过
+  ad-hoc**——APPLE_ID 只是公证账号，不代表应用已签名；未真正签名时必须仍走 ad-hoc，
+  避免只设公证账号却产出未签名应用。
+
+> ⚠️ **当前状态**：本轮 Windows 测试包保持未签名，不购买、不申请、不生成自签名证书。
+> 在未建立信誉的情况下，Windows SmartScreen 可能显示「Windows 已保护你的电脑」；测试用户
+> 可按正常界面点击「更多信息 → 仍要运行」。不关闭 Defender、不加入白名单、不修改安全策略。
+> 当前环境没有 Windows，因此无法代替实机记录 SmartScreen 的实际表现；由 Windows runner/干净机
+> 验收时记录即可。macOS 当前也没有 Developer ID 证书，macOS 包仍按未签名测试包处理。
+
 ## 3. 干净机器验证
 
 目标环境：**无 Node、无 pnpm、无 Python、无 Maven、无 Java、无登录**的干净系统
@@ -66,9 +91,62 @@ CAMBORDER_SMOKE_PORT=8091 bash scripts/smoke-test.sh "/tmp/Camera Border.app/Con
 
 ### 安装与启动
 
-- [ ] 双击安装包可完成安装，无需管理员权限之外的环境依赖；
+- [ ] 双击 `Camera-Border-Setup-<version>-x64.exe` 可完成标准 NSIS 图形化安装；
+- [ ] 默认安装到用户级程序目录，不要求管理员权限；安装器创建桌面和开始菜单入口，
+      安装完成后可直接启动；
+- [ ] 在 Windows「设置 → 应用 → 已安装的应用」中可以找到 Camera Border 并正常卸载；
+- [ ] 安装目录只包含应用自身资源，用户数据保存在 `%APPDATA%\Camera Border`，卸载不主动删除；
+- [ ] 不依赖 Node.js、pnpm、Python、Java、Maven、.NET、WebView2 或 VC++ Runtime；
+- [ ] 中文 Windows 用户名、中文用户目录及带空格的安装路径可正常安装和启动；
 - [ ] 首次启动不要求登录、不联网也能进入主界面（本地优先不变量）；
-- [ ] 默认进入「快速出图」模式并显示欢迎页（选择照片 / 拖入照片 / 加载样片 / 价值提示）。
+- [ ] 默认进入「快速出图」模式并显示欢迎页（选择照片 / 拖入照片 / 加载样片 / 价值提示）；
+- [ ] **断网验收（Windows 11 实机）**：断开网络后安装并启动，导入 JPEG/PNG 完成
+      预览、模板编辑与引擎导出；核心流程与联网时一致。应用运行全程无外网请求。
+
+### 引擎故障双层兜底
+
+应用运行不需要用户安装 Java、Node 或 Python（全部随包）。引擎异常时工作台保持可用，
+仅高保真导出被禁用：
+
+- [ ] **引擎启动慢**：引擎就绪前工作台可进入，顶部状态条显示「本地引擎启动中…」，
+      不出现全屏错误页；就绪后提示自动消失；
+- [ ] **运行时被安全软件阻止**：随包 Java 被 Defender/SmartScreen 阻止时，
+      状态条显示 runtime-blocked 分类与白名单指引，「重试」「查看日志」可用。
+      注意：只有 EACCES/EPERM 这类明确的「执行被阻止」才显示 runtime-blocked；
+      普通 JAR 错误 / Spring Boot 启动失败 / 参数错误（非零退出）显示 start-failed；
+      状态条展示的是诊断 IPC 返回的具体原因（而非仅「引擎不可达」）；
+- [ ] **端口占用（动态端口）**：默认端口 8099 被其它程序占用时自动换到空闲回环端口
+      （日志 `[engine-start] baseUrl=` 可核对），无需手动改配置；前端健康检查、
+      预览、EXIF、导出全部自动指向实际端口（`getEngineBaseUrl` 同步）；占用 8099 启动
+      → 应用可正常预览与导出。**启动时序**：生产窗口在端口探测完成后再创建，
+      首屏健康检查/预览即指向实际端口；重试时若 8099 已释放会自动恢复 8099；
+- [ ] **退出竞态**：应用退出后 `ps`/任务管理器无残留 Java 进程；退出瞬间即使引擎
+      仍在端口探测也不会在退出后 spawn；重试后旧健康探测不会误把新引擎标记为失败；
+- [ ] **本地预览兜底**：引擎不可用时 JPEG/PNG/WebP 队列缩略图与当前预览仍可显示
+      （主进程 nativeImage，最大边长 2048、保持纵横比、不放大）；RAW/HEIC 显示
+      明确提示等待引擎恢复，不静默伪装；
+- [ ] **预览/导出超时兜底**：引擎进程在但无响应时，预览在有限时间后自动降级本地
+      nativeImage、健康检查不永久 pending；导出 POST 在引擎卡死时有限时间后失败并
+      提示「导出超时」+ 失败通知（单图/批量不会永久停在「渲染中」）；
+- [ ] **导出禁用与恢复**：引擎不可用时导出按钮保留但禁用并显示原因；
+      引擎恢复后按钮自动恢复可用；
+- [ ] **首屏地址同步**：占用 8099 启动时，首屏（窗口出现即）健康检查/预览/EXIF/导出
+      即指向实际端口——应用在完成动态地址同步后才渲染工作台（无“先打旧端口再切换”的失败闪屏）；
+- [ ] **导出全链路超时**：导出前 EXIF 读取与异步状态轮询同样带可取消超时；
+      引擎卡死时不会永久停在「正在读取 EXIF…」或「渲染中…」，最终给出超时/失败提示；
+- [ ] **重试锁定**：点击「重试」后按钮保持锁定直到新引擎启动并刷新诊断完成，
+      快速重复点击不会终止刚启动的新引擎；
+- [ ] **单图导出阶段提示**：准备/渲染阶段显示非确定进度（不伪造百分比），
+      长时间渲染不会被误判为卡死；
+- [ ] **查看日志**：「查看日志」直接打开 `userData/logs/engine.log` 文件本身；
+      日志含 `[engine-start]` 横幅（platform/arch/jar/java/baseUrl）与
+      `[engine-exit]`（退出码），可直接反馈给支持方定位问题。
+
+### Windows 日志位置与反馈方式
+
+- 日志文件：`%APPDATA%/<appName>/logs/engine.log`（应用内「查看日志」可直接打开）；
+- 反馈时请附上完整 `engine.log`（含 `[engine-start]` 与 `[engine-exit]` 行）、
+  Windows 版本与是否安装了安全软件。
 
 ### 核心流程（对应验收标准）
 
@@ -100,7 +178,16 @@ macOS：
 
 Windows：
 
-- [ ] `.exe`（NSIS）安装、启动、卸载正常；
+- [ ] Windows 10/11 x64 的 `.exe`（NSIS）安装、启动、卸载正常；
+- [ ] 原生 Windows 自动冒烟：
+
+```powershell
+.\scripts\smoke-test-windows.ps1 -InstallerDirectory .\electron\release\win-x64
+```
+
+      脚本只验证随包资源、快捷方式、引擎健康、Java 退出和卸载，不修改 Defender/SmartScreen；
+      双击图形化安装、重启 Windows、核心照片流程仍需人工勾选；
+- [ ] x64 包在 Intel/AMD Windows 10/11 上通过；ARM64 Windows 使用 x64 模拟运行，是否交付需另测；
 - [ ] 杀毒软件误报情况已记录（如有）。
 
 ## 4. 样片回归
@@ -111,6 +198,8 @@ Windows：
 
 ## 5. 已知限制
 
-- 未配置代码签名与公证（`identity: null`），正式对外分发前需补充 codesign + notarize；
+- Windows 当前为未签名 x64 NSIS 测试包，首次下载可能触发 SmartScreen；
+- macOS 当前未配置 Developer ID 代码签名与公证；
 - 自动更新不在本期范围内；
+- Windows 当前不支持 HEIC 转换；RAW 是否完整显影取决于是否随包携带 LibRaw 原生程序；
 - 浏览器降级模式仅用于开发验证，打包产物以 Electron 模式为唯一正式入口。
