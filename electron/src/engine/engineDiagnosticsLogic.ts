@@ -5,6 +5,13 @@ import type { EngineFailureReason, JavaBridgeState } from "./JavaBridge.js"
  *
  * 输入由 IPC 层从 JavaBridge / 文件系统 / 端口探测收集，
  * 输出面向用户的失败分类与中文说明。
+ *
+ * 状态机（与 JavaBridge 一致）：
+ * - stopped: 未启动
+ * - starting: 进程已 spawn 但健康端点尚未确认
+ * - running: 健康端点确认就绪
+ * - unhealthy: 进程存活但健康检查超时
+ * - crashed: 进程异常退出（exit code != 0 / signal != null）
  */
 export type DiagnosticsInput = {
   readonly state: JavaBridgeState
@@ -27,8 +34,10 @@ export type DiagnosticsInput = {
 export type DiagnosticsResult = {
   readonly code:
     | "ok"
+    | "starting"
     | "jar-missing"
     | "runtime-missing"
+    | "runtime-blocked"
     | "start-failed"
     | "port-conflict"
     | "health-timeout"
@@ -61,6 +70,14 @@ export const classifyEngineDiagnostics = (input: DiagnosticsInput): DiagnosticsR
     }
   }
 
+  // 启动中：进程已 spawn 但健康端点尚未确认；UI 区分此态以避免"运行中"+"不可用"同时出现
+  if (state.kind === "starting") {
+    return {
+      code: "starting",
+      message: "本地引擎启动中…工作台仍可使用本地预览，高保真导出将在引擎就绪后恢复。"
+    }
+  }
+
   // 运行中：正常或日志告警
   if (state.kind === "running") {
     return { code: "ok", message: "引擎运行中。" }
@@ -73,6 +90,11 @@ export const classifyEngineDiagnostics = (input: DiagnosticsInput): DiagnosticsR
       return {
         code: "runtime-missing",
         message: "随包 Java 运行时缺失或损坏。请重新安装应用（本应用不要求用户安装 Java）。"
+      }
+    case "runtime-blocked":
+      return {
+        code: "runtime-blocked",
+        message: "随包 Java 启动后被系统安全软件阻止（Windows Defender / SmartScreen 等）。请在安全软件中将本应用加入白名单后重试。"
       }
     case "port-conflict":
       return {
@@ -94,6 +116,12 @@ export const classifyEngineDiagnostics = (input: DiagnosticsInput): DiagnosticsR
       return {
         code: "port-conflict",
         message: `端口 ${baseUrlLabel} 已被其它程序占用。请关闭占用该端口的程序后重试。`
+      }
+    }
+    if (state.reason === "runtime-blocked") {
+      return {
+        code: "runtime-blocked",
+        message: "随包 Java 启动后被系统安全软件阻止（Windows Defender / SmartScreen 等）。请在安全软件中将本应用加入白名单后重试。"
       }
     }
     return {

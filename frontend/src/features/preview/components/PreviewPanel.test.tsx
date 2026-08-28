@@ -445,8 +445,10 @@ describe("PreviewPanel 单图导出（EXIF 等待 + 解析一致）", () => {
       expect(batchButton.disabled).toBe(true)
       expect(screen.getByRole("status", { name: "单图导出进度" })).toBeTruthy()
       const progress = screen.getByRole("progressbar", { name: "单图导出进度" })
-      expect(progress.getAttribute("aria-valuenow")).toBe("1")
-      expect(progress.querySelector(".previewExportProgressFill")).toBeTruthy()
+      // 非确定进度：无 aria-valuenow（引擎不提供内部百分比），用 indeterminate 动画
+      expect(progress.hasAttribute("aria-valuenow")).toBe(false)
+      expect(progress.querySelector(".previewExportProgressFillIndeterminate")).toBeTruthy()
+      expect(progress.getAttribute("aria-valuetext")).toContain("读取 EXIF")
 
       // 释放 EXIF 门后必须等到导出终态，避免悬挂的异步链路在后续测试中
       // 触发它们自己的 showNotification mock（跨测试污染计数）
@@ -497,8 +499,10 @@ describe("PreviewPanel 单图导出（EXIF 等待 + 解析一致）", () => {
       expect(exportButton.disabled).toBe(true)
       expect(screen.getByRole("status", { name: "单图导出进度" }).textContent).toContain("渲染")
       const progress = screen.getByRole("progressbar", { name: "单图导出进度" })
-      expect(progress.getAttribute("aria-valuenow")).toBe("2")
-      expect(progress.querySelector(".previewExportProgressFill")).toBeTruthy()
+      // 渲染阶段同样是非确定进度，不伪造百分比
+      expect(progress.hasAttribute("aria-valuenow")).toBe(false)
+      expect(progress.querySelector(".previewExportProgressFillIndeterminate")).toBeTruthy()
+      expect(progress.getAttribute("aria-valuetext")).toContain("渲染")
       // 等到终态再结束，防止悬挂异步链路污染后续测试的通知 mock 计数
       releaseRender?.()
       await waitFor(() => {
@@ -814,36 +818,85 @@ describe("PreviewPanel 单图导出（EXIF 等待 + 解析一致）", () => {
       expect(title2).toBe("批量导出完成")
     })
 
-    it("取消目录选择：不发通知，不调用 fetch", async () => {
-      const showNotification = vi.fn(async () => true)
-      ;(window as unknown as { desktop?: unknown }).desktop = {
-        selectExportDirectory: vi.fn(async () => null),
-        showNotification
-      }
-      const fetchMock = vi.fn(async () => jsonResponse({ error: "should not be called" }, 404))
-      vi.stubGlobal("fetch", fetchMock)
+  it("取消目录选择：不发通知，不调用 fetch", async () => {
+    const showNotification = vi.fn(async () => true)
+    ;(window as unknown as { desktop?: unknown }).desktop = {
+      selectExportDirectory: vi.fn(async () => null),
+      showNotification
+    }
+    const fetchMock = vi.fn(async () => jsonResponse({ error: "should not be called" }, 404))
+    vi.stubGlobal("fetch", fetchMock)
 
-      const itemA = makeItem()
-      const itemB = { ...makeItem(), id: "q2", filePath: "/photos/B.jpg", fileName: "B.jpg", sourcePath: "/photos/B.jpg" }
+    const itemA = makeItem()
+    const itemB = { ...makeItem(), id: "q2", filePath: "/photos/B.jpg", fileName: "B.jpg", sourcePath: "/photos/B.jpg" }
+    render(
+      <PreviewPanel
+        state={makeActiveState()}
+        settings={makeSettings()}
+        hasSelectedImage={true}
+        queueItems={[itemA, itemB]}
+        batchExportItems={[itemA, itemB]}
+        batchExportLabel="批量导出 2 张"
+        resolveQueueItem={vi.fn(() => ({ textOverride: null, resolvedLayers: [], brand: null }))}
+        prepareExifForExport={vi.fn(async () => {})}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "批量导出 2 张" }))
+    await waitFor(() => {
+      expect((screen.getByRole("button", { name: "批量导出 2 张" }) as HTMLButtonElement).disabled).toBe(false)
+    })
+    expect(showNotification).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  // ── 引擎不可用时的导出禁用（P3 Windows 离线 + 引擎双层兜底） ────────────
+  // 关键：导出是高保真链路，必须由 Java 引擎完成；引擎不可用时按钮禁用并
+  // 显式说明原因（不让用户点了再失败）。引擎恢复后按钮自动恢复可用。
+  describe("引擎不可用时的导出禁用", () => {
+    it("engineAvailable=false：单图与批量导出按钮均禁用，按钮含 title 解释原因", () => {
       render(
         <PreviewPanel
           state={makeActiveState()}
           settings={makeSettings()}
           hasSelectedImage={true}
-          queueItems={[itemA, itemB]}
-          batchExportItems={[itemA, itemB]}
+          queueItems={[makeItem(), {
+            ...makeItem(), id: "q2", filePath: "/photos/B.jpg", fileName: "B.jpg", sourcePath: "/photos/B.jpg"
+          }]}
+          batchExportItems={[makeItem(), {
+            ...makeItem(), id: "q2", filePath: "/photos/B.jpg", fileName: "B.jpg", sourcePath: "/photos/B.jpg"
+          }]}
           batchExportLabel="批量导出 2 张"
           resolveQueueItem={vi.fn(() => ({ textOverride: null, resolvedLayers: [], brand: null }))}
           prepareExifForExport={vi.fn(async () => {})}
+          engineAvailable={false}
         />
       )
+      const exportButton = screen.getByRole("button", { name: /导出原图/ }) as HTMLButtonElement
+      expect(exportButton.disabled).toBe(true)
+      expect(exportButton.title).toMatch(/引擎.*不可用|恢复引擎/)
+      const batchButton = screen.getByRole("button", { name: /批量导出/ }) as HTMLButtonElement
+      expect(batchButton.disabled).toBe(true)
+      expect(batchButton.title).toMatch(/引擎.*不可用|恢复引擎/)
+    })
 
-      fireEvent.click(screen.getByRole("button", { name: "批量导出 2 张" }))
-      await waitFor(() => {
-        expect((screen.getByRole("button", { name: "批量导出 2 张" }) as HTMLButtonElement).disabled).toBe(false)
-      })
-      expect(showNotification).not.toHaveBeenCalled()
-      expect(fetchMock).not.toHaveBeenCalled()
+    it("engineAvailable=true：导出按钮可用", () => {
+      render(
+        <PreviewPanel
+          state={makeActiveState()}
+          settings={makeSettings()}
+          hasSelectedImage={true}
+          queueItems={[makeItem()]}
+          batchExportItems={[]}
+          batchExportLabel=""
+          resolveQueueItem={vi.fn(() => ({ textOverride: null, resolvedLayers: [], brand: null }))}
+          prepareExifForExport={vi.fn(async () => {})}
+          engineAvailable={true}
+        />
+      )
+      const exportButton = screen.getByRole("button", { name: "导出原图" }) as HTMLButtonElement
+      expect(exportButton.disabled).toBe(false)
     })
   })
+})
 })

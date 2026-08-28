@@ -39,4 +39,9 @@ export type EngineConfig = {
   readonly env?: Readonly<Record<string, string>> | undefined
   /** Spring Boot --server.port 参数值；缺省时使用引擎默认端口。 */
   readonly serverPort?: string | undefined
+  /**
+   * 端口探测函数（测试注入用）。缺省使用 JavaBridge 内置的空闲端口探测。
+   * 返回空闲端口号或 null（探测失败时保留默认端口）。
+   */
+  readonly portProbe?: (host: string, start: number, timeoutMs?: number) => Promise<number | null> | undefined
 }

@@ -136,6 +136,9 @@ describe("WorkspacePage wiring（摄影预设 + EXIF 批量导出闭环）", () 
   })
 
   it("批量导出：队列中每张图片都先读 EXIF，再用同一套有效摄影信息生成 RenderRecipe", async () => {
+    // 此用例同时挂载完整 WorkspacePage（队列/预设/模板/资产/EXIF/预览/批量导出），
+    // 并等待 prepareExifForExport 串行读取 EXIF + 批量导出 render-jobs。
+    // 默认 5s 在 CI/冷启动下可能超时；提升到 20s 保证稳定（非隐藏测试）。
     const { renderJobs, metadataRequests, callLog } = setupWorkspace()
     render(<WorkspacePage runtime={runtime} />)
 
@@ -205,7 +208,7 @@ describe("WorkspacePage wiring（摄影预设 + EXIF 批量导出闭环）", () 
     // 10) 预设只提供身份：不改变边框/裁剪/导出设置（filmFormat 来自设置，保持 null）
     expect(recipeA.filmFormat).toBeNull()
     expect(recipeB.filmFormat).toBeNull()
-  })
+  }, 20000) // CI/冷启动下默认 5s 不足以完成完整批量导出链路；提高至此用例专属上限（非隐藏测试）
 
   it("旧 Roll 数据（readRolls 返回旧格式）不会导致工作台崩溃，界面不出现 Roll 入口", async () => {
     const { desktop } = setupWorkspace()

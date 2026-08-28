@@ -27,8 +27,8 @@ export type ImageSourceResult = {
  * 字段与 Electron 主进程 engineDiagnostics 一致，前端独立维护副本。
  */
 export type EngineDiagnostics = {
-  /** 诊断分类。 */
-  readonly code: "ok" | "jar-missing" | "runtime-missing" | "start-failed" | "port-conflict" | "health-timeout" | "unknown"
+  /** 诊断分类（与 Electron 主进程 desktopApi.EngineDiagnostics.code 保持一致）。 */
+  readonly code: "ok" | "starting" | "jar-missing" | "runtime-missing" | "runtime-blocked" | "start-failed" | "port-conflict" | "health-timeout" | "unknown"
   /** 面向用户的中文描述。 */
   readonly message: string
   /** 引擎日志文件绝对路径（可为空）。 */
@@ -135,6 +135,13 @@ export type DesktopBridge = {
    */
   readonly openDirectory: (dirPath: string) => Promise<boolean>
   /**
+   * 读取引擎实际 baseUrl（含 JavaBridge 自动选择的端口）。
+   * 动态端口：默认端口被占用时主进程自动换端口，前端启动与重试后调用
+   * syncEngineBaseUrl() 同步，健康检查/预览/EXIF/导出全部指向实际端口。
+   * 旧版 preload 可能不提供此方法，故声明为可选。
+   */
+  readonly getEngineBaseUrl?: () => Promise<string>
+  /**
    * 读取引擎托管诊断信息（引擎启动失败页面使用）。
    * 仅托管模式下有意义；未托管或桌面桥不存在时返回 null。
    */
@@ -147,6 +154,28 @@ export type DesktopBridge = {
    * 不会抛出异常。通知只展示文件名等简短文案，不展示绝对路径。
    */
   readonly showNotification: (title: string, body: string) => Promise<boolean>
+  /**
+   * 在主进程读取本地图片并生成 dataURL 预览。
+   * 引擎不可用时工作台可继续本地预览。
+   * 仅接受绝对路径、常规文件和支持的栅格格式；参数非法或解码失败时返回 null。
+   */
+  readonly loadLocalImagePreview: (
+    imagePath: string,
+    maxWidth: number,
+    maxHeight: number
+  ) => Promise<LocalImagePreview | null>
+  /**
+   * 在系统默认应用中打开引擎日志文件。
+   * 路径必须位于 userData/logs 下；不存在或打开失败时返回 false。
+   */
+  readonly openLogFile: (logPath: string) => Promise<boolean>
+}
+
+/** 本地图片预览结果。 */
+export type LocalImagePreview = {
+  readonly dataUrl: string
+  readonly width: number
+  readonly height: number
 }
 
 declare global {

@@ -60,8 +60,19 @@ const buildBridge = (): JavaBridge => {
   return newBridge
 }
 
-/** 启动 Java 渲染引擎子进程（仅生产/托管模式）。 */
-const startEngine = (): void => {
+/**
+ * 启动 Java 渲染引擎子进程（仅生产/托管模式）。
+ *
+ * 返回 Promise：resolve 时 start() 已完成「端口探测 + spawn」（不等待引擎就绪，
+ * 就绪探测 waitForReady 在后台推进）。生产窗口必须等本函数完成后再创建，
+ * 否则前端可能在端口探测前同步到默认 8099，动态端口场景下健康/预览/EXIF/导出
+ * 全部指向错误服务。
+ *
+ * 捕获局部引用 b：before-quit 会把模块级 bridge 置 null，异步回调必须
+ * 使用捕获的实例，避免「bridge 为 null 的异常」；b.dispose 后 waitForReady
+ * 会被 #shuttingDown/#generation 守卫快速中止，不会挂起。
+ */
+const startEngine = async (): Promise<void> => {
   bridge = buildBridge()
 
   // 启动前检查 jar 是否存在，不存在时 JavaBridge.start() 会输出中文错误
@@ -74,9 +85,10 @@ const startEngine = (): void => {
     return
   }
 
-  bridge.start()
-
-  void bridge.waitForReady().then((ready) => {
+  const b = bridge
+  // 端口自动选择 + spawn 完成后返回；waitForReady 后台推进（不阻塞窗口创建）
+  await b.start()
+  void b.waitForReady().then((ready) => {
     if (!ready) {
       console.warn("[java-bridge] 引擎在超时时间内未就绪")
     }
@@ -108,7 +120,7 @@ export const runApplication = (): void => {
     }
   })
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     // 生产模式需要注册 app:// 协议处理器；开发模式不需要。
     if (engineManaged) {
       registerAppProtocol()
@@ -117,8 +129,10 @@ export const runApplication = (): void => {
     registerAllIpc()
 
     // 仅生产模式启动 Java 引擎子进程。
+    // 关键时序：先 await startEngine（含端口探测 + spawn），再创建生产窗口，
+    // 确保渲染进程启动时 getEngineBaseUrl() 已返回最终端口（动态端口场景）。
     if (engineManaged) {
-      startEngine()
+      await startEngine()
     }
 
     void createMainWindow()

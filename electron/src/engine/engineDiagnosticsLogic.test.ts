@@ -16,12 +16,28 @@ const baseInput = (overrides: Partial<DiagnosticsInput>): DiagnosticsInput => ({
   ...overrides
 })
 
+/** 构造一个标准 crashed 状态（包含新加的 signal/reason 字段）。 */
+const crashed = (exitCode: number | null, reason: "start-failed" | "runtime-missing" | "runtime-blocked" | null = "start-failed"): JavaBridgeState => ({
+  kind: "crashed",
+  exitCode,
+  signal: null,
+  reason
+})
+
 describe("classifyEngineDiagnostics（引擎诊断分类）", () => {
   it("运行中：ok", () => {
     const result = classifyEngineDiagnostics(baseInput({
       state: { kind: "running", pid: 100 }
     }))
     expect(result.code).toBe("ok")
+  })
+
+  it("启动中：starting（区分于 running，避免 UI 显示矛盾）", () => {
+    const result = classifyEngineDiagnostics(baseInput({
+      state: { kind: "starting", pid: 100 }
+    }))
+    expect(result.code).toBe("starting")
+    expect(result.message).toContain("启动中")
   })
 
   it("jar 缺失：优先级最高，即便同时缺运行时", () => {
@@ -37,7 +53,7 @@ describe("classifyEngineDiagnostics（引擎诊断分类）", () => {
     const result = classifyEngineDiagnostics(baseInput({
       bundledRuntimeExists: false,
       failureReason: "runtime-missing",
-      state: { kind: "crashed", exitCode: null }
+      state: crashed(null, "runtime-missing")
     }))
     expect(result.code).toBe("runtime-missing")
     expect(result.message).toContain("不要求用户安装 Java")
@@ -70,7 +86,7 @@ describe("classifyEngineDiagnostics（引擎诊断分类）", () => {
   it("明确端口占用原因：port-conflict", () => {
     const result = classifyEngineDiagnostics(baseInput({
       failureReason: "port-conflict",
-      state: { kind: "crashed", exitCode: 1 }
+      state: crashed(1)
     }))
     expect(result.code).toBe("port-conflict")
     expect(result.message).toContain("127.0.0.1:8099")
@@ -78,7 +94,7 @@ describe("classifyEngineDiagnostics（引擎诊断分类）", () => {
 
   it("无明确原因但进程已崩溃且端口被其它服务占用：port-conflict", () => {
     const result = classifyEngineDiagnostics(baseInput({
-      state: { kind: "crashed", exitCode: 1 },
+      state: crashed(1),
       portOccupiedByOther: true
     }))
     expect(result.code).toBe("port-conflict")
@@ -86,16 +102,32 @@ describe("classifyEngineDiagnostics（引擎诊断分类）", () => {
 
   it("进程崩溃且端口空闲：start-failed", () => {
     const result = classifyEngineDiagnostics(baseInput({
-      state: { kind: "crashed", exitCode: 1 },
+      state: crashed(1),
       portOccupiedByOther: false
     }))
     expect(result.code).toBe("start-failed")
   })
 
+  it("runtime-blocked 原因：归类 runtime-blocked（提示用户检查 Defender/SmartScreen）", () => {
+    const result = classifyEngineDiagnostics(baseInput({
+      failureReason: "runtime-blocked"
+    }))
+    expect(result.code).toBe("runtime-blocked")
+    expect(result.message).toMatch(/Defender|SmartScreen|安全软件/)
+  })
+
+  it("crashed.reason=runtime-blocked（即便未单独传 failureReason）也归类 runtime-blocked", () => {
+    const result = classifyEngineDiagnostics(baseInput({
+      state: crashed(1, "runtime-blocked"),
+      failureReason: null
+    }))
+    expect(result.code).toBe("runtime-blocked")
+  })
+
   it("spawn 失败原因 start-failed：对应分类", () => {
     const result = classifyEngineDiagnostics(baseInput({
       failureReason: "start-failed",
-      state: { kind: "crashed", exitCode: null }
+      state: crashed(null)
     }))
     expect(result.code).toBe("start-failed")
   })

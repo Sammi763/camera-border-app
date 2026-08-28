@@ -47,6 +47,13 @@ type QuickWorkspaceProps = {
   readonly batchExportItems: readonly QueueItem[]
   /** 批量导出按钮文案。 */
   readonly batchExportLabel: string
+  /**
+   * 引擎是否可用。仅 ready 时为 true；loading/error 时为 false。
+   * 快速模式与高级模式共用 PreviewPanel 的导出禁用逻辑（高保真导出必须由 Java 引擎完成）。
+   */
+  readonly engineAvailable: boolean
+  /** 引擎不可用原因（用于导出按钮 title 与提示）。 */
+  readonly engineUnavailableReason: string | null
   readonly onApplyTemplate: (patch: Partial<RenderSettings>) => void
   readonly onApplyInfoCardVariant: (variantId: string) => void
   readonly onApplyPreset: (presetId: string, scope: BatchScope) => void
@@ -72,6 +79,8 @@ export const QuickWorkspace = ({
   resolvedTextLayers,
   batchExportItems,
   batchExportLabel,
+  engineAvailable,
+  engineUnavailableReason,
   onApplyTemplate,
   onApplyInfoCardVariant,
   onApplyPreset,
@@ -98,6 +107,8 @@ export const QuickWorkspace = ({
             resolvedTextOverride={resolvedTextOverride}
             resolvedTextLayers={resolvedTextLayers}
             autoOpenExportDirectory
+            engineAvailable={engineAvailable}
+            engineUnavailableReason={engineUnavailableReason}
           />
         </div>
         <div className="quickRight">

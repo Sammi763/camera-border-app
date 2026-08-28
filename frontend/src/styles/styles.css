@@ -870,6 +870,17 @@ body {
   transition: width 0.2s ease;
 }
 
+/* 单图导出阶段为非确定进度（引擎不提供内部百分比）：滑块往复动画，避免被误判为卡死。 */
+.previewExportProgressFillIndeterminate {
+  width: 40%;
+  animation: previewExportIndeterminate 1.2s ease-in-out infinite;
+}
+
+@keyframes previewExportIndeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}
+
 /* 批量导出 determinate 进度条（role=progressbar，含 current/total 与成败计数） */
 .previewBatchProgress {
   display: inline-flex;
@@ -2591,6 +2602,61 @@ body {
   .quickLeft {
     max-height: 200px;
   }
+}
+
+/* ---- 引擎状态条（顶部非阻塞提示） ----------------------------------------- */
+/* 替代旧的全屏 engineFailureView：工作台永远可访问，仅做状态展示。 */
+
+.engineStatusBar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.08));
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+.engineStatusBarStarting {
+  background: var(--bg-tertiary, rgba(0, 0, 0, 0.03));
+  color: var(--text-secondary);
+}
+
+.engineStatusBarUnavailable {
+  background: rgba(217, 119, 6, 0.08);
+  color: var(--text-primary, #222);
+  border-color: rgba(217, 119, 6, 0.3);
+}
+
+.engineStatusBarDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: 0 0 auto;
+  opacity: 0.8;
+}
+
+.engineStatusBarTextGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.engineStatusBarText {
+  font-weight: 600;
+}
+
+.engineStatusBarHint {
+  font-size: 0.75rem;
+  opacity: 0.8;
+}
+
+.engineStatusBarReason {
+  font-size: 0.75rem;
+  opacity: 0.7;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", monospace;
 }
 
 /* ---- 引擎启动失败页面（托管模式） ----------------------------------------- */

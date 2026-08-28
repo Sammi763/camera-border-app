@@ -43,7 +43,7 @@ import { detectBrandFromIdentity } from "../features/settings/utils/brandDetecti
 import { BUILT_IN_TEMPLATES, PHOTO_INFO_CARD_TEMPLATE_IDS } from "../features/template/presets/builtInTemplates"
 import { fetchFilmStocks } from "../services/engine/filmStocksApi"
 import { QuickWelcome } from "../features/quick/components/QuickWelcome"
-import { EngineFailureView } from "../features/engineHealth/EngineFailureView"
+import { EngineStatusBar } from "../features/engineHealth/EngineStatusBar"
 import { QuickWorkspace } from "../features/quick/components/QuickWorkspace"
 import type { PresetDraft } from "../features/quick/components/QuickInfoSummary"
 import { buildPresetFromText } from "../features/quick/utils/buildPresetFromText"
@@ -57,6 +57,8 @@ import type { BatchScope } from "../features/queue/types"
 
 type WorkspacePageProps = {
   readonly runtime: DesktopRuntime
+  /** 引擎地址迟到同步时递增，触发首屏引擎请求重新执行。 */
+  readonly engineBaseUrlRevision?: number
 }
 
 // ---- 可调分栏常量 ---------------------------------------------------------
@@ -112,8 +114,8 @@ const clampWidth = (value: number, min: number, max: number): number =>
 const PHOTO_INFO_CARD_DEFAULT_PATCH: Partial<RenderSettings> =
   BUILT_IN_TEMPLATES.find((t) => t.id === PHOTO_INFO_CARD_TEMPLATE_IDS.centerWhite)?.settingsPatch ?? {}
 
-export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
-  const health = useEngineHealth()
+export const WorkspacePage = ({ runtime, engineBaseUrlRevision = 0 }: WorkspacePageProps): JSX.Element => {
+  const health = useEngineHealth(undefined, engineBaseUrlRevision)
   const queue = useQueue()
   const settings = useSettings()
   const userModifiedRef = useRef(false)
@@ -206,7 +208,7 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
         // 引擎不可用时不影响
       })
     return () => { active = false }
-  }, [])
+  }, [engineBaseUrlRevision])
 
   // 导入照片后自动应用「摄影信息卡」默认模板：
   // 仅当队列从空变为非空、且用户尚未手动修改过设置/模板、且没有已保存的默认模板时。
@@ -416,8 +418,15 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
     settings.settingsVersion,
     resolvedTextOverride,
     resolvedTextLayers,
-    resolvedBrand
+    resolvedBrand,
+    engineBaseUrlRevision
   )
+
+  // 引擎是否可用：仅在「健康端点连续 ready」时为 true。
+  // loading/error 都视为不可用，UI 据此禁用导出按钮、提示用户当前为本地预览模式。
+  const engineAvailable = health.kind === "ready"
+  // 当前失败原因（error 时为诊断消息，loading/ready 时为 null）；供 PreviewPanel 解释禁用原因
+  const engineUnavailableReason: string | null = health.kind === "error" ? health.message : null
 
   // 识别当前图片的品牌（用于品牌标识设置面板预览）
   const detectedBrand = useMemo(() => {
@@ -688,6 +697,8 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
             onCreatePresetFromText={handleCreatePresetFromText}
             batchExportItems={batchExportItems}
             batchExportLabel={batchExportLabel}
+            engineAvailable={engineAvailable}
+            engineUnavailableReason={engineUnavailableReason}
           />
         </main>
       )}
@@ -712,6 +723,8 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
               resolvedTextOverride={resolvedTextOverride}
               resolvedTextLayers={resolvedTextLayers}
               autoOpenExportDirectory
+              engineAvailable={engineAvailable}
+              engineUnavailableReason={engineUnavailableReason}
             />
           </div>
           <div className="workspaceRight">
@@ -756,8 +769,9 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
         </main>
       )}
 
-      {/* 托管模式引擎启动失败页面：健康检查持续失败时覆盖整个工作台 */}
-      {runtime.engine.managed && health.kind === "error" && <EngineFailureView />}
+      {/* 引擎状态条：非阻塞顶部提示，引擎可用时自动消失。
+          替代旧的全屏 EngineFailureView：工作台永远可访问，引擎不可用时仅做状态提示。 */}
+      {runtime.engine.managed && <EngineStatusBar health={health} />}
 
       <StatusPanel
         runtime={runtime}

@@ -102,6 +102,13 @@ export type DesktopApi = {
    */
   readonly openDirectory: (dirPath: string) => Promise<boolean>
   /**
+   * 读取引擎实际 baseUrl（含 JavaBridge 自动选择的端口）。
+   * 动态端口：默认端口被占用时主进程会自动换端口，此方法把最终地址同步给前端，
+   * 前端健康检查、预览、EXIF、导出全部指向实际端口。
+   * 未托管（开发）模式返回配置端口。
+   */
+  readonly getEngineBaseUrl: () => Promise<string>
+  /**
    * 读取引擎托管诊断信息（引擎启动失败页面使用）。
    * 仅托管模式下有意义；未托管或引擎从未启动时返回 null。
    */
@@ -114,6 +121,30 @@ export type DesktopApi = {
    * 不会抛出异常。通知只展示文件名等简短文案，不展示绝对路径。
    */
   readonly showNotification: (title: string, body: string) => Promise<boolean>
+  /**
+   * 在主进程读取本地图片并生成 dataURL 预览。
+   * 引擎不可用时工作台可继续本地预览（不展示全屏错误页）。
+   * 仅接受绝对路径、常规文件和支持的栅格格式；参数非法或解码失败时返回 null，
+   * 不抛异常到渲染进程。所有 IO 在主进程完成，渲染进程不获得文件系统权限。
+   */
+  readonly loadLocalImagePreview: (
+    imagePath: string,
+    maxWidth: number,
+    maxHeight: number
+  ) => Promise<LocalImagePreview | null>
+  /**
+   * 在系统默认应用中打开引擎日志文件（绝对路径）。
+   * 由 IPC 层校验路径必须在 userData/logs 下；不存在或打开失败时返回 false。
+   * 用于「查看日志」按钮直接打开日志文件本身（而非所在目录）。
+   */
+  readonly openLogFile: (logPath: string) => Promise<boolean>
+}
+
+/** 本地图片预览结果（dataURL + 尺寸）。 */
+export type LocalImagePreview = {
+  readonly dataUrl: string
+  readonly width: number
+  readonly height: number
 }
 
 /**
@@ -121,12 +152,12 @@ export type DesktopApi = {
  * 由主进程根据引擎 jar / 运行时 / 进程 / 端口状态分类生成。
  */
 export type EngineDiagnostics = {
-  readonly code: "ok" | "jar-missing" | "runtime-missing" | "start-failed" | "port-conflict" | "health-timeout" | "unknown"
+  readonly code: "ok" | "starting" | "jar-missing" | "runtime-missing" | "runtime-blocked" | "start-failed" | "port-conflict" | "health-timeout" | "unknown"
   /** 面向用户的中文描述。 */
   readonly message: string
   /** 引擎日志文件绝对路径（可为空）。 */
   readonly logPath: string | null
-  /** 引擎进程是否存活。 */
+  /** 引擎进程是否存活（starting / running / unhealthy 均视为存活）。 */
   readonly processAlive: boolean
 }
 
@@ -156,7 +187,10 @@ export const IPC_CHANNELS = {
   CONVERT_HEIC_FILES: "desktop:convert-heic-files",
   LIST_SYSTEM_FONTS: "desktop:list-system-fonts",
   OPEN_DIRECTORY: "desktop:open-directory",
+  GET_ENGINE_BASE_URL: "desktop:get-engine-base-url",
   GET_ENGINE_DIAGNOSTICS: "desktop:get-engine-diagnostics",
   RETRY_ENGINE_START: "desktop:retry-engine-start",
-  SHOW_NOTIFICATION: "desktop:show-notification"
+  SHOW_NOTIFICATION: "desktop:show-notification",
+  LOAD_LOCAL_IMAGE_PREVIEW: "desktop:load-local-image-preview",
+  OPEN_LOG_FILE: "desktop:open-log-file"
 } as const

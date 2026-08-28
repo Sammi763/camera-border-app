@@ -37,6 +37,15 @@ type PreviewPanelProps = {
   readonly resolvedTextLayers?: readonly (string | null)[] | null
   /** 批量导出完成后是否自动打开输出目录（桌面模式，失败静默）。 */
   readonly autoOpenExportDirectory?: boolean
+  /**
+   * 引擎是否可用。仅 ready 时为 true；loading/error 时为 false。
+   * 不可用时禁用单图与批量导出按钮（导出是高保真链路，必须由 Java 引擎完成）。
+   */
+  readonly engineAvailable?: boolean
+  /**
+   * 引擎不可用时的原因（用于按钮 title 与状态条显示）。null = 引擎可用或非托管模式。
+   */
+  readonly engineUnavailableReason?: string | null
 }
 
 /** 单张图片的批量导出解析结果（与 WorkspacePage.resolveQueueItem 对齐）。 */
@@ -437,7 +446,9 @@ export const PreviewPanel = ({
   resolvedBrand,
   resolvedTextOverride,
   resolvedTextLayers,
-  autoOpenExportDirectory = false
+  autoOpenExportDirectory = false,
+  engineAvailable = true,
+  engineUnavailableReason = null
 }: PreviewPanelProps): JSX.Element => {
   const [exportJob, setExportJob] = useState<ExportJobState>({ kind: "idle" })
   const [batchExport, setBatchExport] = useState<BatchExportState>({ kind: "idle" })
@@ -790,6 +801,11 @@ export const PreviewPanel = ({
   const isExporting = exportJob.kind === "preparing" || exportJob.kind === "submitting" || exportJob.kind === "running"
   const isBatchExporting = batchExport.kind === "preparing" || batchExport.kind === "running"
   const hasBatchItems = batchExportItems.length > 0
+  // 引擎不可用时禁用导出按钮（导出是高保真链路，必须由 Java 引擎完成；
+  // 不使用 Canvas 替代导出，避免失真）。原因写入 title 让 hover 可见。
+  const exportDisabledReason = engineAvailable
+    ? null
+    : (engineUnavailableReason ?? "Java 引擎不可用，恢复后高保真导出自动恢复")
 
   return (
     <Panel label="预览" title="预览区域" className="previewPanel">
@@ -806,7 +822,8 @@ export const PreviewPanel = ({
         <button
           type="button"
           className="ghostButton previewExportButton"
-          disabled={!canExport || isExporting || isBatchExporting}
+          disabled={!canExport || isExporting || isBatchExporting || !engineAvailable}
+          title={exportDisabledReason ?? undefined}
           onClick={() => void handleHighQualityExport()}
         >
           {exportJob.kind === "preparing" ? "准备中…" : isExporting ? "渲染中…" : "导出原图"}
@@ -815,7 +832,8 @@ export const PreviewPanel = ({
           <button
             type="button"
             className="ghostButton previewExportButton"
-            disabled={isBatchExporting || isExporting}
+            disabled={isBatchExporting || isExporting || !engineAvailable}
+            title={exportDisabledReason ?? undefined}
             onClick={() => void handleBatchExport()}
           >
             {batchExport.kind === "preparing"
@@ -828,30 +846,28 @@ export const PreviewPanel = ({
 
         <span className="previewExportStatus" aria-live="polite">
           {!hasSelectedImage && "请先选择一张图片"}
-          {/* 单图导出阶段进度：准备（选路径 + 读 EXIF）→ 渲染（引擎渲染写盘）。
-              不伪造引擎内部百分比，仅展示阶段语义。 */}
+          {/* 单图导出阶段提示：准备（选路径 + 读 EXIF）→ 渲染（引擎渲染写盘）。
+              引擎不提供内部百分比，这里用非确定进度（indeterminate）+ 阶段文字，
+              不伪造精确进度，避免长时间渲染被误判为卡死。 */}
           {(exportJob.kind === "preparing" || exportJob.kind === "submitting") && (
             <span
               className="previewExportPhase"
               role="progressbar"
               aria-label="单图导出进度"
-              aria-valuemin={0}
-              aria-valuemax={3}
-              aria-valuenow={exportJob.kind === "preparing" ? 1 : 2}
-              aria-valuetext={exportJob.kind === "preparing" ? "准备阶段（1/3）" : "引擎渲染阶段（2/3）"}
+              aria-valuetext={exportJob.kind === "preparing" ? "正在读取 EXIF…" : "正在渲染…"}
             >
               <span className="previewExportProgressTrack" aria-hidden="true">
-                <span
-                  className="previewExportProgressFill"
-                  style={{ width: exportJob.kind === "preparing" ? "33%" : "66%" }}
-                />
+                <span className="previewExportProgressFill previewExportProgressFillIndeterminate" />
               </span>
               <span role="status" aria-label="单图导出进度">
                 {exportJob.kind === "preparing" ? "正在读取 EXIF…" : "正在渲染…"}
               </span>
             </span>
           )}
-          {hasSelectedImage && exportJob.kind === "idle" && batchExport.kind === "idle" && (
+          {hasSelectedImage && exportJob.kind === "idle" && batchExport.kind === "idle" && !engineAvailable && (
+            <span className="previewExportHint">引擎不可用，导出已禁用。可继续本地预览与模板编辑。</span>
+          )}
+          {hasSelectedImage && exportJob.kind === "idle" && batchExport.kind === "idle" && engineAvailable && (
             window.desktop === undefined
               ? "浏览器降级模式：导出能力受限，建议启动桌面应用。"
               : "导出使用原图尺寸，由引擎渲染。"

@@ -1,8 +1,11 @@
 import { existsSync } from "node:fs"
-import { ipcMain } from "electron"
+import { join } from "node:path"
+import { app, shell, ipcMain } from "electron"
 import { IPC_CHANNELS, type EngineDiagnostics } from "../types/desktopApi.js"
 import { getManagedEngine } from "../engine/managedEngine.js"
 import { classifyEngineDiagnostics } from "../engine/engineDiagnosticsLogic.js"
+import { isAllowedLogPath } from "./logPathGuard.js"
+import { engineBaseUrl } from "../config/devMode.js"
 
 /**
  * 检测引擎端口是否被其它进程占用。
@@ -32,6 +35,14 @@ const isPortOccupiedByOther = async (baseUrl: string): Promise<boolean> => {
  * 前端据此隐藏故障页面。
  */
 export const registerEngineDiagnosticsIpc = (): void => {
+  /**
+   * 引擎实际 baseUrl（含动态端口）。托管模式返回 JavaBridge 自动选择的端口；
+   * 未托管（开发）返回配置端口。前端启动与重试后调用以同步实际地址。
+   */
+  ipcMain.handle(IPC_CHANNELS.GET_ENGINE_BASE_URL, async (): Promise<string> => {
+    return getManagedEngine()?.bridge.getActualBaseUrl() ?? engineBaseUrl
+  })
+
   ipcMain.handle(IPC_CHANNELS.GET_ENGINE_DIAGNOSTICS, async (): Promise<EngineDiagnostics | null> => {
     const managed = getManagedEngine()
     if (managed === null) {
@@ -42,7 +53,7 @@ export const registerEngineDiagnosticsIpc = (): void => {
     const state = bridge.getState()
     // 仅在「引擎不在运行且无明确原因」时才做端口探测，避免每次诊断都发网络请求
     const needsPortProbe = state.kind !== "running" && bridge.getFailureReason() === null
-    const portOccupied = needsPortProbe ? await isPortOccupiedByOther(config.baseUrl) : false
+    const portOccupied = needsPortProbe ? await isPortOccupiedByOther(bridge.getActualBaseUrl()) : false
 
     const result = classifyEngineDiagnostics({
       state,
@@ -53,7 +64,7 @@ export const registerEngineDiagnosticsIpc = (): void => {
       portOccupiedByOther: portOccupied,
       logWarning: bridge.getLogWarning(),
       jarPath: config.jarPath,
-      baseUrlLabel: config.baseUrl.replace(/^https?:\/\//, "")
+      baseUrlLabel: bridge.getActualBaseUrl().replace(/^https?:\/\//, "")
     })
 
     let message = result.message
@@ -66,7 +77,7 @@ export const registerEngineDiagnosticsIpc = (): void => {
       code: result.code,
       message,
       logPath: bridge.getLogPath(),
-      processAlive: state.kind === "running" || state.kind === "unhealthy"
+      processAlive: state.kind === "running" || state.kind === "unhealthy" || state.kind === "starting"
     }
   })
 
@@ -81,6 +92,34 @@ export const registerEngineDiagnosticsIpc = (): void => {
     void managed.bridge.waitForReady()
     return true
   })
+
+  /**
+   * 在系统默认应用中打开引擎日志文件（绝对路径）。
+   * 安全边界：仅接受位于 userData/logs 下的**常规文件**，避免渲染进程任意打开本地文件。
+   * 校验（logPathGuard.ts）：
+   * - resolve 规范化后必须位于 userData/logs 内（拦截 ../ 路径穿越）；
+   * - realpath 解析后仍位于其内（拦截绝对路径大小写绕过与符号链接指向目录外）；
+   * - stat 确认是普通文件（拒绝目录 / 设备 / 链接）。
+   * 打开失败（校验不过、文件不存在、shell 报错）返回 false，不抛异常。
+   */
+  ipcMain.handle(
+    IPC_CHANNELS.OPEN_LOG_FILE,
+    async (_event, logPath: unknown): Promise<boolean> => {
+      if (typeof logPath !== "string") {
+        return false
+      }
+      const allowedRoot = join(app.getPath("userData"), "logs")
+      if (!isAllowedLogPath(logPath, allowedRoot)) {
+        return false
+      }
+      try {
+        const errorMessage = await shell.openPath(logPath)
+        return errorMessage.length === 0
+      } catch {
+        return false
+      }
+    }
+  )
 }
 
 /** 引擎日志文件是否存在（测试与排障辅助）。 */

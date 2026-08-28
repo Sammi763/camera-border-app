@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react"
 import { requestPreview } from "../../../services/engine/previewApi"
 import { toFileName } from "../../../utils/fileName"
 import { buildPlainImagePreviewRequest, buildPreviewRequest } from "../../settings/utils/buildRecipe"
+import { loadLocalImagePreview, isLocalPreviewSupported, isRawOrHeicFile } from "../../../services/desktop/localImagePreview"
 import type { PreviewRequest } from "../../../types/preview"
 import type { RenderSettings } from "../../settings/types"
 import type { PreviewState } from "../types"
@@ -54,25 +55,28 @@ export const usePreview = (
   settingsVersion: number,
   textOverride?: string | null,
   resolvedTextLayers?: readonly (string | null)[] | null,
-  resolvedBrand?: string | null
+  resolvedBrand?: string | null,
+  engineBaseUrlRevision: number = 0
 ): PreviewState => {
   const [state, setState] = useState<PreviewState>({ kind: "idle" })
 
   const lastRequestedRef = useRef<{
     filePath: string | null
     version: number
+    engineBaseUrlRevision: number
     textOverride: string | null | undefined
     textLayersSig: string
     brand: string | null | undefined
   }>({
     filePath: null,
     version: 0,
+    engineBaseUrlRevision: 0,
     textOverride: undefined,
     textLayersSig: "",
     brand: undefined
   })
 
-  // 加载图片元素（通过 fetch→blob→objectURL 避免 CORS 污染）
+  // 加载图片元素（引擎优先；失败时降级到本地 nativeImage 预览）
   useEffect(() => {
     if (selectedFilePath === null) {
       setState({ kind: "idle" })
@@ -92,11 +96,53 @@ export const usePreview = (
       engineResponse: null
     })
 
+    // RAW/HEIC 等系统缩略图无法解码的格式：直接走本地预览失败路径，
+    // 提示用户「本地预览不可用，需等待引擎恢复」，不静默伪装成正常预览。
+    const isUnsupportedForLocal = isRawOrHeicFile(selectedFilePath)
+
     const imageRequest: PreviewRequest = buildPlainImagePreviewRequest(
       selectedFilePath,
       PREVIEW_MAX_WIDTH,
       PREVIEW_MAX_HEIGHT
     )
+
+    /**
+     * 把 dataURL/objectURL 包装为可绘制的 HTMLImageElement。
+     * 任何异常（load 失败、格式不支持）由调用方在 .catch 中处理。
+     */
+    const loadImageFromUrl = (url: string): Promise<HTMLImageElement> =>
+      new Promise((resolve, reject) => {
+        const img = new Image()
+        img.onload = (): void => {
+          if (img.naturalWidth === 0 || img.naturalHeight === 0) {
+            reject(new Error("image has zero dimensions"))
+            return
+          }
+          resolve(img)
+        }
+        img.onerror = (): void => reject(new Error("image load failed"))
+        img.src = url
+      })
+
+    /**
+     * 本地降级：通过主进程 nativeImage 读取 + 缩放，返回 dataURL。
+     * 引擎不可用时工作台仍可继续预览。
+     */
+    const tryLocalPreview = async (): Promise<HTMLImageElement | null> => {
+      if (isUnsupportedForLocal || !isLocalPreviewSupported(selectedFilePath)) {
+        return null
+      }
+      const result = await loadLocalImagePreview(
+        selectedFilePath,
+        PREVIEW_MAX_WIDTH,
+        PREVIEW_MAX_HEIGHT
+      )
+      if (result === null) {
+        return null
+      }
+      currentObjectUrl = result.dataUrl
+      return loadImageFromUrl(result.dataUrl)
+    }
 
     void requestPreview(imageRequest)
       .then((response) => {
@@ -119,32 +165,47 @@ export const usePreview = (
         if (!active || blob === undefined) {
           return
         }
-        currentObjectUrl = URL.createObjectURL(blob)
-        const img = new Image()
-        img.onload = () => {
-          if (!active) {
-            return
-          }
-          setState((prev) => {
-            if (prev.kind !== "active" || prev.filePath !== selectedFilePath) {
-              return prev
-            }
-            return { ...prev, currentImage: img }
-          })
-        }
-        img.src = currentObjectUrl
+        const objectUrl = URL.createObjectURL(blob)
+        currentObjectUrl = objectUrl
+        return loadImageFromUrl(objectUrl)
       })
-      .catch(() => {
-        // 图片加载失败时保持 currentImage 为 null
+      .then((img) => {
+        if (!active || img === undefined) {
+          return
+        }
+        setState((prev) => {
+          if (prev.kind !== "active" || prev.filePath !== selectedFilePath) {
+            return prev
+          }
+          return { ...prev, currentImage: img }
+        })
+      })
+      .catch(async () => {
+        // 引擎不可达：降级到本地 nativeImage 预览（仅 JPEG/PNG/WebP/BMP/TIFF）
+        if (!active) {
+          return
+        }
+        const img = await tryLocalPreview()
+        if (!active || img === null) {
+          // 引擎失败 + 本地无法解码（RAW/HEIC 或桥接不可用）：保持 currentImage=null
+          // 状态文本由 EngineStatusBar 提示用户等待引擎恢复
+          return
+        }
+        setState((prev) => {
+          if (prev.kind !== "active" || prev.filePath !== selectedFilePath) {
+            return prev
+          }
+          return { ...prev, currentImage: img }
+        })
       })
 
     return () => {
       active = false
-      if (currentObjectUrl !== null) {
+      if (currentObjectUrl !== null && currentObjectUrl.startsWith("blob:")) {
         URL.revokeObjectURL(currentObjectUrl)
       }
     }
-  }, [selectedFilePath])
+  }, [selectedFilePath, engineBaseUrlRevision])
 
   // 后台引擎预览请求
   useEffect(() => {
@@ -159,16 +220,19 @@ export const usePreview = (
 
     const fileUnchanged = selectedFilePath === lastRequestedRef.current.filePath
     const versionUnchanged = settingsVersion === lastRequestedRef.current.version
+    const engineBaseUrlUnchanged = engineBaseUrlRevision === lastRequestedRef.current.engineBaseUrlRevision
     const textOverrideUnchanged = textOverride === lastRequestedRef.current.textOverride
     const textLayersUnchanged = textLayersSig === lastRequestedRef.current.textLayersSig
     const brandUnchanged = resolvedBrand === lastRequestedRef.current.brand
 
-    if (fileUnchanged && versionUnchanged && textOverrideUnchanged && textLayersUnchanged && brandUnchanged && state.kind !== "idle") {
+    if (fileUnchanged && versionUnchanged && engineBaseUrlUnchanged
+      && textOverrideUnchanged && textLayersUnchanged && brandUnchanged && state.kind !== "idle") {
       return
     }
     lastRequestedRef.current = {
       filePath: selectedFilePath,
       version: settingsVersion,
+      engineBaseUrlRevision,
       textOverride,
       textLayersSig,
       brand: resolvedBrand
@@ -230,7 +294,7 @@ export const usePreview = (
     return () => {
       active = false
     }
-  }, [selectedFilePath, settingsVersion, settings, textOverride, resolvedTextLayers, resolvedBrand])
+  }, [selectedFilePath, settingsVersion, settings, textOverride, resolvedTextLayers, resolvedBrand, engineBaseUrlRevision])
 
   return state
 }

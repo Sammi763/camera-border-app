@@ -67,12 +67,22 @@ export const exposeDesktopApi = (): void => {
       ipcRenderer.invoke(IPC_CHANNELS.LIST_SYSTEM_FONTS),
     openDirectory: (dirPath: string): Promise<boolean> =>
       ipcRenderer.invoke(IPC_CHANNELS.OPEN_DIRECTORY, dirPath),
+    getEngineBaseUrl: (): Promise<string> =>
+      ipcRenderer.invoke(IPC_CHANNELS.GET_ENGINE_BASE_URL),
     getEngineDiagnostics: (): Promise<EngineDiagnostics | null> =>
       ipcRenderer.invoke(IPC_CHANNELS.GET_ENGINE_DIAGNOSTICS),
     retryEngineStart: (): Promise<boolean> =>
       ipcRenderer.invoke(IPC_CHANNELS.RETRY_ENGINE_START),
     showNotification: (title: string, body: string): Promise<boolean> =>
-      ipcRenderer.invoke(IPC_CHANNELS.SHOW_NOTIFICATION, title, body)
+      ipcRenderer.invoke(IPC_CHANNELS.SHOW_NOTIFICATION, title, body),
+    loadLocalImagePreview: (
+      imagePath: string,
+      maxWidth: number,
+      maxHeight: number
+    ): Promise<import("../types/desktopApi.js").LocalImagePreview | null> =>
+      ipcRenderer.invoke(IPC_CHANNELS.LOAD_LOCAL_IMAGE_PREVIEW, imagePath, maxWidth, maxHeight),
+    openLogFile: (logPath: string): Promise<boolean> =>
+      ipcRenderer.invoke(IPC_CHANNELS.OPEN_LOG_FILE, logPath)
   }
 
   contextBridge.exposeInMainWorld("desktopRuntime", runtime)

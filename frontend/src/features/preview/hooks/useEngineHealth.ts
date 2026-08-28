@@ -29,7 +29,10 @@ const toErrorMessage = (error: unknown): string => {
  * 桌面外壳负责管理引擎进程的生命周期，因此该 Hook 是渲染进程
  * 获取引擎实时状态的唯一可信来源。
  */
-export const useEngineHealth = (intervalMs: number = POLL_INTERVAL_MS): EngineHealthState => {
+export const useEngineHealth = (
+  intervalMs: number = POLL_INTERVAL_MS,
+  engineBaseUrlRevision: number = 0
+): EngineHealthState => {
   const [state, setState] = useState<EngineHealthState>({ kind: "idle" })
 
   useEffect(() => {
@@ -66,7 +69,7 @@ export const useEngineHealth = (intervalMs: number = POLL_INTERVAL_MS): EngineHe
         clearTimeout(timer)
       }
     }
-  }, [intervalMs])
+  }, [intervalMs, engineBaseUrlRevision])
 
   return state
 }

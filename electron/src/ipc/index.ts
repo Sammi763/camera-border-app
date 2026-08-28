@@ -4,6 +4,7 @@ import { registerImageConvertIpc } from "./imageConvert.js"
 import { registerTemplateStorageIpc } from "./templateStorage.js"
 import { registerEngineDiagnosticsIpc } from "./engineDiagnostics.js"
 import { registerNotificationsIpc } from "./notifications.js"
+import { registerLocalImagePreviewIpc } from "./localImagePreview.js"
 
 /**
  * 统一注册所有 IPC handler。
@@ -19,4 +20,6 @@ export const registerAllIpc = (): void => {
   registerEngineDiagnosticsIpc()
   // 系统通知：单图/批量导出完成或失败时使用；不可用时静默降级为 inline 状态
   registerNotificationsIpc()
+  // 本地图片预览：引擎不可用时为工作台与队列缩略图提供兜底预览
+  registerLocalImagePreviewIpc()
 }
