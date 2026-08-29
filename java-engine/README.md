@@ -38,8 +38,8 @@ java-engine/src/main/java/com/camborder/app/
 
 ## 渲染管线（预览与导出共用）
 
-`ImageReader`（ImageIO；RAW 先经 `RawDevelopService`（LibRaw 子进程）真实显影，
-失败/未配置显式降级为 `RawDecoder` 内嵌 JPEG 预览，来源随响应 sourceDecode 返回）
+`ImageReader`（ImageIO；RAW 仅由 `RawDecoder` 提取可读取的内嵌 JPEG 预览；无内嵌 JPEG
+时返回受控失败，来源随响应 sourceDecode 返回）
 → `ImageScaler`（按目标尺寸等比缩放）
 → `BorderComposer` / `GradientPainter` / `BorderStyleRenderer` / `TextRenderer` / `LogoRenderer`
 → `ImageEncoder`（PNG/JPEG）→ `OutputPathValidator`（导出路径校验，父目录可写）。
@@ -53,15 +53,14 @@ film-perforation / mat-double-line / torn-edge / negative-band / magazine-keylin
 archive-label-box）。几何规格的唯一权威定义在 `util/BorderStyleRenderer` 类注释，
 前端 Canvas 逐条对应实现；未识别 id 或 null 保持原行为。
 
-### RAW 显影（LibRaw 子进程桥接）
+### RAW 输入边界（产品契约）
 
-- CLI 契约：`camborder-libraw-sampler <input> <output.tiff>`；
-  路径注入 `CAMBORDER_LIBRAW_PATH`（Electron 随包提供）或配置 `app.raw.cli-path`；
-  超时 `app.raw.timeout-ms`（默认 30s，超时 destroyForcibly）。
-- 失败显式降级：sourceDecode.mode=embedded-preview-fallback + 中文 warning，
-  绝不把嵌入预览伪装成完整显影。临时输出文件 finally 清理，结果有界缓存。
-- 原生程序源码 `../native/libraw_sampler.cpp`，构建 `../scripts/build-libraw.sh`
-  （三平台产物尚未构建——见 docs/tasks.md T-04 阻塞说明）。
+- RAW 只读取文件内可读取的内嵌 JPEG 预览，不解码传感器数据、不去马赛克，也不做曝光、
+  白平衡或其他真实 RAW 显影。
+- 有内嵌 JPEG 时，`sourceDecode` 只能说明“内嵌 JPEG 预览”；没有可读取内嵌 JPEG 时，
+  导入、预览和导出必须明确失败。
+- 产品渲染管线不包含外部 RAW 显影 CLI、子进程或随包工具；不得以其他缩略图伪装成完整
+  RAW 显影。
 
 ## 存储语义
 
@@ -80,6 +79,6 @@ mvn package              # 打包 target/camera-border-engine.jar（托管模式
 ## 已知限制
 
 - 未实现：ICC Profile 全链路保留、16-bit 处理、TIFF 高位深导出、EXIF/XMP/IPTC/GPS 写回、导出保真报告（见 [README.md](../README.md) 当前边界与 [docs/prd.md](../docs/prd.md) 路线图）。
-- RAW：仅提取**内嵌 JPEG 预览**（NEF/CR2/ARW/DNG/ORF/RW2/PEF/RAF；CR3 视文件是否内嵌标准 JPEG 预览而定），非完整 RAW 解码。
+- RAW：仅提取**内嵌 JPEG 预览**（NEF/CR2/CR3/ARW/RAF/DNG/ORF/RW2/PEF）；无可读取内嵌 JPEG 时明确失败，非完整 RAW 解码。
 - 错误语义：4xx=请求不合法、5xx=服务异常；受控异常不 500 堆栈直出（`GlobalExceptionHandler`）。
 - 字体接入流程与授权核验见 `docs/FONT_CANDIDATES.md`。

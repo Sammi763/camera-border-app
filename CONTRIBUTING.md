@@ -149,7 +149,7 @@ T-05A 只验收打包实现和可在本机执行的合成检查；安装、启�
 | macOS 提示已阻止 Electron 或“恶意软件” | Electron npm 开发二进制不完整或 ad-hoc 签名未被当前系统接受 | 执行 `pnpm prepare:electron-dev`，再重跑 `cd electron && pnpm dev` |
 | 8099 / 5174 端口被占用 | 其他进程占用 | 释放端口；临时用 `CAMBORDER_ENGINE_PORT` / `CAMBORDER_FRONTEND_PORT` 覆盖 |
 | 托管模式启动失败 | 缺少 jar 或 frontend/dist | 按「托管模式」顺序先 `mvn package` 与 `pnpm build` |
-| HEIC 图片导入后该项失败（resolved=null） | HEIC 转换仅 macOS（`sips`）；Windows/Linux 不支持 | 先转成 JPG/PNG；或确认平台为 macOS |
+| HEIC/HEIF 图片导入后该项失败（resolved=null） | 当前开发实现依赖 macOS `sips`；Windows x64 的最终 HEIC/HEIF 支持为 `NOT_RUN`，Linux 不在最终发行平台 | 先转成 JPG/PNG；最终支持口径以 [docs/prd.md §0](docs/prd.md) 和 [样片矩阵](docs/test-samples.md) 为准 |
 | `GET /api/render-jobs/{jobId}` 返回 404 | 任务状态在内存（`RenderJobStore`），引擎重启即丢失 | 重新发起导出任务；批量导出重跑即可 |
 | 模板/资产/摄影预设数据「丢了」 | 桌面模式持久化在 `userData` 下；浏览器模式降级 localStorage，两者不互通。旧版本可能仍有 `rolls.json` | 检查对应存储文件和迁移日志；两种模式数据不共享是预期行为 |
 | 给 electron/package.json 加了 `"type": "module"` 后 preload 加载报错 | preload 必须按 CommonJS 编译（`tsconfig.json` 的 `module: CommonJS`） | 回退该字段；详见 electron/README.md |

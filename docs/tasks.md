@@ -214,7 +214,7 @@ P0-01
 
 并行建议：P0-02、P0-03、P0-04 可并行；P0-05 依赖画幅和资产库；P0-06 依赖 EXIF 与预设；打包任务等核心闭环稳定后进入，但应尽早建立最小打包验证，避免最后才发现 Java Runtime 或资源路径问题。
 
-## 6. 本轮新增任务（风格边框 / RAW 显影 / 打包链路修复）
+## 6. 本轮新增任务（风格边框 / 打包链路修复）
 
 > 状态标注：✅ 已实现并通过自动化测试；🟡 代码已实现但未完成真实验收；⬜ 后续规划。
 
@@ -247,24 +247,17 @@ P0-01
   用当前照片渲染模板效果；无照片回退 CSS 示意缩略图。
 - 点击模板后中间预览立即更新（同一配置、同一几何）。
 
-### T-04 🟡 RAW 真实显影桥接（LibRaw 子进程）
+### T-04 历史实验性实现（非产品能力）
 
-已实现并通过自动化测试：
-- `RawDevelopService` + `LibRawCliDevelopServiceImpl`：受控子进程、超时终止、
-  stderr 摘要、临时文件 finally 清理、按 路径+mtime 的有界缓存。
-- `ImageReader` 路由：显影成功 → `raw-developed`；失败/未配置 → 显式降级
-  `embedded-preview-fallback` 并携带中文原因；绝不伪装成完整显影。
-- `sourceDecode {mode, format, warning}` 随预览/导出响应返回；
-  界面显示「RAW 已真实显影」徽标或降级原因（预览元信息栏 + 导出摘要）。
-- Electron 注入：随包 `<resources>/libraw/camborder-libraw-sampler(.exe)` 经
-  `CAMBORDER_LIBRAW_PATH` 环境变量传给引擎；前端不直接调用 LibRaw。
-- 测试覆盖 NEF/CR2/CR3/ARW/RAF/DNG/ORF/RW2/PEF 九种扩展名的路由与降级。
+历史实验代码，非产品能力，不纳入打包、验收或用户界面。本条不是待完成任务，也不是
+待验收任务，不得放入任务状态统计或发布阻塞项。
 
-未完成真实验收（阻塞项，如实声明）：
-- ⬜ LibRaw 原生程序三平台产物未构建（`native/libraw_sampler.cpp` +
-  `scripts/build-libraw.sh` 已就绪，需各平台工具链执行）；当前打包产物
-  未携带 sampler，RAW 全部走嵌入预览降级路径（界面如实提示）。
-- ⬜ 真实 RAW 样片的端到端显影验证依赖上述产物。
+产品 RAW 口径只有一条：只读取 NEF、CR2、CR3、ARW、RAF、DNG、ORF、RW2、PEF 文件中可
+读取的内嵌 JPEG 预览；无可读取内嵌 JPEG 时明确失败。外部显影子进程、随包显影工具和
+任何真实 RAW 显影路径均不属于产品能力。
+
+RAW 正向/失败样片及其全部 `NOT_RUN` 状态统一见 [`docs/test-samples.md`](test-samples.md)，
+不因历史代码存在而提前标记格式支持。
 
 ### T-05A ✅ Windows 打包实现验收
 

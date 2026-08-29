@@ -56,7 +56,7 @@ electron/src/
 | 导出目标 | `selectExportPath` / `selectExportDirectory` | 单图保存路径 / 批量导出目录 |
 | 模板存储 | `readTemplates` / `writeTemplates` / `exportTemplateJson` / `importTemplateJson` | userData JSON 读写 + 导入导出 |
 | 资产/摄影预设 | `readAssets` / `writeAssets`（资产库）、`readPresets` / `writePresets`（摄影预设）；`readRolls` / `writeRolls` 为旧版 Roll 兼容读取，不扩展 | userData JSON 读写 |
-| 图像转换 | `convertHeicFiles` | HEIC/HEIF → 临时 JPEG（macOS `sips`） |
+| 图像转换 | `convertHeicFiles` | 当前开发实现：HEIC/HEIF 经 macOS `sips` 转临时 JPEG；不代表最终平台支持，最终口径见 [docs/prd.md §0](../docs/prd.md) 与 [样片矩阵](../docs/test-samples.md) |
 | 字体 | `listSystemFonts` | 枚举系统字体族 |
 | 目录打开 | `openDirectory` | 在系统文件管理器中打开目录（批量导出后查看产物；仅接受真实存在的目录） |
 | 系统通知 | `showNotification` | 导出完成/失败系统通知（title/body 必须非空字符串；平台不支持或创建失败返回 `false`，不抛异常；只展示文件名不外泄绝对路径） |
@@ -79,7 +79,7 @@ electron/src/
 ## 验证与已知限制
 
 - 验证：`pnpm typecheck`；冒烟走 `pnpm dev`（开发）或 `pnpm dev:managed`（托管）；打包与干净机器验收见 [docs/release-checklist.md](../docs/release-checklist.md)。
-- HEIC 转换仅 macOS（`sips`），Windows/Linux 下转换失败（返回 null）。
+- HEIC/HEIF 当前开发实现依赖 macOS `sips`，这是开发环境限制而非最终产品范围。Windows x64 的最终 HEIC/HEIF 状态为 `NOT_RUN`，必须通过 [docs/prd.md §0](../docs/prd.md) 和 [样片矩阵](../docs/test-samples.md) 后才能宣称支持。
 - 引擎 URL / 就绪超时配置在 `engine/engineConfig.ts`（默认 `http://127.0.0.1:8099`，20s）。
 - 打包模式**必须**使用随包 Java Runtime（`requireBundledRuntime`）：解析不到时进入 `runtime-missing` 诊断，不回退系统 Java；仅开发模式允许回退系统 PATH。最终用户不需要安装 Java、Node.js 或 Python，Electron 自带应用运行时。
 - 引擎 stdout/stderr 落盘到 `userData/logs/engine.log`（启动时自动创建日志目录；目录/权限问题以 logWarning 计入诊断）。启动时写入 `[engine-start]` 横幅（platform / arch / node 版本 / jar 路径 / java 路径 / baseUrl / 时间），子进程退出时写入 `[engine-exit]`（exit code + signal），便于用户反馈日志后直接定位问题；「查看日志」经 `openLogFile` 直接打开该文件。
@@ -91,7 +91,7 @@ electron/src/
 - **健康探测可取消超时与代次隔离**：`pollEngineHealth` 每次请求带 `AbortSignal.timeout`（连接后长期无响应也能终止，`readyTimeoutMs` 才真正生效）；`waitForReady()` 捕获启动代次，重试/退出后旧探测结果作废，不会把新引擎误标为 unhealthy。
 - **代码签名（env 驱动）**：`electron-builder.yml` 不再写死 `mac.identity: null`；设置 `CSC_LINK`/`CSC_KEY_PASSWORD` 即启用签名（mac 公证另设 `APPLE_*`）。`scripts/package-app.sh` 在未提供证书时对 mac 显式传 `--config.mac.identity=null` 保持本地未签名构建；`build-hooks/afterPack.cjs` **仅当对产物 `codesign -dv` 确认真实开发者签名后才跳过 ad-hoc**（APPLE_ID 只是公证账号，不代表已签名；未签名时仍走 ad-hoc，避免产出未签名应用）。本机无证书，现有产物为未签名（见 release-checklist）。
 - 应用运行**不需要联网**，也不在运行时下载任何文件；图片只在本机处理。
-- RAW 显影：随包 `<resources>/libraw/camborder-libraw-sampler(.exe)` 存在时经 `CAMBORDER_LIBRAW_PATH` 注入引擎；缺失时引擎显式降级嵌入预览。
+- RAW 输入：只接受引擎读取到的内嵌 JPEG 预览；无可读取预览时明确失败。Electron 不携带、注入或启动任何外部 RAW 显影工具。
 - 引擎端口可用环境变量 `CAMBORDER_ENGINE_PORT` 覆盖（默认 8099）。
 - macOS 本地开发：`scripts/prepare-electron-dev.mjs` 会检查 Electron.app 是否完整，并修复 npm 开发副本的 ad-hoc 签名/隔离属性；它只作用于 `node_modules`，不参与正式打包签名。若依赖安装中断，可手动执行根目录 `pnpm prepare:electron-dev`。
 - macOS 打包签名：`build-hooks/afterPack.cjs` 在 DMG 前对嵌套 framework/helper 与外层 ad-hoc 签名，**不重签 java-runtime**（会破坏 Temurin hardened-runtime 签名导致 SIGKILL）。
