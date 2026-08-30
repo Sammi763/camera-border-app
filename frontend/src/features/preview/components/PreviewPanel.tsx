@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { Panel } from "../../../components/layout/Panel"
-import { drawPreviewToCanvas } from "../canvas/canvasRenderer"
+import { calculatePreviewImageLayout, drawPreviewToCanvas } from "../canvas/canvasRenderer"
 import { usePreviewViewport } from "../hooks/usePreviewViewport"
 import { submitAndWaitForRenderJob } from "../../../services/engine/renderJobsApi"
 import { toExportFileName } from "../../../utils/fileName"
@@ -235,6 +235,34 @@ const buildExportSettings = (
 /** 批量导出并发数（本地 CPU 渲染，适度并行即可）。 */
 const BATCH_EXPORT_CONCURRENCY = 3
 
+/** 将当前 Canvas 的图片区域和边框信息暴露给可访问性提示与打包回归。 */
+const writeCanvasPreviewDiagnostics = (
+  canvas: HTMLCanvasElement,
+  image: HTMLImageElement,
+  settings: RenderSettings
+): boolean => {
+  const layout = calculatePreviewImageLayout(
+    canvas.width,
+    canvas.height,
+    image.naturalWidth,
+    image.naturalHeight,
+    settings.borderTop,
+    settings.borderBottom,
+    settings.borderLeft,
+    settings.borderRight
+  )
+  canvas.dataset["previewBorderColor"] = settings.borderColor
+  canvas.dataset["previewBorderTop"] = String(settings.borderTop)
+  canvas.dataset["previewBorderBottom"] = String(settings.borderBottom)
+  canvas.dataset["previewBorderLeft"] = String(settings.borderLeft)
+  canvas.dataset["previewBorderRight"] = String(settings.borderRight)
+  canvas.dataset["previewImageX"] = layout === null ? "" : String(layout.x)
+  canvas.dataset["previewImageY"] = layout === null ? "" : String(layout.y)
+  canvas.dataset["previewImageWidth"] = layout === null ? "" : String(layout.width)
+  canvas.dataset["previewImageHeight"] = layout === null ? "" : String(layout.height)
+  return layout !== null
+}
+
 /** Canvas 即时预览组件 */
 const CanvasPreview = ({
   state,
@@ -249,6 +277,7 @@ const CanvasPreview = ({
   const dragStartRef = useRef<{ x: number; y: number } | null>(null)
   const imageRef = useRef<HTMLImageElement | null>(null)
   const settingsRef = useRef(settings)
+  const [isPreviewAreaInsufficient, setIsPreviewAreaInsufficient] = useState(false)
   settingsRef.current = settings
   imageRef.current = state.currentImage
 
@@ -262,7 +291,19 @@ const CanvasPreview = ({
       return
     }
     drawFnRef.current = () => {
-      drawPreviewToCanvas(canvas, image, settings)
+      const currentImage = imageRef.current
+      if (currentImage === null) {
+        return
+      }
+      const currentSettings = settingsRef.current
+      const canDrawPhoto = writeCanvasPreviewDiagnostics(canvas, currentImage, currentSettings)
+      setIsPreviewAreaInsufficient((previous) => previous === !canDrawPhoto ? previous : !canDrawPhoto)
+      if (!canDrawPhoto) {
+        // 重设同一尺寸会清空旧帧，避免 resize 后保留上一次的纯边框结果。
+        canvas.width = canvas.width
+        return
+      }
+      drawPreviewToCanvas(canvas, currentImage, currentSettings)
     }
   })
 
@@ -396,6 +437,12 @@ const CanvasPreview = ({
             top: 0
           }}
         />
+        {isPreviewAreaInsufficient && (
+          <div className="previewAreaInsufficient" role="status">
+            <strong>预览区域不足</strong>
+            <span>请扩大窗口或收起模板画廊后再查看照片。</span>
+          </div>
+        )}
       </div>
       <div className="previewMetaBar">
         <span className="previewMetaFileName">{state.fileName}</span>

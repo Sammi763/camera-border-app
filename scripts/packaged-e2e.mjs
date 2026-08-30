@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { createHash } from "node:crypto"
 import { createServer } from "node:net"
-import { accessSync, constants, existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs"
+import { accessSync, constants, copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { tmpdir } from "node:os"
 import { fileURLToPath } from "node:url"
@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url"
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const DEFAULT_SAMPLE = path.join(ROOT, "photos", "78330006.jpg")
 const DEFAULT_TIMEOUT_MS = 45_000
+export const PHOTO_CONTENT_PIXEL_THRESHOLD = 1000
 const EXPECTED_CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
   "script-src 'self'",
@@ -24,6 +25,15 @@ const EXPECTED_CONTENT_SECURITY_POLICY = [
 ].join("; ")
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/** 只有实际可绘制图片区内的非边框像素超过阈值，才算照片内容可见。 */
+export const hasVisiblePhotoContent = (metrics) =>
+  Number.isFinite(metrics?.drawableImage?.width)
+  && Number.isFinite(metrics?.drawableImage?.height)
+  && metrics.drawableImage.width > 0
+  && metrics.drawableImage.height > 0
+  && Number.isFinite(metrics?.nonBorderPixels)
+  && metrics.nonBorderPixels > PHOTO_CONTENT_PIXEL_THRESHOLD
 
 /** 输出阶段边界，便于打包 E2E 失败时核对真实应用、JRE 与清理过程。 */
 const report = (message) => console.log(`[packaged-e2e] ${message}`)
@@ -132,6 +142,92 @@ const getFreePort = async () => await new Promise((resolve, reject) => {
 
 const sha256File = (filePath) => createHash("sha256").update(readFileSync(filePath)).digest("hex")
 
+/** 读取 PNG、JPEG 或 TIFF 的像素尺寸，供打包导出证据验证。 */
+export const readImageDimensions = (data) => {
+  if (!Buffer.isBuffer(data) || data.length < 10) {
+    return null
+  }
+
+  const isPositiveDimension = (value) => Number.isInteger(value) && value > 0
+  const pngSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+  if (data.length >= 24 && data.subarray(0, 8).equals(pngSignature)) {
+    const width = data.readUInt32BE(16)
+    const height = data.readUInt32BE(20)
+    return isPositiveDimension(width) && isPositiveDimension(height)
+      ? { format: "png", width, height }
+      : null
+  }
+
+  if (data[0] === 0xff && data[1] === 0xd8) {
+    const startOfFrameMarkers = new Set([
+      0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7,
+      0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf
+    ])
+    let offset = 2
+    while (offset + 3 < data.length) {
+      if (data[offset] !== 0xff) {
+        offset++
+        continue
+      }
+      while (data[offset] === 0xff) {
+        offset++
+      }
+      const marker = data[offset]
+      if (marker === undefined) break
+      if (marker === 0x01 || marker === 0xd8 || marker === 0xd9 || (marker >= 0xd0 && marker <= 0xd7)) {
+        offset++
+        continue
+      }
+      if (offset + 7 >= data.length) break
+      const segmentLength = data.readUInt16BE(offset + 1)
+      if (segmentLength < 2 || offset + 1 + segmentLength > data.length) break
+      if (startOfFrameMarkers.has(marker)) {
+        const height = data.readUInt16BE(offset + 4)
+        const width = data.readUInt16BE(offset + 6)
+        return isPositiveDimension(width) && isPositiveDimension(height)
+          ? { format: "jpeg", width, height }
+          : null
+      }
+      offset += segmentLength + 1
+    }
+    return null
+  }
+
+  const littleEndian = data[0] === 0x49 && data[1] === 0x49
+  const bigEndian = data[0] === 0x4d && data[1] === 0x4d
+  if (!littleEndian && !bigEndian) {
+    return null
+  }
+  const readUint16 = (offset) => littleEndian ? data.readUInt16LE(offset) : data.readUInt16BE(offset)
+  const readUint32 = (offset) => littleEndian ? data.readUInt32LE(offset) : data.readUInt32BE(offset)
+  if (readUint16(2) !== 42) {
+    return null
+  }
+  const firstIfdOffset = readUint32(4)
+  if (firstIfdOffset + 2 > data.length) {
+    return null
+  }
+  const entryCount = readUint16(firstIfdOffset)
+  let width = null
+  let height = null
+  for (let index = 0; index < entryCount; index++) {
+    const entryOffset = firstIfdOffset + 2 + index * 12
+    if (entryOffset + 12 > data.length) break
+    const tag = readUint16(entryOffset)
+    const type = readUint16(entryOffset + 2)
+    const count = readUint32(entryOffset + 4)
+    if ((tag !== 256 && tag !== 257) || count !== 1 || (type !== 3 && type !== 4)) {
+      continue
+    }
+    const value = type === 3 ? readUint16(entryOffset + 8) : readUint32(entryOffset + 8)
+    if (tag === 256) width = value
+    if (tag === 257) height = value
+  }
+  return isPositiveDimension(width) && isPositiveDimension(height)
+    ? { format: "tiff", width, height }
+    : null
+}
+
 const isProcessAlive = (pid) => {
   if (!Number.isInteger(pid) || pid <= 0) {
     return false
@@ -161,15 +257,32 @@ const killExactJavaPid = (pid, reason) => {
 const isAllowedPageRequest = (url) =>
   url.startsWith("app://app/") || url.startsWith("data:") || url.startsWith("blob:")
 
-const collectProtocolDiagnostics = (records) => records
-  .map((record) => typeof record === "string" ? record : JSON.stringify(record))
+export const collectProtocolDiagnostics = (records) => records
+  .map((record) => {
+    if (typeof record === "string") return record
+    if (typeof record?.entry?.text === "string") return record.entry.text
+    if (typeof record?.exceptionDetails?.text === "string") return record.exceptionDetails.text
+    if (typeof record?.text === "string") return record.text
+    if (Array.isArray(record?.args)) {
+      return record.args
+        .map((argument) => typeof argument?.value === "string" ? argument.value : argument?.description ?? "")
+        .join(" ")
+    }
+    return ""
+  })
+  .filter((text) => text.length > 0)
   .join("\n")
 
-const assertNoProtocolErrors = (requests, consoleRecords, runtimeExceptions, logEntries) => {
+const assertNoProtocolErrors = (requests, responseDetails, consoleRecords, runtimeExceptions, logEntries) => {
   assert.equal(
     requests.every((url) => isAllowedPageRequest(url)),
     true,
     `页面出现非 app:///data:/blob: 网络请求：\n${requests.join("\n")}`
+  )
+  assert.equal(
+    responseDetails.every((response) => response.status !== 403),
+    true,
+    `页面出现真实 HTTP 403 响应：\n${JSON.stringify(responseDetails.filter((response) => response.status === 403))}`
   )
 
   const diagnostics = collectProtocolDiagnostics([
@@ -303,6 +416,173 @@ const clickButton = async (client, expression, description) => {
   assert.equal(clicked, true, `未找到${description}`)
 }
 
+/** 保存真实 Renderer 截图；路径会写入 E2E 日志，供失败和交接复核。 */
+const captureRendererScreenshot = async (client, artifactRoot, label) => {
+  const screenshotPath = path.join(artifactRoot, `${label}.png`)
+  const result = await client.call("Page.captureScreenshot", { format: "png" })
+  assert.equal(typeof result.data, "string", `无法取得 ${label} Renderer 截图`)
+  writeFileSync(screenshotPath, Buffer.from(result.data, "base64"))
+  return screenshotPath
+}
+
+/** 从 Renderer 的实际 Canvas 读取照片区域像素，不把文字或边框当成照片内容。 */
+const readPreviewCanvasMetrics = async (client) => await evaluate(client, `(() => {
+  const canvas = document.querySelector('canvas.previewCanvas');
+  if (canvas === null) {
+    return { error: '未找到 canvas.previewCanvas', drawableImage: { width: 0, height: 0 }, nonBorderPixels: 0 };
+  }
+
+  const numberFromDataset = (name) => {
+    const value = Number(canvas.dataset[name]);
+    return Number.isFinite(value) ? value : null;
+  };
+  const borderColor = canvas.dataset.previewBorderColor ?? '';
+  const colorProbe = document.createElement('span');
+  colorProbe.style.color = borderColor;
+  document.body.append(colorProbe);
+  const resolvedColor = getComputedStyle(colorProbe).color;
+  colorProbe.remove();
+  const colorMatch = resolvedColor.match(/^rgba?\\(([^)]+)\\)$/);
+  const borderRgb = colorMatch === null
+    ? null
+    : colorMatch[1].split(',').slice(0, 3).map((part) => Number(part.trim()));
+  const imageX = numberFromDataset('previewImageX');
+  const imageY = numberFromDataset('previewImageY');
+  const imageWidth = numberFromDataset('previewImageWidth');
+  const imageHeight = numberFromDataset('previewImageHeight');
+  const wrapperRect = canvas.getBoundingClientRect();
+  const common = {
+    canvas: {
+      width: canvas.width,
+      height: canvas.height,
+      cssWidth: wrapperRect.width,
+      cssHeight: wrapperRect.height
+    },
+    drawableImage: {
+      x: imageX,
+      y: imageY,
+      width: imageWidth ?? 0,
+      height: imageHeight ?? 0
+    },
+    border: {
+      color: borderColor,
+      resolvedColor,
+      top: canvas.dataset.previewBorderTop ?? '',
+      bottom: canvas.dataset.previewBorderBottom ?? '',
+      left: canvas.dataset.previewBorderLeft ?? '',
+      right: canvas.dataset.previewBorderRight ?? ''
+    },
+    syncLabel: document.querySelector('.previewSyncBadge')?.textContent?.trim() ?? '',
+    insufficientMessage: document.querySelector('.previewAreaInsufficient')?.textContent?.trim() ?? ''
+  };
+  if (
+    borderRgb === null || borderRgb.length !== 3 || borderRgb.some((value) => !Number.isFinite(value))
+    || imageX === null || imageY === null || imageWidth === null || imageHeight === null
+    || imageWidth <= 0 || imageHeight <= 0
+  ) {
+    return { ...common, nonBorderPixels: 0, error: 'Canvas 未提供可绘制图片区或可解析的当前边框色' };
+  }
+
+  const startX = Math.max(0, Math.floor(imageX));
+  const startY = Math.max(0, Math.floor(imageY));
+  const endX = Math.min(canvas.width, Math.ceil(imageX + imageWidth));
+  const endY = Math.min(canvas.height, Math.ceil(imageY + imageHeight));
+  if (endX <= startX || endY <= startY) {
+    return { ...common, nonBorderPixels: 0, error: 'Canvas 有效图片区越出画布边界' };
+  }
+
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (context === null) {
+    return { ...common, nonBorderPixels: 0, error: '无法读取 Canvas 2D 上下文' };
+  }
+  const pixels = context.getImageData(startX, startY, endX - startX, endY - startY).data;
+  const backgroundDistanceThreshold = 16;
+  let nonBorderPixels = 0;
+  for (let offset = 0; offset < pixels.length; offset += 4) {
+    const alpha = pixels[offset + 3];
+    if (alpha === undefined || alpha < 16) continue;
+    const red = pixels[offset] ?? 0;
+    const green = pixels[offset + 1] ?? 0;
+    const blue = pixels[offset + 2] ?? 0;
+    if (
+      Math.abs(red - borderRgb[0]) > backgroundDistanceThreshold
+      || Math.abs(green - borderRgb[1]) > backgroundDistanceThreshold
+      || Math.abs(blue - borderRgb[2]) > backgroundDistanceThreshold
+    ) {
+      nonBorderPixels++;
+    }
+  }
+  return { ...common, nonBorderPixels, backgroundDistanceThreshold, error: null };
+})()`)
+
+const formatPreviewCanvasMetrics = (metrics) => {
+  const canvas = metrics.canvas ?? {}
+  const drawableImage = metrics.drawableImage ?? {}
+  const border = metrics.border ?? {}
+  return [
+    `Canvas=${canvas.width ?? 0}×${canvas.height ?? 0}（CSS ${canvas.cssWidth ?? 0}×${canvas.cssHeight ?? 0}）`,
+    `有效图片区=${drawableImage.width ?? 0}×${drawableImage.height ?? 0} @ ${drawableImage.x ?? "?"},${drawableImage.y ?? "?"}`,
+    `边框=${border.color ?? ""} top=${border.top ?? ""} bottom=${border.bottom ?? ""} left=${border.left ?? ""} right=${border.right ?? ""}`,
+    `非边框像素=${metrics.nonBorderPixels ?? 0}`,
+    `同步=${metrics.syncLabel ?? ""}`,
+    `空间提示=${metrics.insufficientMessage ?? ""}`
+  ].join("；")
+}
+
+const waitForVisiblePreviewPhoto = async (client, artifactRoot, label) => {
+  const screenshotPath = await captureRendererScreenshot(client, artifactRoot, label)
+  try {
+    const metrics = await waitFor(
+      `${label}照片内容像素`,
+      () => readPreviewCanvasMetrics(client),
+      (value) => hasVisiblePhotoContent(value)
+    )
+    report(`${label}：${formatPreviewCanvasMetrics(metrics)}；截图=${screenshotPath}`)
+    return { metrics, screenshotPath }
+  } catch (error) {
+    const metrics = await readPreviewCanvasMetrics(client).catch(() => null)
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}；${label}截图=${screenshotPath}；${metrics === null ? "无法读取 Canvas 指标" : formatPreviewCanvasMetrics(metrics)}`
+    )
+  }
+}
+
+/**
+ * 将窗口请求缩至最小值。
+ * Electron 的远程调试协议不提供 Browser.getWindowForTarget，使用页面自身的
+ * window.resizeTo 请求实际 BrowserWindow 尺寸，并读取 outerWidth/outerHeight
+ * 确认 Electron 已按应用最小值钳制，而不是仅模拟 CSS viewport。
+ */
+const readRendererWindowBounds = async (client) => await evaluate(
+  client,
+  "({ width: window.outerWidth, height: window.outerHeight })"
+)
+
+const resizeToMinimumWindow = async (client) => {
+  const initialBounds = await readRendererWindowBounds(client)
+  assert.equal(Number.isFinite(initialBounds?.width) && Number.isFinite(initialBounds?.height), true, "无法取得初始窗口尺寸")
+  await evaluate(client, "window.resizeTo(1, 1)")
+  const minimumBounds = await waitFor(
+    "应用允许的最小窗口尺寸",
+    () => readRendererWindowBounds(client),
+    (bounds) => Number.isFinite(bounds?.width)
+      && Number.isFinite(bounds?.height)
+      && bounds.width > 1
+      && bounds.height > 1
+      && (bounds.width < initialBounds.width || bounds.height < initialBounds.height)
+  )
+  return { initialBounds, minimumBounds }
+}
+
+const restoreWindowBounds = async (client, bounds) => {
+  await evaluate(client, `window.resizeTo(${bounds.width}, ${bounds.height})`)
+  await waitFor(
+    "恢复默认窗口尺寸",
+    () => readRendererWindowBounds(client),
+    (current) => current?.width === bounds.width && current?.height === bounds.height
+  )
+}
+
 const waitForDevTools = async (port, child, logs) => await waitFor(
   "Electron 远程调试端点",
   async () => await fetchJson(`http://127.0.0.1:${port}/json/list`),
@@ -326,6 +606,7 @@ const run = async () => {
   const sourceShaBefore = sha256File(sample)
 
   const temporaryRoot = mkdtempSync(path.join(tmpdir(), "camera-border-packaged-e2e-"))
+  const artifactRoot = mkdtempSync(path.join(tmpdir(), "camera-border-packaged-e2e-artifacts-"))
   const output = path.resolve(process.env["CAMBORDER_E2E_OUTPUT"] ?? path.join(temporaryRoot, "packaged-e2e-output.png"))
   const userData = path.join(temporaryRoot, "user-data")
   rmSync(output, { force: true })
@@ -356,6 +637,7 @@ const run = async () => {
   child.stderr.on("data", (chunk) => logs.push(String(chunk)))
   report(`启动当前打包应用：${executable}`)
   report(`临时 userData：${userData}；独立引擎端口：${enginePort}`)
+  report(`截图证据目录：${artifactRoot}`)
 
   let client = null
   const knownJavaPids = new Set()
@@ -469,6 +751,44 @@ const run = async () => {
     assert.equal(thumbnail.complete, true)
     assert.ok(thumbnail.naturalWidth > 0 && thumbnail.naturalHeight > 0, "缩略图没有可解码尺寸")
 
+    await waitFor(
+      "导入后自动应用摄影信息卡",
+      () => evaluate(client, `(() => {
+        const card = [...document.querySelectorAll('.quickTemplateCard')].find((item) =>
+          item.querySelector('.quickTemplateName')?.textContent?.trim() === '摄影信息卡'
+        );
+        return card?.querySelector('.quickTemplateApplyButton')?.textContent?.trim() ?? '';
+      })()`),
+      (label) => label === "已应用"
+    )
+    await waitFor(
+      "默认摄影信息卡引擎预览已同步",
+      () => evaluate(client, "document.querySelector('.previewSyncBadge')?.textContent ?? ''"),
+      (text) => text.includes("引擎预览已同步")
+    )
+    const defaultPreview = await waitForVisiblePreviewPhoto(client, artifactRoot, "默认摄影信息卡-引擎已同步")
+
+    const minimumWindow = await resizeToMinimumWindow(client)
+    report(`最小窗口：${minimumWindow.minimumBounds.width}×${minimumWindow.minimumBounds.height}`)
+    await sleep(250)
+    const minimumScreenshot = await captureRendererScreenshot(client, artifactRoot, "最小窗口-摄影信息卡")
+    const minimumPreview = await waitFor(
+      "最小窗口照片可见或预览区域不足提示",
+      () => readPreviewCanvasMetrics(client),
+      (metrics) => hasVisiblePhotoContent(metrics)
+        || typeof metrics.insufficientMessage === "string" && metrics.insufficientMessage.includes("预览区域不足")
+    )
+    const minimumPhotoVisible = hasVisiblePhotoContent(minimumPreview)
+    const minimumHasWarning = typeof minimumPreview.insufficientMessage === "string"
+      && minimumPreview.insufficientMessage.includes("预览区域不足")
+    assert.equal(
+      minimumPreview.syncLabel.includes("引擎预览已同步") && !minimumPhotoVisible && !minimumHasWarning,
+      false,
+      `最小窗口不能出现“已同步”但纯边框画布；截图=${minimumScreenshot}；${formatPreviewCanvasMetrics(minimumPreview)}`
+    )
+    report(`最小窗口预览：${formatPreviewCanvasMetrics(minimumPreview)}；截图=${minimumScreenshot}`)
+    await restoreWindowBounds(client, minimumWindow.initialBounds)
+
     const validPreviewUrl = requests.find((url) => url.startsWith("app://app/previews/"))
     assert.notEqual(validPreviewUrl, undefined, "没有记录有效 app:// 预览路由")
     const routeStatus = await evaluate(
@@ -487,16 +807,29 @@ const run = async () => {
     assert.ok(routeStatus.malformed >= 400, "畸形 /previews 路径必须失败")
 
     const previewPostsBeforeTemplate = requests.filter((url) => url === "app://app/api/preview").length
-    await clickButton(client, `(() => { const button = [...document.querySelectorAll('button.quickTemplateApplyButton')].find((item) => item.textContent?.trim() === '使用'); if (button === undefined) return false; button.click(); return true })()`, "版式使用按钮")
-    await waitFor("版式应用完成", () => evaluate(client, "Boolean([...document.querySelectorAll('button.quickTemplateApplyButton')].some((item) => item.textContent?.trim() === '已应用'))"), (applied) => applied === true)
+    await clickButton(client, `(() => {
+      const card = [...document.querySelectorAll('.quickTemplateCard')].find((item) =>
+        item.querySelector('.quickTemplateName')?.textContent?.trim() === '全画幅叠字'
+      );
+      const button = card?.querySelector('button.quickTemplateApplyButton');
+      if (button === null || button === undefined || button.textContent?.trim() !== '使用') return false;
+      button.click();
+      return true;
+    })()`, "零边框模板使用按钮")
+    await waitFor("零边框模板应用完成", () => evaluate(client, `(() => {
+      const card = [...document.querySelectorAll('.quickTemplateCard')].find((item) =>
+        item.querySelector('.quickTemplateName')?.textContent?.trim() === '全画幅叠字'
+      );
+      return card?.querySelector('.quickTemplateApplyButton')?.textContent?.trim() ?? '';
+    })()`), (label) => label === "已应用")
     await waitFor(
-      "版式应用后的新引擎预览请求",
+      "零边框模板应用后的新引擎预览请求",
       () => requests.filter((url) => url === "app://app/api/preview").length,
       (count) => count > previewPostsBeforeTemplate
     )
     try {
       await waitFor(
-        "版式应用后的引擎同步完成",
+        "零边框模板应用后的引擎同步完成",
         () => evaluate(client, "document.querySelector('.previewSyncBadge')?.textContent ?? ''"),
         (text) => text.includes("引擎预览已同步")
       )
@@ -507,9 +840,10 @@ const run = async () => {
         failed: failedRequests.slice(-20)
       }
       throw new Error(
-        `${error instanceof Error ? error.message : String(error)}；版式网络诊断：${JSON.stringify(templateNetwork)}`
+        `${error instanceof Error ? error.message : String(error)}；零边框模板网络诊断：${JSON.stringify(templateNetwork)}`
       )
     }
+    const zeroBorderPreview = await waitForVisiblePreviewPhoto(client, artifactRoot, "零边框模板-引擎已同步")
 
     await waitFor(
       "单图导出按钮可用",
@@ -518,13 +852,28 @@ const run = async () => {
     )
     await clickButton(client, `(() => { const button = [...document.querySelectorAll('button.previewExportButton')].find((item) => item.textContent?.includes('导出原图')); if (button === undefined || button.disabled) return false; button.click(); return true })()`, "导出原图按钮")
     await waitFor("导出文件写盘", () => existsSync(output), (exists) => exists === true)
-    assert.ok(statSync(output).size > 0, "导出文件为空")
-    const signature = readFileSync(output).subarray(0, 8)
+    const exportFileSize = await waitFor(
+      "导出文件写入完成",
+      async () => {
+        const firstSize = statSync(output).size
+        await sleep(250)
+        return { firstSize, secondSize: statSync(output).size }
+      },
+      (sizes) => sizes.firstSize > 0 && sizes.firstSize === sizes.secondSize
+    ).then((sizes) => sizes.secondSize)
+    assert.ok(exportFileSize > 0, "导出文件为空")
+    const exportData = readFileSync(output)
+    const signature = exportData.subarray(0, 8)
     const isJpeg = signature[0] === 0xff && signature[1] === 0xd8
     const isPng = signature.equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
     const isTiff = (signature[0] === 0x49 && signature[1] === 0x49 && signature[2] === 0x2a && signature[3] === 0x00)
       || (signature[0] === 0x4d && signature[1] === 0x4d && signature[2] === 0x00 && signature[3] === 0x2a)
     assert.equal(isJpeg || isPng || isTiff, true, "导出文件不是受支持的 JPEG/PNG/TIFF")
+    const exportDimensions = readImageDimensions(exportData)
+    assert.notEqual(exportDimensions, null, "导出文件无法读取像素尺寸")
+    const exportExtension = exportDimensions.format === "jpeg" ? "jpg" : exportDimensions.format
+    const exportEvidencePath = path.join(artifactRoot, `导出文件.${exportExtension}`)
+    copyFileSync(output, exportEvidencePath)
     const sourceShaAfter = sha256File(sample)
     assert.equal(sourceShaAfter, sourceShaBefore, "导出前后源图 SHA-256 不一致")
 
@@ -576,7 +925,7 @@ const run = async () => {
     )
 
     await sleep(100)
-    assertNoProtocolErrors(requests, consoleRecords, runtimeExceptions, logEntries)
+    assertNoProtocolErrors(requests, responseDetails, consoleRecords, runtimeExceptions, logEntries)
 
     const lifecycleLog = readEngineLog(engineLogPath)
       .split("\n")
@@ -585,13 +934,17 @@ const run = async () => {
     console.log(`[packaged-e2e] Java 生命周期日志：${lifecycleLog}`)
     console.log(`[packaged-e2e] Java PID：${firstJavaPid} -> SIGTERM -> ${secondJavaPid}，UI 已恢复引擎正常`)
     console.log(`[packaged-e2e] 源图 SHA-256：${sourceShaBefore} -> ${sourceShaAfter}`)
+    console.log(`[packaged-e2e] 导出证据：${exportEvidencePath}；字节=${exportFileSize}；尺寸=${exportDimensions.width}×${exportDimensions.height}；格式=${exportDimensions.format}`)
+    console.log(`[packaged-e2e] 默认摄影信息卡 Canvas：${formatPreviewCanvasMetrics(defaultPreview.metrics)}`)
+    console.log(`[packaged-e2e] 默认摄影信息卡同步截图：${defaultPreview.screenshotPath}`)
+    console.log(`[packaged-e2e] 零边框模板 Canvas：${formatPreviewCanvasMetrics(zeroBorderPreview.metrics)}`)
     console.log(`[packaged-e2e] CSP：已收到并拦截外网 fetch；Network 未记录 https://example.invalid/camborder-csp-probe`)
     console.log(`[packaged-e2e] 网络断言：${requests.length} 个请求全部为 app://app/、data: 或 blob:；有效预览路由 200，裸/畸形路由失败`)
 
     console.log(`[packaged-e2e] 通过：${executable}`)
     console.log(`[packaged-e2e] 托管 JRE：${bundledJava}`)
     console.log(`[packaged-e2e] 引擎端口：${enginePort}（独立临时端口）`)
-    console.log(`[packaged-e2e] 导出文件：${output}`)
+    console.log(`[packaged-e2e] 导出临时文件：${output}`)
   } finally {
     if (client !== null) {
       try {

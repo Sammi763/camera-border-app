@@ -34,7 +34,8 @@ PNG 8-bit；高保真归档允许 TIFF 或按源位深输出 PNG 8/16-bit。输�
    为 `java-runtime/bin/java.exe`）、引擎 jar、前端构建产物，以及 macOS
    `build/icon.icns` / Windows `build/icon.ico` 对应的正式图标。
 3. 上述命令中的 `pnpm e2e:packaged` 启动实际打包应用，通过 CDP 驱动真实页面，使用固定样片
-   完成「导入 → 预览 → 应用版式 → 导出」并校验导出文件。
+   完成「导入 → 默认自动应用摄影信息卡 → Canvas 照片像素可见性 → 应用零边框版式 → 导出」并校验导出文件；
+   最小窗口下必须仍有照片内容，或明确显示「预览区域不足」，不得显示已同步的纯边框画布。
 4. 检查 E2E 记录的请求全部为 `app://app/api/**` 或 `app://app/previews/**`；不得出现
    Vite URL、JavaBridge 绝对 URL 或系统 Java 进程。
 5. 引擎尚未 ready 时，页面应收到结构化 `503 ENGINE_STARTING` 并显示启动中；进程失败时

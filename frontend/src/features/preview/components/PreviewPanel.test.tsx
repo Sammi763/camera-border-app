@@ -56,6 +56,23 @@ const makeActiveState = (): PreviewState => ({
   engineResponse: null
 })
 
+/** 构造已解码图片，供 Canvas 空间防御回归使用。 */
+const makeDecodedActiveState = (): PreviewState => {
+  const image = document.createElement("img")
+  Object.defineProperties(image, {
+    naturalWidth: { value: 1000 },
+    naturalHeight: { value: 667 }
+  })
+  const state = makeActiveState()
+  if (state.kind !== "active") {
+    throw new Error("测试需要 active 预览状态")
+  }
+  return {
+    ...state,
+    currentImage: image
+  }
+}
+
 const makeItem = (): QueueItem => ({
   id: "q1",
   filePath: FILE_PATH,
@@ -89,6 +106,40 @@ describe("PreviewPanel 单图导出（EXIF 等待 + 解析一致）", () => {
     delete (window as unknown as { desktop?: unknown }).desktop
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
+  })
+
+  it("预览空间不足时显示明确提示，而不把纯边框当作成功预览", async () => {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      width: 320,
+      height: 100,
+      top: 0,
+      right: 320,
+      bottom: 100,
+      left: 0,
+      toJSON: () => ({})
+    } as DOMRect)
+
+    render(
+      <PreviewPanel
+        state={makeDecodedActiveState()}
+        settings={makeSettings()}
+        hasSelectedImage={true}
+        queueItems={[makeItem()]}
+        batchExportItems={[]}
+        batchExportLabel="批量导出 1 张"
+        resolveQueueItem={vi.fn(() => ({ textOverride: null, resolvedLayers: [], brand: null }))}
+        prepareExifForExport={vi.fn(async () => {})}
+      />
+    )
+
+    expect((await screen.findByRole("status")).textContent).toContain("预览区域不足")
+    const canvas = document.querySelector("canvas.previewCanvas") as HTMLCanvasElement
+    expect(canvas.dataset["previewImageWidth"]).toBe("")
+    expect(canvas.dataset["previewImageHeight"]).toBe("")
+    expect(canvas.dataset["previewBorderTop"]).toBe("40")
+    expect(canvas.dataset["previewBorderBottom"]).toBe("80")
   })
 
   it("导出前等待 EXIF，并用 resolveQueueItem 的解析结果构建 RenderRecipe", async () => {

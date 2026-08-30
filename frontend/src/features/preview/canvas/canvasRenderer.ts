@@ -438,6 +438,72 @@ const getSourceSize = (image: CanvasDrawableSource): { width: number; height: nu
     ? { width: image.naturalWidth, height: image.naturalHeight }
     : { width: image.width, height: image.height }
 
+/** 即时预览中仍可辨认照片内容的最小边长。 */
+export const MIN_VISIBLE_PREVIEW_IMAGE_EDGE = 24
+
+/** Canvas 中实际照片区域的几何信息。 */
+export type PreviewImageLayout = {
+  readonly x: number
+  readonly y: number
+  readonly width: number
+  readonly height: number
+}
+
+/**
+ * 计算当前 Canvas 中可绘制的照片区域。
+ *
+ * 边框尺寸是 RenderRecipe 的显示语义，不能为了塞进狭小空间而静默改小；
+ * 当容器不足以保留最小可辨识照片区域时返回 null，由调用方明确提示用户。
+ */
+export const calculatePreviewImageLayout = (
+  canvasWidth: number,
+  canvasHeight: number,
+  sourceWidth: number,
+  sourceHeight: number,
+  borderTop: number,
+  borderBottom: number,
+  borderLeft: number,
+  borderRight: number
+): PreviewImageLayout | null => {
+  if (
+    !Number.isFinite(canvasWidth) || !Number.isFinite(canvasHeight)
+    || !Number.isFinite(sourceWidth) || !Number.isFinite(sourceHeight)
+    || canvasWidth <= 0 || canvasHeight <= 0 || sourceWidth <= 0 || sourceHeight <= 0
+  ) {
+    return null
+  }
+
+  const top = Math.max(0, borderTop)
+  const bottom = Math.max(0, borderBottom)
+  const left = Math.max(0, borderLeft)
+  const right = Math.max(0, borderRight)
+  const availableWidth = canvasWidth - left - right
+  const availableHeight = canvasHeight - top - bottom
+  if (availableWidth <= 0 || availableHeight <= 0) {
+    return null
+  }
+
+  const imageAspect = sourceWidth / sourceHeight
+  const availableAspect = availableWidth / availableHeight
+  const width = imageAspect > availableAspect
+    ? availableWidth
+    : availableHeight * imageAspect
+  const height = imageAspect > availableAspect
+    ? availableWidth / imageAspect
+    : availableHeight
+
+  if (width < MIN_VISIBLE_PREVIEW_IMAGE_EDGE || height < MIN_VISIBLE_PREVIEW_IMAGE_EDGE) {
+    return null
+  }
+
+  return {
+    x: left + (availableWidth - width) / 2,
+    y: top + (availableHeight - height) / 2,
+    width,
+    height
+  }
+}
+
 /**
  * 在 Canvas 上绘制图片 + 边框（纯色或渐变） + 多段文字。
  *
@@ -489,31 +555,22 @@ export const drawPreviewToCanvas = (
   }
   ctx.fillRect(0, 0, cw, ch)
 
-  // 计算边框内可用区域
-  const availW = Math.max(0, cw - bl - br)
-  const availH = Math.max(0, ch - bt - bb)
-
-  if (availW === 0 || availH === 0) {
+  const sourceSize = getSourceSize(image)
+  const imageLayout = calculatePreviewImageLayout(
+    cw,
+    ch,
+    sourceSize.width,
+    sourceSize.height,
+    bt,
+    bb,
+    bl,
+    br
+  )
+  if (imageLayout === null) {
     return
   }
 
-  // 按比例缩放图片以适应可用区域
-  const sourceSize = getSourceSize(image)
-  const imgAspect = sourceSize.width / sourceSize.height
-  const areaAspect = availW / availH
-  let drawW: number
-  let drawH: number
-  if (imgAspect > areaAspect) {
-    drawW = availW
-    drawH = availW / imgAspect
-  } else {
-    drawH = availH
-    drawW = availH * imgAspect
-  }
-
-  // 居中绘制图片
-  const imgX = bl + (availW - drawW) / 2
-  const imgY = bt + (availH - drawH) / 2
+  const { x: imgX, y: imgY, width: drawW, height: drawH } = imageLayout
   ctx.drawImage(image, imgX, imgY, drawW, drawH)
 
   // 边框风格装饰：绘制在边框背景与图片之上、文字与品牌标识之下。

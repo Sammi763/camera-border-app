@@ -761,6 +761,28 @@ body {
   height: 100%;
 }
 
+/* 空间不足时不能把纯边框伪装成已完成的照片预览。 */
+.previewAreaInsufficient {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  padding: var(--space-4);
+  background: rgba(22, 22, 22, 0.82);
+  color: var(--surface-primary);
+  font-size: 0.75rem;
+  text-align: center;
+  pointer-events: none;
+}
+
+.previewAreaInsufficient strong {
+  font-size: 0.8125rem;
+}
+
 /* 图片下方的元信息栏 */
 .previewMetaBar {
   display: flex;
@@ -2100,7 +2122,8 @@ body {
 
 .quickMain {
   flex: 1 1 auto;
-  min-height: 0;
+  /* 默认摄影信息卡需要 56px 顶边 + 160px 底边，主预览优先于模板画廊。 */
+  min-height: 400px;
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr) 340px;
   gap: var(--space-3);
@@ -2336,7 +2359,10 @@ body {
 /* ---- 快速出图模式：模板画廊 ------------------------------------------------ */
 
 .quickTemplateGallery {
-  flex: 0 0 auto;
+  /* 画廊内容可滚动，不能用信息卡的额外控件挤压主预览。 */
+  flex: 0 0 208px;
+  min-height: 0;
+  max-height: 208px;
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -2344,6 +2370,7 @@ body {
   border-radius: 6px;
   background: var(--surface-primary);
   padding: var(--space-3);
+  overflow: hidden;
 }
 
 .quickTemplateGalleryHeader {
@@ -2365,14 +2392,18 @@ body {
 }
 
 .quickTemplateGalleryStrip {
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
+  align-items: flex-start;
   gap: var(--space-3);
-  overflow-x: auto;
+  overflow: auto;
   padding-bottom: var(--space-1);
 }
 
 .quickTemplateCard {
   position: relative;
+  align-self: flex-start;
   flex: 0 0 auto;
   width: 196px;
   display: flex;

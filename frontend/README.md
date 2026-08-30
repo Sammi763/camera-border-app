@@ -59,7 +59,7 @@ frontend/src/
 - `pnpm test`（Vitest：变量解析、模板编解码、资产库编解码、输出预设、一致性等）
 - `pnpm typecheck`（tsc --noEmit）
 - `pnpm build`（`tsc --noEmit && vite build`）
-- 打包应用 E2E：当前 macOS 架构在根目录执行 `pnpm package && pnpm e2e:packaged`；该脚本启动实际打包应用，使用随包 JRE，驱动 `app://` 页面完成固定样片导入、预览、版式应用和导出文件校验，不启动 Vite，也不使用系统 Java。该结果不宣称 macOS x64 或 Windows x64 已实测。
+- 打包应用 E2E：当前 macOS 架构在根目录执行 `pnpm package && pnpm e2e:packaged`；该脚本启动实际打包应用，使用随包 JRE，驱动 `app://` 页面完成固定样片导入、默认自动应用「摄影信息卡」、Canvas 照片像素可见性、版式应用和导出文件校验，不启动 Vite，也不使用系统 Java。它会保存同步后的预览截图，并在最小窗口下要求照片可见或显示「预览区域不足」。该结果不宣称 macOS x64 或 Windows x64 已实测。
 - 测试数量以 CI 实际输出为准，不在文档维护数字
 
 ## 已知限制
