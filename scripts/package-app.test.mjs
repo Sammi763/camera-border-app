@@ -10,3 +10,7 @@ test("Windows manifest 使用完整 HEAD commit，并拒绝无法核对的版本
   assert.doesNotMatch(script, /rev-parse --short HEAD/)
   assert.doesNotMatch(script, /\$\{COMMIT\}-dirty/)
 })
+
+test("正式打包脚本不复制或注入 LibRaw", () => {
+  assert.doesNotMatch(script, /LibRaw|libraw|CAMBORDER_LIBRAW_PATH|dist-libraw/)
+})

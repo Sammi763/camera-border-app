@@ -15,7 +15,7 @@ import type { DesktopRuntime } from "../types/runtime"
 const runtime: DesktopRuntime = {
   appName: "camera-border-app",
   platform: "darwin",
-  engine: { managed: false, baseUrl: "http://127.0.0.1:8099" }
+  engine: { managed: false }
 }
 
 type RenderJobRecord = {

@@ -61,6 +61,8 @@ NEXT_STAGE_ALLOWED: yes | no
 - [ ] `cd java-engine && mvn test` 全量通过；
 - [ ] `pnpm --filter frontend typecheck && pnpm --filter frontend test` 全量通过；
 - [ ] `pnpm --filter electron typecheck` 通过。
+- [ ] `electron/electron-builder.yml` 为 macOS 使用 `build/icon.icns`、Windows 使用 `build/icon.ico`；
+      `pnpm test:scripts` 已校验图标资源存在且格式有效。
 
 ## 2. 构建与 T-05A 实现检查
 
@@ -99,6 +101,33 @@ cp -R "/Volumes/Camera Border 0.1.0-arm64/Camera Border.app" /tmp/
 hdiutil detach "/Volumes/Camera Border 0.1.0-arm64"
 CAMBORDER_SMOKE_PORT=8091 bash scripts/smoke-test.sh "/tmp/Camera Border.app/Contents/MacOS/Camera Border"
 ```
+
+### 阶段 1：打包应用 E2E（必须使用真实产物）
+
+当前 macOS 开发机的阶段 1 验收命令（只覆盖当前 CPU 架构）为：
+
+```bash
+pnpm package && pnpm e2e:packaged
+```
+
+该 E2E 会启动实际打包应用的可执行文件，确认随包 JRE 存在（macOS 为
+`resources/java-runtime/Contents/Home/bin/java`，Windows 为 `resources/java-runtime/bin/java.exe`）
+并由托管 `JavaBridge` 启动；它不启动 Vite、不连接系统 Java，也不把开发端口注入应用。固定样片默认使用 `photos/78330006.jpg`，可用绝对路径通过
+`CAMBORDER_E2E_SAMPLE` 覆盖；导出文件默认写入隔离临时目录，可用
+`CAMBORDER_E2E_OUTPUT` 覆盖。
+
+这条命令的成功结果只记录当前 macOS 架构的阶段 1 验收；它不表示 macOS x64 或 Windows
+x64 已实测。两个平台仍须在各自原生环境按同一命令完成独立验收。
+
+- [ ] 页面地址为 `app://app/...`，不是 `http://localhost` 或 Vite 地址；
+- [ ] 页面运行时只看到 `engine.managed=true`，Renderer 没有 JavaBridge 绝对地址；
+- [ ] 健康检查、预览、缩略图和导出请求均记录为 `app://app/api/**` 或
+      `app://app/previews/**`；
+- [ ] E2E 完成「导入固定样片 → 看到预览 → 应用一个版式 → 导出」，并验证输出文件存在、
+      非空且为合法的 JPEG、PNG 或 TIFF；
+- [ ] 失败时保留 `CAMBORDER_E2E_KEEP_TEMP=1` 的临时用户数据和应用日志，用于定位打包问题；
+- [ ] macOS arm64、macOS x64、Windows x64 分别在对应原生环境执行；一个平台通过不能替代
+      其它平台验收。
 
 ### 真实构建记录（2026-08-24，macOS arm64 开发机）
 
@@ -171,10 +200,12 @@ CAMBORDER_SMOKE_PORT=8091 bash scripts/smoke-test.sh "/tmp/Camera Border.app/Con
       普通 JAR 错误 / Spring Boot 启动失败 / 参数错误（非零退出）显示 start-failed；
       状态条展示的是诊断 IPC 返回的具体原因（而非仅「引擎不可达」）；
 - [ ] **端口占用（动态端口）**：默认端口 8099 被其它程序占用时自动换到空闲回环端口
-      （日志 `[engine-start] baseUrl=` 可核对），无需手动改配置；前端健康检查、
-      预览、EXIF、导出全部自动指向实际端口（`getEngineBaseUrl` 同步）；占用 8099 启动
-      → 应用可正常预览与导出。**启动时序**：生产窗口在端口探测完成后再创建，
-      首屏健康检查/预览即指向实际端口；重试时若 8099 已释放会自动恢复 8099；
+      （日志 `[engine-start] baseUrl=` 可核对），无需手动改配置；生产 `app://` 安全代理
+      从当前 JavaBridge 读取实际端口，前端健康检查、预览、EXIF、导出仍全部可用。Renderer
+      不读取、保存或拼接绝对引擎地址。**启动时序**：生产窗口在端口探测完成后再创建，
+      但 JavaBridge 尚未 ready 时请求返回结构化 `503 ENGINE_STARTING`，UI 显示「本地引擎
+      启动中…」；进程真正失败时显示「引擎暂不可用」及诊断原因；重试时若 8099 已释放会
+      自动恢复 8099；
 - [ ] **退出竞态**：应用退出后 `ps`/任务管理器无残留 Java 进程；退出瞬间即使引擎
       仍在端口探测也不会在退出后 spawn；重试后旧健康探测不会误把新引擎标记为失败；
 - [ ] **本地预览兜底**：引擎不可用时 JPEG/PNG/TIFF 队列缩略图与当前预览仍可显示
@@ -185,8 +216,9 @@ CAMBORDER_SMOKE_PORT=8091 bash scripts/smoke-test.sh "/tmp/Camera Border.app/Con
       提示「导出超时」+ 失败通知（单图/批量不会永久停在「渲染中」）；
 - [ ] **导出禁用与恢复**：引擎不可用时导出按钮保留但禁用并显示原因；
       引擎恢复后按钮自动恢复可用；
-- [ ] **首屏地址同步**：占用 8099 启动时，首屏（窗口出现即）健康检查/预览/EXIF/导出
-      即指向实际端口——应用在完成动态地址同步后才渲染工作台（无“先打旧端口再切换”的失败闪屏）；
+- [ ] **首屏代理路由**：占用 8099 启动时，窗口出现后的健康检查/预览/EXIF/导出均经
+      `app://app/api/**` 或 `app://app/previews/**` 到达实际端口，不出现把旧 8099
+      绝对地址暴露给 Renderer 或先直连旧端口再切换的路径；
 - [ ] **导出全链路超时**：导出前 EXIF 读取与异步状态轮询同样带可取消超时；
       引擎卡死时不会永久停在「正在读取 EXIF…」或「渲染中…」，最终给出超时/失败提示；
 - [ ] **重试锁定**：点击「重试」后按钮保持锁定直到新引擎启动并刷新诊断完成，

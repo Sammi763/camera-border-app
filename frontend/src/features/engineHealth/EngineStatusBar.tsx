@@ -26,7 +26,7 @@ type EngineStatusBarProps = {
 export const EngineStatusBar = ({ health }: EngineStatusBarProps): JSX.Element | null => {
   // 仅桌面托管模式启用诊断/重试能力（浏览器模式无 window.desktop）
   const enabled = health.kind === "error" && window.desktop !== undefined
-  // retry() 完成「重启 + 同步地址 + 等待启动 + 刷新诊断」全程后才 resolve，
+  // retry() 完成「重启 + 等待启动 + 刷新诊断」全程后才 resolve，
   // 期间 diagState.retrying 为 true，用于锁定重试按钮。
   const { state: diagState, retry } = useEngineDiagnostics(enabled)
 
@@ -46,7 +46,7 @@ export const EngineStatusBar = ({ health }: EngineStatusBarProps): JSX.Element |
 
   /**
    * 重试启动引擎。按钮锁定沿用 hook 的 diagState.retrying——它覆盖
-   * 「retryStart（等待旧进程退出 + 新进程 spawn）+ 同步地址 + 等待启动 + 刷新诊断」
+   * 「retryStart（等待旧进程退出 + 新进程 spawn）+ 等待启动 + 刷新诊断」
    * 全程，避免用户快速重复点击终止刚启动的新引擎（重试竞态）。
    */
   const handleRetry = useCallback((): void => {

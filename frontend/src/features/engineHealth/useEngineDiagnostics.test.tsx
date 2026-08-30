@@ -1,7 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { act, renderHook, waitFor } from "@testing-library/react"
 import { useEngineDiagnostics } from "./useEngineDiagnostics"
-import { resetResolvedBaseUrl } from "../../services/engine/engineClient"
 
 /**
  * useEngineDiagnostics.retry() 竞态防护测试：
@@ -12,15 +11,10 @@ import { resetResolvedBaseUrl } from "../../services/engine/engineClient"
 
 afterEach(() => {
   delete (window as unknown as { desktop?: unknown }).desktop
-  resetResolvedBaseUrl()
   vi.restoreAllMocks()
 })
 
 describe("useEngineDiagnostics.retry 重试锁定", () => {
-  beforeEach(() => {
-    resetResolvedBaseUrl()
-  })
-
   it("retry() 等待完整重启流程完成，期间 retrying 保持 true", async () => {
     const retryStart = vi.fn(async (): Promise<boolean> => {
       await new Promise((resolve) => setTimeout(resolve, 20))
@@ -34,8 +28,7 @@ describe("useEngineDiagnostics.retry 重试锁定", () => {
     }))
     ;(window as unknown as { desktop?: unknown }).desktop = {
       retryEngineStart: retryStart,
-      getEngineDiagnostics,
-      getEngineBaseUrl: vi.fn(async () => "http://127.0.0.1:8123")
+      getEngineDiagnostics
     }
 
     const { result } = renderHook(() => useEngineDiagnostics(true, 60))
@@ -102,8 +95,7 @@ describe("useEngineDiagnostics.retry 重试锁定", () => {
     })
     ;(window as unknown as { desktop?: unknown }).desktop = {
       retryEngineStart: vi.fn(async () => true),
-      getEngineDiagnostics,
-      getEngineBaseUrl: vi.fn(async () => "http://127.0.0.1:8123")
+      getEngineDiagnostics
     }
 
     const { result } = renderHook(() => useEngineDiagnostics(true, 0))

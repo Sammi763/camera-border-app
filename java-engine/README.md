@@ -1,6 +1,7 @@
 # java-engine — 本地图像引擎模块
 
-Spring Boot 2.7（Java 11）本地服务，默认 `http://127.0.0.1:8099`。
+Spring Boot 2.7（Java 11）本地服务，开发默认监听 `http://127.0.0.1:8099`。
+生产 Electron 页面不直接访问该绝对地址，而是通过 Electron 的 `app://app` 安全代理进入。
 负责图片读取、预览渲染、导出渲染、EXIF 元数据读取与格式化、拍摄画幅/胶片库/字体查询。
 **不关心 UI 与前端交互细节**；UI 状态、文件对话框由 frontend / electron 负责。
 
@@ -35,6 +36,11 @@ java-engine/src/main/java/com/camborder/app/
 | GET | `/api/fonts` | 引擎可用字体族列表 |
 | GET | `/api/assets/film-stocks` | 内置胶片库 |
 | POST | `/api/metadata/format` | 文本变量格式化（`{Camera}` 等替换 + 分隔符清理） |
+
+开发时，`config/DevCorsConfig` 只放行 Vite 的 `http://localhost:5174` 和
+`http://127.0.0.1:5174`，覆盖 `/api/**` 与 `/previews/**` 的 `GET` / `POST` / `DELETE` /
+`OPTIONS`。生产 `app://` 请求不依赖 Java CORS，而由 Electron 主进程代理；不得把任意外部
+Origin 加入该配置。
 
 ## 渲染管线（预览与导出共用）
 

@@ -1,29 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { act, render, screen, waitFor } from "@testing-library/react"
+import { render, waitFor } from "@testing-library/react"
 import { App } from "./App"
-import { getResolvedBaseUrl, resetResolvedBaseUrl } from "../services/engine/engineClient"
 
 /**
- * App 首屏时序测试：
- * - 动态引擎地址同步（getEngineBaseUrl IPC）完成前不渲染工作台（返回 null），
- *   避免首屏健康检查/预览/EXIF/导出命中旧 8099；
- * - 同步完成后渲染工作台，且 engineClient 已指向实际端口；
- * - 浏览器模式（无 window.desktop / 无 getEngineBaseUrl）立即渲染不阻塞。
+ * App 只负责装配运行时信息；JavaBridge 的绝对地址不再经过 preload/IPC 进入前端。
+ * 所有引擎请求都应保持为同源相对路径，由 Vite 或 app:// 代理接管。
  */
 
-const jsonResponse = (body: unknown, status = 200): Response =>
-  new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } })
-
-const setRuntime = (baseUrl: string): void => {
+const setRuntime = (): void => {
   ;(window as unknown as { desktopRuntime?: unknown }).desktopRuntime = {
     appName: "Camera Border",
     platform: "darwin",
-    engine: { managed: true, baseUrl }
+    engine: { managed: true }
   }
 }
 
 /** 最小的 window.desktop 替身（WorkspacePage 渲染需要的白名单方法）。 */
-const setDesktop = (overrides: Record<string, unknown> = {}): void => {
+const setDesktop = (): void => {
   ;(window as unknown as { desktop?: unknown }).desktop = {
     selectImages: vi.fn(async () => []),
     selectImageSources: vi.fn(async () => null),
@@ -48,36 +41,34 @@ const setDesktop = (overrides: Record<string, unknown> = {}): void => {
     retryEngineStart: vi.fn(async () => true),
     showNotification: vi.fn(async () => true),
     loadLocalImagePreview: vi.fn(async () => null),
-    openLogFile: vi.fn(async () => true),
-    ...overrides
+    openLogFile: vi.fn(async () => true)
   }
 }
 
-/** WorkspacePage 挂载后触发的引擎/资产请求桩。 */
-const stubFetch = (): void => {
+const stubFetch = (seenUrls: string[]): void => {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL): Promise<Response> => {
     const url = String(input)
+    seenUrls.push(url)
     if (url.endsWith("/api/health")) {
-      return jsonResponse({ status: "ok", app: "test", version: "0" })
+      return new Response(JSON.stringify({ status: "ok", app: "test", version: "0" }), { status: 200 })
     }
     if (url.endsWith("/api/assets/film-stocks") || url.endsWith("/api/film-formats")) {
-      return jsonResponse([])
+      return new Response("[]", { status: 200 })
     }
     if (url.endsWith("/api/dev/photos")) {
-      return jsonResponse({ photos: [] })
+      return new Response(JSON.stringify({ photos: [] }), { status: 200 })
     }
     if (url.endsWith("/api/preview")) {
-      return jsonResponse({ status: "ok", message: "", previewAvailable: false, previewUrl: "" })
+      return new Response(JSON.stringify({ status: "ok", message: "", previewAvailable: false, previewUrl: "" }), { status: 200 })
     }
     if (url.endsWith("/api/photo-metadata")) {
-      return jsonResponse({ error: "no metadata" }, 404)
+      return new Response(JSON.stringify({ error: "no metadata" }), { status: 404 })
     }
-    return jsonResponse({ error: `unexpected ${url}` }, 404)
+    return new Response(JSON.stringify({ error: `unexpected ${url}` }), { status: 404 })
   })
 }
 
 beforeEach(() => {
-  resetResolvedBaseUrl()
   ;(window as unknown as { desktopRuntime?: unknown }).desktopRuntime = undefined
   ;(window as unknown as { desktop?: unknown }).desktop = undefined
   vi.stubGlobal("URL.createObjectURL", () => "blob:fake")
@@ -85,87 +76,39 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  vi.useRealTimers()
   delete (window as unknown as { desktopRuntime?: unknown }).desktopRuntime
   delete (window as unknown as { desktop?: unknown }).desktop
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
 
-describe("App 首屏引擎地址同步", () => {
-  it("同步完成前不渲染工作台，完成后渲染且 engineClient 指向实际端口", async () => {
-    setRuntime("http://127.0.0.1:8099")
-    let releaseGate: ((url: string) => void) | undefined
-    const gate = new Promise<string>((resolve) => {
-      releaseGate = resolve
-    })
-    setDesktop({ getEngineBaseUrl: vi.fn(() => gate) })
-    stubFetch()
+describe("App 同源引擎代理装配", () => {
+  it("不等待或同步 JavaBridge 地址，首屏直接装配工作台", async () => {
+    setRuntime()
+    setDesktop()
+    const seenUrls: string[] = []
+    stubFetch(seenUrls)
 
     const { container } = render(<App />)
-    // 同步完成前：不渲染工作台（首屏请求不会命中旧端口）
-    expect(container.firstChild).toBeNull()
 
-    // 完成动态端口同步 → 渲染工作台
-    releaseGate!("http://127.0.0.1:8123")
     await waitFor(() => {
       expect(container.querySelector(".workspaceShell")).toBeTruthy()
     })
-    // engineClient 已指向实际端口
-    expect(getResolvedBaseUrl()).toBe("http://127.0.0.1:8123")
+    expect(seenUrls.length).toBeGreaterThan(0)
+    expect(seenUrls.every((url) => url.startsWith("/"))).toBe(true)
   })
 
-  it("浏览器模式（无 getEngineBaseUrl）立即渲染不阻塞首屏", async () => {
-    setRuntime("http://127.0.0.1:8099")
-    // 不提供 getEngineBaseUrl（旧 preload / 浏览器降级）
-    setDesktop({})
-    stubFetch()
+  it("托管运行时也只通过同源请求访问引擎", async () => {
+    setRuntime()
+    setDesktop()
+    const seenUrls: string[] = []
+    stubFetch(seenUrls)
 
     const { container } = render(<App />)
+
     await waitFor(() => {
       expect(container.querySelector(".workspaceShell")).toBeTruthy()
     })
-    expect(container.firstChild).not.toBeNull()
-    // 无桥接时保留默认地址
-    expect(getResolvedBaseUrl()).toBe("http://127.0.0.1:8099")
-  })
-
-  it("同步超过兜底后才返回真实地址时，会重新触发首屏引擎请求", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true })
-    setRuntime("http://127.0.0.1:8099")
-    let releaseGate: ((url: string) => void) | undefined
-    const gate = new Promise<string>((resolve) => {
-      releaseGate = resolve
-    })
-    setDesktop({ getEngineBaseUrl: vi.fn(() => gate) })
-
-    const healthRequests: string[] = []
-    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
-      const url = String(input)
-      if (url.endsWith("/api/health")) {
-        healthRequests.push(url)
-        return jsonResponse({ status: "ok", app: "test", version: "0" })
-      }
-      if (url.endsWith("/api/assets/film-stocks")) {
-        return jsonResponse([])
-      }
-      return jsonResponse({ error: `unexpected ${url}` }, 404)
-    }))
-
-    const { container } = render(<App />)
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(3000)
-    })
-    await waitFor(() => {
-      expect(container.querySelector(".workspaceShell")).toBeTruthy()
-    })
-    const requestsBeforeSync = healthRequests.length
-    expect(requestsBeforeSync).toBeGreaterThan(0)
-
-    releaseGate!("http://127.0.0.1:8123")
-    await waitFor(() => {
-      expect(getResolvedBaseUrl()).toBe("http://127.0.0.1:8123")
-      expect(healthRequests.length).toBeGreaterThan(requestsBeforeSync)
-    })
+    expect(seenUrls.every((url) => url.startsWith("/"))).toBe(true)
   })
 })

@@ -7,7 +7,6 @@ export type DesktopRuntime = {
   readonly platform: string
   readonly engine: {
     readonly managed: boolean
-    readonly baseUrl: string
   }
 }
 
@@ -134,13 +133,6 @@ export type DesktopBridge = {
    * 目录不存在或打开失败时返回 false，不会抛出异常。
    */
   readonly openDirectory: (dirPath: string) => Promise<boolean>
-  /**
-   * 读取引擎实际 baseUrl（含 JavaBridge 自动选择的端口）。
-   * 动态端口：默认端口被占用时主进程自动换端口，前端启动与重试后调用
-   * syncEngineBaseUrl() 同步，健康检查/预览/EXIF/导出全部指向实际端口。
-   * 旧版 preload 可能不提供此方法，故声明为可选。
-   */
-  readonly getEngineBaseUrl?: () => Promise<string>
   /**
    * 读取引擎托管诊断信息（引擎启动失败页面使用）。
    * 仅托管模式下有意义；未托管或桌面桥不存在时返回 null。

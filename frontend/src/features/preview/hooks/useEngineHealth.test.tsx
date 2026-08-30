@@ -63,6 +63,22 @@ describe("useEngineHealth（引擎健康轮询）", () => {
     expect(screen.getByTestId("message").textContent).toMatch(/127\.0\.0\.1:8099|不可用/)
   })
 
+  it("代理返回结构化 ENGINE_STARTING 503：保持 loading，不误报真正失败", async () => {
+    fetchMock = vi.fn(async () => jsonResponse({
+      code: "ENGINE_STARTING",
+      message: "本地引擎正在启动，请稍候。",
+      state: "starting"
+    }, 503))
+    vi.stubGlobal("fetch", fetchMock)
+
+    render(<Probe intervalMs={50} />)
+    await waitFor(() => {
+      expect(screen.getByTestId("kind").textContent).toBe("loading")
+      expect(fetchMock).toHaveBeenCalled()
+    })
+    expect(screen.queryByTestId("message")).toBeNull()
+  })
+
   it("恢复：从 error 再次变为 ready，状态可重新进入工作态", async () => {
     let fail = true
     fetchMock = vi.fn(async () => {

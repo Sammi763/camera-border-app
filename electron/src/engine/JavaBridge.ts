@@ -141,7 +141,7 @@ export class JavaBridge {
   #logWarning: string | null = null
   /**
    * 引擎实际 baseUrl：默认与 config.baseUrl 一致；启动时若默认端口被占用，
-   * 改为 127.0.0.1:<自动选择端口>。前端通过 getActualBaseUrl() 拿到最终地址。
+   * 改为 127.0.0.1:<自动选择端口>。主进程诊断与 app:// 安全代理读取最终地址。
    */
   #actualBaseUrl: string
   /**
@@ -177,7 +177,7 @@ export class JavaBridge {
   /**
    * 引擎实际 baseUrl（含自动选择的端口）。
    * 启动前会异步探测默认端口是否被占用；被占用时自动选择下一个可用回环端口，
-   * 并把最终地址写回 #actualBaseUrl 与本方法返回值。前端重新指向该地址。
+   * 并把最终地址写回 #actualBaseUrl 与本方法返回值。Renderer 不读取该地址。
    */
   public getActualBaseUrl(): string {
     return this.#actualBaseUrl
@@ -260,6 +260,18 @@ export class JavaBridge {
       stream.write(`${banner}\n`)
     } catch {
       // 横幅写入失败不影响引擎启动
+    }
+  }
+
+  /** 记录本次托管 Java 子进程 PID，供打包 E2E 精确回收临时进程。 */
+  #writeProcessPid(pid: number | undefined): void {
+    if (this.#logStream === null) {
+      return
+    }
+    try {
+      this.#logStream.write(`[engine-process] pid=${pid ?? -1}\n`)
+    } catch {
+      // PID 记录失败不影响引擎运行；普通启动横幅仍保留。
     }
   }
 
@@ -404,6 +416,7 @@ export class JavaBridge {
       }
 
       this.#child = child
+      this.#writeProcessPid(child.pid)
       // spawn 成功但尚未确认就绪：进入 starting
       this.#state = { kind: "starting", pid: child.pid ?? -1 }
       this.#failureReason = null

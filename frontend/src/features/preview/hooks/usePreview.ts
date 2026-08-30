@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { requestPreview } from "../../../services/engine/previewApi"
 import { toFileName } from "../../../utils/fileName"
 import { buildPlainImagePreviewRequest, buildPreviewRequest } from "../../settings/utils/buildRecipe"
@@ -11,7 +11,8 @@ const PREVIEW_MAX_WIDTH = 1280
 const PREVIEW_MAX_HEIGHT = 1280
 
 /**
- * 将引擎返回的 previewUrl 解析为可加载的完整 URL。
+ * 将引擎返回的同源相对 previewUrl 解析为可加载的 URL。
+ * 生产环境的绝对 Java 地址不会进入渲染进程；data URL 仅用于本地降级预览。
  */
 const resolveDisplayUrl = (previewUrl: string): string | null => {
   if (previewUrl.startsWith("data:")) {
@@ -19,14 +20,6 @@ const resolveDisplayUrl = (previewUrl: string): string | null => {
   }
   if (previewUrl.startsWith("/")) {
     return previewUrl
-  }
-  if (previewUrl.startsWith("http://") || previewUrl.startsWith("https://")) {
-    try {
-      const parsed = new URL(previewUrl)
-      return parsed.pathname + parsed.search
-    } catch {
-      return null
-    }
   }
   return null
 }
@@ -55,22 +48,31 @@ export const usePreview = (
   settingsVersion: number,
   textOverride?: string | null,
   resolvedTextLayers?: readonly (string | null)[] | null,
-  resolvedBrand?: string | null,
-  engineBaseUrlRevision: number = 0
+  resolvedBrand?: string | null
 ): PreviewState => {
   const [state, setState] = useState<PreviewState>({ kind: "idle" })
+
+  // WorkspacePage 解析拍摄信息时会在每次重绘生成新的数组引用。以内容签名稳定它，
+  // 否则本 effect 的 cleanup 会取消刚发送、但尚未返回的引擎预览请求，使状态永久停在同步中。
+  const textLayersSignature = resolvedTextLayers === undefined
+    ? "undefined"
+    : JSON.stringify(resolvedTextLayers)
+  const stableResolvedTextLayers = useMemo<readonly (string | null)[] | null | undefined>(() => {
+    if (resolvedTextLayers === null || resolvedTextLayers === undefined) {
+      return resolvedTextLayers
+    }
+    return [...resolvedTextLayers]
+  }, [textLayersSignature])
 
   const lastRequestedRef = useRef<{
     filePath: string | null
     version: number
-    engineBaseUrlRevision: number
     textOverride: string | null | undefined
     textLayersSig: string
     brand: string | null | undefined
   }>({
     filePath: null,
     version: 0,
-    engineBaseUrlRevision: 0,
     textOverride: undefined,
     textLayersSig: "",
     brand: undefined
@@ -205,7 +207,7 @@ export const usePreview = (
         URL.revokeObjectURL(currentObjectUrl)
       }
     }
-  }, [selectedFilePath, engineBaseUrlRevision])
+  }, [selectedFilePath])
 
   // 后台引擎预览请求
   useEffect(() => {
@@ -214,27 +216,21 @@ export const usePreview = (
     }
 
     // 构建去重签名：resolvedTextLayers 变化时需要重新请求
-    const textLayersSig = resolvedTextLayers
-      ? resolvedTextLayers.join("\u0000")
-      : ""
-
     const fileUnchanged = selectedFilePath === lastRequestedRef.current.filePath
     const versionUnchanged = settingsVersion === lastRequestedRef.current.version
-    const engineBaseUrlUnchanged = engineBaseUrlRevision === lastRequestedRef.current.engineBaseUrlRevision
     const textOverrideUnchanged = textOverride === lastRequestedRef.current.textOverride
-    const textLayersUnchanged = textLayersSig === lastRequestedRef.current.textLayersSig
+    const textLayersUnchanged = textLayersSignature === lastRequestedRef.current.textLayersSig
     const brandUnchanged = resolvedBrand === lastRequestedRef.current.brand
 
-    if (fileUnchanged && versionUnchanged && engineBaseUrlUnchanged
+    if (fileUnchanged && versionUnchanged
       && textOverrideUnchanged && textLayersUnchanged && brandUnchanged && state.kind !== "idle") {
       return
     }
     lastRequestedRef.current = {
       filePath: selectedFilePath,
       version: settingsVersion,
-      engineBaseUrlRevision,
       textOverride,
-      textLayersSig,
+      textLayersSig: textLayersSignature,
       brand: resolvedBrand
     }
 
@@ -249,7 +245,7 @@ export const usePreview = (
 
     void requestPreview(buildPreviewRequest(
       selectedFilePath, settings, PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT,
-      textOverride, resolvedTextLayers, resolvedBrand
+      textOverride, stableResolvedTextLayers, resolvedBrand
     ))
       .then((response) => {
         if (!active) {
@@ -294,7 +290,15 @@ export const usePreview = (
     return () => {
       active = false
     }
-  }, [selectedFilePath, settingsVersion, settings, textOverride, resolvedTextLayers, resolvedBrand, engineBaseUrlRevision])
+  }, [
+    selectedFilePath,
+    settingsVersion,
+    settings,
+    textOverride,
+    stableResolvedTextLayers,
+    textLayersSignature,
+    resolvedBrand
+  ])
 
   return state
 }

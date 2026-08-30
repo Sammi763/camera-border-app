@@ -3,7 +3,7 @@ import {
   fetchWithTimeout,
   getBaseUrl,
   getPreviewRequestTimeoutMs,
-  toErrorMessage
+  readEngineHttpError
 } from "./engineClient"
 
 /**
@@ -41,13 +41,7 @@ export const requestPreview = async (
 
   if (!response.ok) {
     const fallback = `预览请求失败：${response.status}`
-    let parsed: unknown = null
-    try {
-      parsed = await response.json()
-    } catch {
-      parsed = null
-    }
-    throw new Error(toErrorMessage(fallback, parsed))
+    throw await readEngineHttpError(response, fallback)
   }
 
   const data = (await response.json()) as PreviewResponse

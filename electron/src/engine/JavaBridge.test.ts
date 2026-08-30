@@ -116,6 +116,7 @@ describe("JavaBridge（进程控制与诊断分类）", () => {
     expect(existsSync(logPath)).toBe(true)
     const finalContent = readFileSync(logPath, "utf8")
     expect(finalContent).toContain("[fake-engine] started")
+    expect(finalContent).toMatch(/\[engine-process\] pid=\d+/)
     expect(bridge.getLogWarning()).toBeNull()
   }, 15000)
 
@@ -380,7 +381,7 @@ describe("JavaBridge（进程控制与诊断分类）", () => {
 
   // ── 端口占用：8099 被占用时自动选择可用回环端口 ────────────
   // 实际生产中可能与其他应用冲突；自动换端口让用户无需手动改环境变量。
-  // 选定的端口通过 getActualBaseUrl() 暴露给前端，前端重新指向新地址。
+  // 选定的端口只供主进程诊断和 app:// 安全代理读取。
   describe("端口自动选择", () => {
     it("getActualBaseUrl 暴露带端口的最终 baseUrl", () => {
       const bridge = new JavaBridge(makeConfig({}))
@@ -393,9 +394,9 @@ describe("JavaBridge（进程控制与诊断分类）", () => {
     })
 
     // ── 动态端口 → 前端时序契约（P1-1） ──
-    // 生产窗口在 start()（含端口探测）完成后再创建；渲染进程经 getEngineBaseUrl IPC
-    // 读到 getActualBaseUrl()。本用例验证「start() 完成后 getActualBaseUrl() 已是最终端口」。
-    it("start() 完成后 getActualBaseUrl() 为最终端口（窗口创建后可经 IPC 拿到）", async () => {
+    // 生产窗口在 start()（含端口探测）完成后再创建；app:// 安全代理
+    // 读取 getActualBaseUrl()。本用例验证「start() 完成后地址已是最终端口」。
+    it("start() 完成后 getActualBaseUrl() 为最终端口（供主进程 app:// 代理读取）", async () => {
       const fakeJava = writeFakeJava(workDir, "serve")
       const bridge = new JavaBridge(makeConfig({
         javaExecutablePath: fakeJava,

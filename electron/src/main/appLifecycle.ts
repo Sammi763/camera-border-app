@@ -129,8 +129,8 @@ export const runApplication = (): void => {
     registerAllIpc()
 
     // 仅生产模式启动 Java 引擎子进程。
-    // 关键时序：先 await startEngine（含端口探测 + spawn），再创建生产窗口，
-    // 确保渲染进程启动时 getEngineBaseUrl() 已返回最终端口（动态端口场景）。
+    // 关键时序：先 await startEngine（含端口探测 + spawn），再创建生产窗口；
+    // app:// 安全代理随后从 JavaBridge 读取最终端口，渲染进程无需知道它。
     if (engineManaged) {
       await startEngine()
     }

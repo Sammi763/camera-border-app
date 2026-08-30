@@ -57,8 +57,6 @@ import type { BatchScope } from "../features/queue/types"
 
 type WorkspacePageProps = {
   readonly runtime: DesktopRuntime
-  /** 引擎地址迟到同步时递增，触发首屏引擎请求重新执行。 */
-  readonly engineBaseUrlRevision?: number
 }
 
 // ---- 可调分栏常量 ---------------------------------------------------------
@@ -114,8 +112,8 @@ const clampWidth = (value: number, min: number, max: number): number =>
 const PHOTO_INFO_CARD_DEFAULT_PATCH: Partial<RenderSettings> =
   BUILT_IN_TEMPLATES.find((t) => t.id === PHOTO_INFO_CARD_TEMPLATE_IDS.centerWhite)?.settingsPatch ?? {}
 
-export const WorkspacePage = ({ runtime, engineBaseUrlRevision = 0 }: WorkspacePageProps): JSX.Element => {
-  const health = useEngineHealth(undefined, engineBaseUrlRevision)
+export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
+  const health = useEngineHealth()
   const queue = useQueue()
   const settings = useSettings()
   const userModifiedRef = useRef(false)
@@ -208,7 +206,7 @@ export const WorkspacePage = ({ runtime, engineBaseUrlRevision = 0 }: WorkspaceP
         // 引擎不可用时不影响
       })
     return () => { active = false }
-  }, [engineBaseUrlRevision])
+  }, [])
 
   // 导入照片后自动应用「摄影信息卡」默认模板：
   // 仅当队列从空变为非空、且用户尚未手动修改过设置/模板、且没有已保存的默认模板时。
@@ -418,8 +416,7 @@ export const WorkspacePage = ({ runtime, engineBaseUrlRevision = 0 }: WorkspaceP
     settings.settingsVersion,
     resolvedTextOverride,
     resolvedTextLayers,
-    resolvedBrand,
-    engineBaseUrlRevision
+    resolvedBrand
   )
 
   // 引擎是否可用：仅在「健康端点连续 ready」时为 true。

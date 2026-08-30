@@ -203,7 +203,36 @@ describe("usePreview 超时降级到本地预览", () => {
     }, { timeout: 4000 })
   })
 
-  it("引擎地址迟到同步后，会重新发起当前图片的预览请求", async () => {
+  it("父组件每次重绘生成等值文字数组时不取消正在返回的引擎同步", async () => {
+    vi.stubGlobal("Image", FakeImage)
+    vi.stubGlobal("fetch", async () =>
+      new Response(JSON.stringify({ status: "ok", message: "", previewAvailable: false, previewUrl: "" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    )
+    installDesktopBridge(() => null)
+
+    const settings = makeSettings()
+    // 这里故意在每次 hook 重绘时创建新数组，模拟 WorkspacePage 对拍摄信息变量的解析结果。
+    const { result } = renderHook(() => usePreview(
+      "/photos/re-rendered-text-layers.jpg",
+      settings,
+      1,
+      null,
+      ["NIKON Z6"]
+    ))
+
+    await waitFor(() => {
+      const state = result.current
+      expect(state.kind).toBe("active")
+      if (state.kind === "active") {
+        expect(state.engineSyncStatus).toBe("synced")
+      }
+    })
+  })
+
+  it("引擎预览 URL 只接受同源相对路径，不拼接绝对 Java 地址", async () => {
     vi.stubGlobal("Image", FakeImage)
     const fetchMock = vi.fn(async () =>
       new Response(JSON.stringify({ status: "ok", message: "", previewAvailable: false, previewUrl: "" }), {
@@ -215,11 +244,7 @@ describe("usePreview 超时降级到本地预览", () => {
     installDesktopBridge(() => null)
 
     const settings = makeSettings()
-    const { result, rerender } = renderHook(
-      ({ engineBaseUrlRevision }: { readonly engineBaseUrlRevision: number }) =>
-        usePreview("/photos/late.jpg", settings, 1, null, null, null, engineBaseUrlRevision),
-      { initialProps: { engineBaseUrlRevision: 0 } }
-    )
+    const { result } = renderHook(() => usePreview("/photos/relative.jpg", settings, 1))
 
     await waitFor(() => {
       const state = result.current
@@ -227,11 +252,7 @@ describe("usePreview 超时降级到本地预览", () => {
         expect(state.engineSyncStatus).toBe("synced")
       }
     })
-    const requestsBeforeSync = fetchMock.mock.calls.length
-
-    rerender({ engineBaseUrlRevision: 1 })
-    await waitFor(() => {
-      expect(fetchMock.mock.calls.length).toBeGreaterThan(requestsBeforeSync)
-    })
+    const calls = fetchMock.mock.calls as unknown[][]
+    expect(calls.every((call) => !String(call[0]).startsWith("http://127.0.0.1"))).toBe(true)
   })
 })

@@ -43,10 +43,16 @@ electron/src/
 - `contextIsolation: true`、`nodeIntegration: false`
 - preload 仅暴露白名单 API（`window.desktop` 能力集合 + `window.desktopRuntime` 静态信息），渲染进程不直接访问文件系统
 - IPC handler 只读写受控路径（userData 下固定 JSON 文件、用户经系统对话框选择的路径）
+- 生产模式的引擎请求只经 `app://app/api/**` 与 `app://app/previews/**` 代理；代理路由和方法在
+  `main/protocol.ts` 白名单中显式声明，仅允许 `GET` / `POST` / `DELETE`
+- 代理目标只取当前托管 `JavaBridge` 的地址，并且必须是 `http://127.0.0.1:<port>`；请求会拒绝其它
+  scheme/host、路径穿越、未声明路由和重定向。JavaBridge 尚未就绪时返回结构化 `503`
+  （`ENGINE_STARTING`），进程异常时返回 `ENGINE_UNAVAILABLE`，由前端分别展示启动中与真正失败
 
 ## 渲染进程可见的桥接 API（契约层：`electron/src/types/desktopApi.ts`）
 
-`window.desktopRuntime`（启动期静态信息）：`appName`、`platform`、`engine.{managed, baseUrl}`。
+`window.desktopRuntime`（启动期静态信息）：`appName`、`platform`、`engine.managed`。
+JavaBridge 的实际端口只存在于主进程，不通过 preload、IPC 或运行时对象暴露给 Renderer。
 
 `window.desktop` 能力分组（IPC 通道见 `types/desktopApi.ts` 的 `IPC_CHANNELS`）：
 
@@ -63,7 +69,7 @@ electron/src/
 | 本地图片预览 | `loadLocalImagePreview` | 主进程用 `nativeImage` 读取本地图片并缩放，返回 dataURL + 尺寸。仅接受绝对路径、常规文件与栅格白名单（JPEG/PNG/WebP/BMP/TIFF）；任何失败返回 `null` 不抛异常。缩放同时遵守 `maxWidth`/`maxHeight`、保持纵横比、不放大原图、最大边长 2048；优先用原生缩略图器（`createThumbnailFromPath`，低内存），失败回退 `createFromPath`。引擎不可用时工作台本地预览兜底 |
 | 日志打开 | `openLogFile` | 在系统默认应用中直接打开引擎日志**文件**；仅允许 `userData/logs` 下的**常规文件**（`resolve` 规范化拦截 `../` 穿越、`realpath` 拦截符号链接/大小写绕过、`stat` 确认是普通文件），不存在或打开失败返回 `false` |
 | 引擎诊断 | `getEngineDiagnostics` / `retryEngineStart` | 托管模式失败分类（jar 缺失 / 随包运行时缺失损坏 / 运行时被安全软件阻止 / 启动失败 / 端口占用 / 启动中 / 健康超时）、日志路径与重试 |
-| 引擎地址 | `getEngineBaseUrl` | 返回 JavaBridge 实际 baseUrl（含自动选择端口）。前端启动与引擎重试后经 `syncEngineBaseUrl` 同步，健康检查/预览/EXIF/导出全部指向实际端口 |
+| 引擎请求 | `app://app/api/**` / `app://app/previews/**` | 生产模式由主进程安全代理转发到当前托管 JavaBridge；Renderer 只发 `/api/**` 与 `/previews/**` 同源相对请求 |
 
 > 前端有独立的类型副本（`frontend/src/types/runtime.ts`），不跨包导入本文件；字段名必须保持一致。
 
@@ -78,16 +84,16 @@ electron/src/
 
 ## 验证与已知限制
 
-- 验证：`pnpm typecheck`；冒烟走 `pnpm dev`（开发）或 `pnpm dev:managed`（托管）；打包与干净机器验收见 [docs/release-checklist.md](../docs/release-checklist.md)。
+- 验证：`pnpm typecheck`；冒烟走 `pnpm dev`（开发）或 `pnpm dev:managed`（托管）；打包与干净机器验收见 [docs/release-checklist.md](../docs/release-checklist.md)。当前 macOS 架构的阶段 1 实际应用验收命令为 `pnpm package && pnpm e2e:packaged`；这不宣称 macOS x64 或 Windows x64 已实测。
 - HEIC/HEIF 当前开发实现依赖 macOS `sips`，这是开发环境限制而非最终产品范围。Windows x64 的最终 HEIC/HEIF 状态为 `NOT_RUN`，必须通过 [docs/prd.md §0](../docs/prd.md) 和 [样片矩阵](../docs/test-samples.md) 后才能宣称支持。
-- 引擎 URL / 就绪超时配置在 `engine/engineConfig.ts`（默认 `http://127.0.0.1:8099`，20s）。
+- JavaBridge 的监听地址 / 就绪超时配置在 `engine/engineConfig.ts`（默认只绑定 `127.0.0.1:8099`，20s）；地址仅供主进程端口探测和 `app://` 代理使用。
 - 打包模式**必须**使用随包 Java Runtime（`requireBundledRuntime`）：解析不到时进入 `runtime-missing` 诊断，不回退系统 Java；仅开发模式允许回退系统 PATH。最终用户不需要安装 Java、Node.js 或 Python，Electron 自带应用运行时。
 - 引擎 stdout/stderr 落盘到 `userData/logs/engine.log`（启动时自动创建日志目录；目录/权限问题以 logWarning 计入诊断）。启动时写入 `[engine-start]` 横幅（platform / arch / node 版本 / jar 路径 / java 路径 / baseUrl / 时间），子进程退出时写入 `[engine-exit]`（exit code + signal），便于用户反馈日志后直接定位问题；「查看日志」经 `openLogFile` 直接打开该文件。
 - 健康探测超时后引擎状态为 `unhealthy(health-timeout)`，不再保持 starting/running；「重试」终止旧进程（SIGTERM→SIGKILL 兜底）后重启。
 - 引擎状态机：`stopped → starting → running`，失败分支 `crashed(reason)` / `unhealthy(health-timeout)`。`starting` 与 `running` 明确区分，避免 UI 同时显示「引擎运行中」与「引擎不可用」。
 - **失败分类（runtime-blocked 仅用于明确的启动被阻止）**：普通 JAR 错误、Spring Boot 初始化失败、参数错误等非零退出一律归类 `start-failed`；只有 `spawn` 错误 `EACCES/EPERM`（如 Windows Defender / SmartScreen 拒绝执行）才归类 `runtime-blocked`。诊断页与日志据此给出对应提示（`classifySpawnError`）。
 - **异步启动与退出竞态**：`retry()` 先等待旧进程真正退出、再 `await start()`（含端口探测与 spawn）后才返回，调用方随后启动 `waitForReady()`；`dispose()` 置 `shuttingDown` 标记，仍在端口探测中的 `start()` 探测完成后不得再 spawn（不留下孤儿 Java 进程）；`waitForReady()` 在 dispose 后立即中止轮询，不会挂起；并发 `start`/`retry` 共享同一启动流程，不会重复 spawn。
-- **端口自动选择**：托管模式启动前探测默认端口（8099）；被占用时自动选择下一个可用回环端口，最终地址经 `JavaBridge.getActualBaseUrl()` 提供给诊断层与 `getEngineBaseUrl` IPC。**生产窗口在端口探测完成后再创建**（`appLifecycle` 先 `await startEngine()` 再建窗），前端首屏即可经 IPC 拿到实际端口；**每次重试前重置实际地址为配置默认**（8099 释放后自动恢复，不复用旧备用端口）。开发模式继续使用 `CAMBORDER_ENGINE_PORT` 配置。
+- **端口自动选择**：托管模式启动前探测默认端口（8099）；被占用时自动选择下一个可用回环端口，`JavaBridge.getActualBaseUrl()` 只供主进程诊断和 `app://` 安全代理读取。**生产窗口在端口探测完成后再创建**（`appLifecycle` 先 `await startEngine()` 再建窗），Renderer 不需要也不能拼接实际端口；**每次重试前重置实际地址为配置默认**（8099 释放后自动恢复，不复用旧备用端口）。开发模式继续使用 `CAMBORDER_ENGINE_PORT` 配置，Vite 代理把相对请求转发到开发端口。
 - **健康探测可取消超时与代次隔离**：`pollEngineHealth` 每次请求带 `AbortSignal.timeout`（连接后长期无响应也能终止，`readyTimeoutMs` 才真正生效）；`waitForReady()` 捕获启动代次，重试/退出后旧探测结果作废，不会把新引擎误标为 unhealthy。
 - **代码签名（env 驱动）**：`electron-builder.yml` 不再写死 `mac.identity: null`；设置 `CSC_LINK`/`CSC_KEY_PASSWORD` 即启用签名（mac 公证另设 `APPLE_*`）。`scripts/package-app.sh` 在未提供证书时对 mac 显式传 `--config.mac.identity=null` 保持本地未签名构建；`build-hooks/afterPack.cjs` **仅当对产物 `codesign -dv` 确认真实开发者签名后才跳过 ad-hoc**（APPLE_ID 只是公证账号，不代表已签名；未签名时仍走 ad-hoc，避免产出未签名应用）。本机无证书，现有产物为未签名（见 release-checklist）。
 - 应用运行**不需要联网**，也不在运行时下载任何文件；图片只在本机处理。

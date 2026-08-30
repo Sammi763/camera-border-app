@@ -21,7 +21,6 @@ export type DesktopRuntime = {
   readonly engine: {
     /** 桌面壳是否管理引擎生命周期（区别于外部引擎）。 */
     readonly managed: boolean
-    readonly baseUrl: string
   }
 }
 
@@ -102,13 +101,6 @@ export type DesktopApi = {
    */
   readonly openDirectory: (dirPath: string) => Promise<boolean>
   /**
-   * 读取引擎实际 baseUrl（含 JavaBridge 自动选择的端口）。
-   * 动态端口：默认端口被占用时主进程会自动换端口，此方法把最终地址同步给前端，
-   * 前端健康检查、预览、EXIF、导出全部指向实际端口。
-   * 未托管（开发）模式返回配置端口。
-   */
-  readonly getEngineBaseUrl: () => Promise<string>
-  /**
    * 读取引擎托管诊断信息（引擎启动失败页面使用）。
    * 仅托管模式下有意义；未托管或引擎从未启动时返回 null。
    */
@@ -187,7 +179,6 @@ export const IPC_CHANNELS = {
   CONVERT_HEIC_FILES: "desktop:convert-heic-files",
   LIST_SYSTEM_FONTS: "desktop:list-system-fonts",
   OPEN_DIRECTORY: "desktop:open-directory",
-  GET_ENGINE_BASE_URL: "desktop:get-engine-base-url",
   GET_ENGINE_DIAGNOSTICS: "desktop:get-engine-diagnostics",
   RETRY_ENGINE_START: "desktop:retry-engine-start",
   SHOW_NOTIFICATION: "desktop:show-notification",

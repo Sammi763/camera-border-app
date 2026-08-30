@@ -12,7 +12,7 @@ import type {
   RenderJobRequest,
   RenderJobStatusResponse
 } from "../../types/preview"
-import { fetchWithTimeout, getBaseUrl, toErrorMessage } from "./engineClient"
+import { fetchWithTimeout, getBaseUrl, readEngineHttpError } from "./engineClient"
 
 /** 导出请求默认超时（毫秒）：原图尺寸大图渲染较慢，取宽松值但仍保证不会永久挂起。 */
 export const RENDER_JOB_TIMEOUT_MS = 600_000
@@ -60,13 +60,7 @@ export const submitRenderJob = async (
 
   if (!response.ok) {
     const fallback = `导出请求失败：${response.status}`
-    let parsed: unknown = null
-    try {
-      parsed = await response.json()
-    } catch {
-      parsed = null
-    }
-    throw new Error(toErrorMessage(fallback, parsed))
+    throw await readEngineHttpError(response, fallback)
   }
 
   return (await response.json()) as RenderJobStatusResponse
@@ -101,13 +95,7 @@ export const fetchRenderJobStatus = async (
 
   if (!response.ok) {
     const fallback = `查询导出状态失败：${response.status}`
-    let parsed: unknown = null
-    try {
-      parsed = await response.json()
-    } catch {
-      parsed = null
-    }
-    throw new Error(toErrorMessage(fallback, parsed))
+    throw await readEngineHttpError(response, fallback)
   }
 
   return (await response.json()) as RenderJobStatusResponse

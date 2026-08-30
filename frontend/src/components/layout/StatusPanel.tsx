@@ -69,7 +69,7 @@ export const StatusPanel = ({ runtime, health, preview }: StatusPanelProps): JSX
         </span>
       </div>
       <span className="statusbarMeta">
-        {runtime.engine.baseUrl} · {runtime.platform} · {managedLabel}
+        {runtime.platform} · {managedLabel}
       </span>
     </footer>
   )

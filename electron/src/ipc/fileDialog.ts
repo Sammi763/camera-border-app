@@ -1,6 +1,6 @@
 import { readdir, stat } from "node:fs/promises"
-import { extname, join } from "node:path"
-import { BrowserWindow, dialog, ipcMain, shell } from "electron"
+import { extname, isAbsolute, join } from "node:path"
+import { app, BrowserWindow, dialog, ipcMain, shell } from "electron"
 import { IPC_CHANNELS, type ImageSourceResult } from "../types/desktopApi.js"
 
 const IMAGE_FILTERS = [
@@ -13,6 +13,20 @@ const IMAGE_FILTERS = [
     ]
   }
 ]
+
+/**
+ * 打包 E2E 专用的文件选择替身。
+ * 只有明确的 CAMBORDER_E2E=1 且运行在已打包应用中才启用，正常用户流程仍然
+ * 必须经过原生文件对话框；E2E 以此避免跨平台 GUI 自动化依赖，同时仍驱动真实 UI、
+ * app:// 代理和随包 JavaBridge。
+ */
+const getPackagedE2ePath = (key: "CAMBORDER_E2E_SAMPLE" | "CAMBORDER_E2E_OUTPUT"): string | null => {
+  if (process.env["CAMBORDER_E2E"] !== "1" || !app.isPackaged) {
+    return null
+  }
+  const value = process.env[key]
+  return value !== undefined && isAbsolute(value) ? value : null
+}
 
 /** 根据默认文件名扩展名选择导出格式过滤器。 */
 const getExportFilters = (defaultFileName: string): Electron.FileFilter[] => {
@@ -34,6 +48,10 @@ const getExportFilters = (defaultFileName: string): Electron.FileFilter[] => {
  */
 export const registerFileDialogIpc = (): void => {
   ipcMain.handle(IPC_CHANNELS.SELECT_IMAGES, async (): Promise<string[]> => {
+    const e2eSample = getPackagedE2ePath("CAMBORDER_E2E_SAMPLE")
+    if (e2eSample !== null) {
+      return [e2eSample]
+    }
     const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
 
     if (parent === undefined) {
@@ -60,6 +78,10 @@ export const registerFileDialogIpc = (): void => {
   ipcMain.handle(
     IPC_CHANNELS.SELECT_EXPORT_PATH,
     async (_event, defaultFileName: string): Promise<string | null> => {
+      const e2eOutput = getPackagedE2ePath("CAMBORDER_E2E_OUTPUT")
+      if (e2eOutput !== null) {
+        return e2eOutput
+      }
       const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
 
       if (parent === undefined) {
@@ -140,6 +162,10 @@ export const registerFileDialogIpc = (): void => {
   ipcMain.handle(
     IPC_CHANNELS.SELECT_IMAGE_SOURCES,
     async (): Promise<ImageSourceResult | null> => {
+      const e2eSample = getPackagedE2ePath("CAMBORDER_E2E_SAMPLE")
+      if (e2eSample !== null) {
+        return { kind: "files", paths: [e2eSample] }
+      }
       const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
 
       if (parent === undefined) {
@@ -189,6 +215,10 @@ export const registerFileDialogIpc = (): void => {
   ipcMain.handle(
     IPC_CHANNELS.SELECT_IMAGE_FILES,
     async (): Promise<string[]> => {
+      const e2eSample = getPackagedE2ePath("CAMBORDER_E2E_SAMPLE")
+      if (e2eSample !== null) {
+        return [e2eSample]
+      }
       const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
 
       if (parent === undefined) {

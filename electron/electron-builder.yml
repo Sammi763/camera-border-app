@@ -43,6 +43,7 @@ extraResources:
 
 mac:
   category: public.app-category.photography
+  icon: build/icon.icns
   # 架构由命令行 --arm64 / --x64 指定（scripts/package-app.sh 每次装配对应架构的 JRE）
   target:
     - dmg

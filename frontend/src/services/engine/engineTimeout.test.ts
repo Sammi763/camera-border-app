@@ -87,7 +87,7 @@ describe("fetchEngineHealth 超时", () => {
 
   it("非 2xx 健康响应抛错", async () => {
     vi.stubGlobal("fetch", async () => jsonResponse({ error: "bad" }, 503))
-    await expect(fetchEngineHealth(30)).rejects.toThrow(/503/)
+    await expect(fetchEngineHealth(30)).rejects.toMatchObject({ status: 503, message: "bad" })
   })
 })
 

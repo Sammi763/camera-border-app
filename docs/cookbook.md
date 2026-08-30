@@ -21,6 +21,29 @@ PNG 是必须提供的同档位输出格式变体，不是第四个档位。快�
 PNG 8-bit；高保真归档允许 TIFF 或按源位深输出 PNG 8/16-bit。输出格式选择不得改变所选
 档位的尺寸、色彩和 GPS/位置策略。
 
+## 0.1 验证打包应用链路（阶段 1）
+
+**起点**：需要验证发布产物，而不是 Vite 页面或本机手动启动的 Java。
+
+**步骤**：
+
+1. 当前 macOS 开发机按 `pnpm package && pnpm e2e:packaged` 完成阶段 1 验收；该结果只覆盖
+   当前 CPU 架构。macOS x64 和 Windows x64 仍须在对应原生构建环境分别执行同一命令，不能
+   把当前结果写为已实测。
+2. 确认产物资源目录含随包 JRE（macOS 为 `java-runtime/Contents/Home/bin/java`，Windows
+   为 `java-runtime/bin/java.exe`）、引擎 jar、前端构建产物，以及 macOS
+   `build/icon.icns` / Windows `build/icon.ico` 对应的正式图标。
+3. 上述命令中的 `pnpm e2e:packaged` 启动实际打包应用，通过 CDP 驱动真实页面，使用固定样片
+   完成「导入 → 预览 → 应用版式 → 导出」并校验导出文件。
+4. 检查 E2E 记录的请求全部为 `app://app/api/**` 或 `app://app/previews/**`；不得出现
+   Vite URL、JavaBridge 绝对 URL 或系统 Java 进程。
+5. 引擎尚未 ready 时，页面应收到结构化 `503 ENGINE_STARTING` 并显示启动中；进程失败时
+   才显示不可用及失败原因。
+
+**可验证终点**：E2E 退出码为 0，页面地址为 `app://app/...`，输出文件存在且非空；三种
+最终平台各自执行并分别记录结果。脚本默认使用 `photos/78330006.jpg`，不添加真实二进制
+样片，也不替代 [`docs/test-samples.md`](test-samples.md) 的格式验收。
+
 ## 1. 新增一个 Java API 端点（端到端）
 
 **起点**：需求明确「前端需要一个新接口」。

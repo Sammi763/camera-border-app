@@ -5,7 +5,6 @@ import { IPC_CHANNELS, type EngineDiagnostics } from "../types/desktopApi.js"
 import { getManagedEngine } from "../engine/managedEngine.js"
 import { classifyEngineDiagnostics } from "../engine/engineDiagnosticsLogic.js"
 import { isAllowedLogPath } from "./logPathGuard.js"
-import { engineBaseUrl } from "../config/devMode.js"
 
 /**
  * 检测引擎端口是否被其它进程占用。
@@ -35,14 +34,6 @@ const isPortOccupiedByOther = async (baseUrl: string): Promise<boolean> => {
  * 前端据此隐藏故障页面。
  */
 export const registerEngineDiagnosticsIpc = (): void => {
-  /**
-   * 引擎实际 baseUrl（含动态端口）。托管模式返回 JavaBridge 自动选择的端口；
-   * 未托管（开发）返回配置端口。前端启动与重试后调用以同步实际地址。
-   */
-  ipcMain.handle(IPC_CHANNELS.GET_ENGINE_BASE_URL, async (): Promise<string> => {
-    return getManagedEngine()?.bridge.getActualBaseUrl() ?? engineBaseUrl
-  })
-
   ipcMain.handle(IPC_CHANNELS.GET_ENGINE_DIAGNOSTICS, async (): Promise<EngineDiagnostics | null> => {
     const managed = getManagedEngine()
     if (managed === null) {

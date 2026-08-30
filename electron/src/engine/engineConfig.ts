@@ -35,7 +35,7 @@ export type EngineConfig = {
   readonly requireBundledRuntime: boolean
   /** 引擎日志文件绝对路径（stdout/stderr 落盘，供故障排查）。 */
   readonly logPath?: string
-  /** 注入引擎子进程的额外环境变量（如 CAMBORDER_LIBRAW_PATH）。 */
+  /** 注入引擎子进程的额外环境变量。 */
   readonly env?: Readonly<Record<string, string>> | undefined
   /** Spring Boot --server.port 参数值；缺省时使用引擎默认端口。 */
   readonly serverPort?: string | undefined

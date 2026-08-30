@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
 import { fetchEngineHealth } from "../../../services/engine/healthApi"
+import { EngineHttpError } from "../../../services/engine/engineClient"
 import type { EngineHealth } from "../../../types/health"
 
 export type EngineHealthState =
@@ -30,8 +31,7 @@ const toErrorMessage = (error: unknown): string => {
  * 获取引擎实时状态的唯一可信来源。
  */
 export const useEngineHealth = (
-  intervalMs: number = POLL_INTERVAL_MS,
-  engineBaseUrlRevision: number = 0
+  intervalMs: number = POLL_INTERVAL_MS
 ): EngineHealthState => {
   const [state, setState] = useState<EngineHealthState>({ kind: "idle" })
 
@@ -50,7 +50,14 @@ export const useEngineHealth = (
         if (!active) {
           return
         }
-        setState({ kind: "error", message: toErrorMessage(error) })
+        // app:// 代理在 JavaBridge 尚未 ready 时返回结构化 503。
+        // 沿用 loading 状态可直接复用顶部「启动中」提示；其它网络/HTTP 错误
+        // 才进入 error，确保 UI 能区分启动中和真正失败。
+        if (error instanceof EngineHttpError && error.code === "ENGINE_STARTING") {
+          setState({ kind: "loading" })
+        } else {
+          setState({ kind: "error", message: toErrorMessage(error) })
+        }
       }
 
       if (active) {
@@ -69,7 +76,7 @@ export const useEngineHealth = (
         clearTimeout(timer)
       }
     }
-  }, [intervalMs, engineBaseUrlRevision])
+  }, [intervalMs])
 
   return state
 }

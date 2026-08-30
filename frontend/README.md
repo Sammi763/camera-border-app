@@ -42,7 +42,8 @@ frontend/src/
   - **具体失败原因**：引擎 error 态状态条展示**诊断 IPC 返回的具体原因**（runtime-blocked 白名单指引 / start-failed / port-conflict 等，`EngineStatusBar` 经 `useEngineDiagnostics` 读取），而非只显示健康检查的「引擎不可达」。
 - **摄影信息**：EXIF 经 `POST /api/photo-metadata` 读取 → 与摄影预设合并（`metadata/utils/resolveIdentity.ts`）→ 变量解析 `resolveTextVariables`（优先级：每图覆盖 > 摄影预设 > EXIF > 空，[tasks.md §0.2](../docs/tasks.md)）。摄影预设（`ShootingPreset`，[P0-05](../docs/tasks.md)）替代旧 Roll 成为主流程：预设面板（`metadata/components/ShootingPresetPanel.tsx`）支持创建/编辑/复制/删除、分类筛选、画幅与资产引用，并可应用到当前/选中/全部图片；Electron 模式持久化到 `userData/presets.json`，浏览器模式降级 localStorage。旧 `readRolls/writeRolls` IPC 仅保留兼容读取，不再被 UI 使用。
 - **画幅**：统一画幅目录在 `metadata/constants/captureFormats.ts`（数码 M43/APS-C/135 全画幅/4433；胶片半格/135/645/6x6/6x7/6x8/6x9/**6x10**/**6x12**，6x10 为新增、6x12 保留），胶片 id 与引擎 `/api/film-formats` 一致；摄影预设与设置面板（含引擎不可用时的 `FALLBACK_FORMATS`）均含 6x10 与 6x12。画幅只提供信息与边框建议，不改变裁剪/尺寸设置。
-- **桌面能力**：`window.desktop`（见 [electron/README.md](../electron/README.md) 的桥接 API 表）；`window.desktopRuntime` 提供 managed/baseUrl。**动态端口**：生产模式默认端口被占用时主进程自动换端口，**`App` 在渲染工作台前先完成 `syncEngineBaseUrl()`**（经 `window.desktop.getEngineBaseUrl()` IPC 同步实际地址，带兜底超时），正常情况下首屏健康检查/预览/EXIF/导出即指向实际端口；若 IPC 响应晚于兜底时间，真实地址到达后会递增同步版本并重新触发首屏引擎请求，避免继续使用旧 8099；引擎重试后同样重新同步（`services/engine/engineClient.ts`）。
+- **引擎请求地址**：所有引擎 API client、预览图和缩略图都只生成同源相对 `/api/**`、`/previews/**` 请求。开发时由 Vite 代理转发到受控的 `127.0.0.1` 开发端口；生产时由 Electron `app://app` 安全代理转发到 JavaBridge 当前实际端口。`window.desktopRuntime` 只提供 `engine.managed`，Renderer 不读取、保存或拼接 Java 引擎绝对地址。
+- **桌面能力**：`window.desktop`（见 [electron/README.md](../electron/README.md) 的桥接 API 表）；`window.desktopRuntime` 只提供 `appName`、`platform` 和 `engine.managed`。生产代理在 JavaBridge 启动中返回结构化 `503`（`ENGINE_STARTING`），`useEngineHealth` 保持「启动中」；其它不可用响应进入「真正失败」状态。
 
 ## 模式差异（桌面 vs 浏览器）
 
@@ -51,13 +52,14 @@ frontend/src/
 | 持久化 | `userData/*.json`（经 IPC） | localStorage |
 | 文件选择/保存 | 系统对话框 | 无（用 `/api/dev/photos` 样片） |
 | HEIC 转换 | 当前开发实现（macOS `sips`；不代表最终平台支持） | 当前开发模式不支持 |
-| 引擎地址 | dev：Vite 代理相对路径；managed：`desktopRuntime.engine.baseUrl` | Vite 代理（`vite.config.ts` → 127.0.0.1:8099） |
+| 引擎请求 | dev：相对 `/api`、`/previews`，经 Vite 代理；managed：相对请求经 `app://app` 安全代理 | 相对请求经 Vite 代理（`vite.config.ts` → 127.0.0.1:8099） |
 
 ## 验证
 
 - `pnpm test`（Vitest：变量解析、模板编解码、资产库编解码、输出预设、一致性等）
 - `pnpm typecheck`（tsc --noEmit）
 - `pnpm build`（`tsc --noEmit && vite build`）
+- 打包应用 E2E：当前 macOS 架构在根目录执行 `pnpm package && pnpm e2e:packaged`；该脚本启动实际打包应用，使用随包 JRE，驱动 `app://` 页面完成固定样片导入、预览、版式应用和导出文件校验，不启动 Vite，也不使用系统 Java。该结果不宣称 macOS x64 或 Windows x64 已实测。
 - 测试数量以 CI 实际输出为准，不在文档维护数字
 
 ## 已知限制

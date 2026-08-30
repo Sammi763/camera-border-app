@@ -102,33 +102,6 @@ if [ "$OS_TAG" = "win" ]; then
   node "$ROOT/scripts/validate-windows-package.mjs" --bundle "$BUNDLE"
 fi
 
-# 随包 LibRaw 原生程序（RAW 真实显影）；只取与当前目标平台-架构匹配的产物，
-# 避免先构建 arm64 再打 x64 包时把错误架构的二进制带进安装包。
-# 产物约定：scripts/build-libraw.sh 输出到 dist-libraw/<platform>-<arch>/。
-LIBRAW_BIN_NAME="camborder-libraw-sampler"
-[ "$OS_TAG" = "win" ] && LIBRAW_BIN_NAME="${LIBRAW_BIN_NAME}.exe"
-LIBRAW_SRC_DIR="$ROOT/dist-libraw/${RUNTIME_KEY}"
-LIBRAW_BIN="$LIBRAW_SRC_DIR/$LIBRAW_BIN_NAME"
-if [ -f "$LIBRAW_BIN" ]; then
-  mkdir -p "$BUNDLE/libraw"
-  cp "$LIBRAW_BIN" "$BUNDLE/libraw/"
-  echo "[package] 携带 LibRaw 原生程序：$RUNTIME_KEY ($LIBRAW_BIN)"
-else
-  # 防御性扫描：检测旧版扁平目录或非匹配架构的产物，避免漏装/错装
-  STALE_FOUND=0
-  for d in "$ROOT"/dist-libraw/*/; do
-    [ -d "$d" ] || continue
-    dir_name="$(basename "$d")"
-    if [ "$dir_name" != "$RUNTIME_KEY" ] && [ -f "$d/$LIBRAW_BIN_NAME" ]; then
-      STALE_FOUND=1
-      echo "[package] 警告：dist-libraw/$dir_name/ 存在 LibRaw 产物但与当前目标 $RUNTIME_KEY 不匹配，已忽略以防止架构错装" >&2
-    fi
-  done
-  if [ "$STALE_FOUND" -eq 0 ]; then
-    echo "[package] 未发现 $RUNTIME_KEY 的 LibRaw 产物，RAW 将降级为嵌入预览（可运行 bash scripts/build-libraw.sh 构建）"
-  fi
-fi
-
 # 清理运行时中的无用文件，缩小安装包体积
 find "$BUNDLE/java-runtime" -name "*.dSYM" -type d -exec rm -rf {} + 2>/dev/null || true
 rm -f "$BUNDLE/java-runtime/"NEWS "$BUNDLE/java-runtime/"README "$BUNDLE/java-runtime/"release 2>/dev/null || true
@@ -138,9 +111,11 @@ echo "[package] electron-builder 打包（$OS_TAG ${ARCH}，宿主 ${HOST_OS}）
 cd "$ROOT/electron"
 npx tsc -p tsconfig.json
 
-if [ "$OS_TAG" = "win" ]; then
-  # 使用内置生成器创建多尺寸 ICO，不引入 ImageMagick 等外部依赖。
-  node "$ROOT/scripts/create-windows-icon.mjs" "$ROOT/electron/build/icon.ico"
+# 先用仓库内的确定性生成器创建视觉源 ICO，不依赖被忽略的本机遗留产物。
+node "$ROOT/scripts/create-windows-icon.mjs" "$ROOT/electron/build/icon.ico"
+if [ "$OS_TAG" != "win" ]; then
+  # macOS 使用与 Windows 相同视觉源生成正式 ICNS。
+  node "$ROOT/scripts/create-mac-icon.mjs" "$ROOT/electron/build/icon.ico" "$ROOT/electron/build/icon.icns"
 fi
 
 BUILD_ARCH="$ARCH"
@@ -171,9 +146,9 @@ if [ "$FORCE_UNSIGNED" = "1" ] || [ "$FORCE_UNSIGNED" = "true" ]; then
   fi
   unset CSC_LINK CSC_KEY_PASSWORD WIN_CSC_LINK WIN_CSC_KEY_PASSWORD
   export CSC_IDENTITY_AUTO_DISCOVERY=false
-  echo "[package] FORCE_UNSIGNED=1：生成未签名测试包（$OS_TAG；SmartScreen/Gatekeeper 需手动放行）"
+  echo "[package] FORCE_UNSIGNED=1：生成未签名测试包（${OS_TAG}；SmartScreen/Gatekeeper 需手动放行）"
 elif [ -n "${CSC_LINK:-}" ] && [ -n "${CSC_KEY_PASSWORD:-}" ]; then
-  echo "[package] 检测到代码签名证书（CSC_LINK/CSC_KEY_PASSWORD），本次构建将启用正式签名（$OS_TAG）"
+  echo "[package] 检测到代码签名证书（CSC_LINK/CSC_KEY_PASSWORD），本次构建将启用正式签名（${OS_TAG}）"
 elif [ "$OS_TAG" = "macos" ]; then
   SIGN_FLAGS+=(--config.mac.identity=null)
   echo "[package] 未配置 CSC_LINK，macOS 使用本地未签名（adhoc）构建；"

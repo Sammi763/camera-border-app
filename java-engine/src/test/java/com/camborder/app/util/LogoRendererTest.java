@@ -15,6 +15,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 final class LogoRendererTest {
 
+    // 该像素单测不需要桌面窗口；显式使用 headless，避免 macOS 测试 fork 触发 AppKit。
+    static {
+        System.setProperty("java.awt.headless", "true");
+    }
+
     private final LogoRenderer logoRenderer = new LogoRenderer();
 
     /**

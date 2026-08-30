@@ -6,7 +6,7 @@ import { loadLocalImagePreview, isLocalPreviewSupported, isRawOrHeicFile } from 
  * 缩略图缓存与并发加载 Hook。
  *
  * 设计要点：
- * - 使用 Map<filePath, objectURL> 做内存缓存，避免重复请求
+ * - 使用 Map<filePath, previewUrl> 做内存缓存，避免重复请求
  * - 并发控制（最多 3 个同时请求），避免队列加载时打爆后端
  * - 缩略图请求使用小尺寸（120px）且不加边框文字，尽量轻量
  * - 组件卸载或依赖变化时取消进行中的请求
@@ -19,22 +19,15 @@ const MAX_CONCURRENT = 3
 const thumbCache = new Map<string, string>()
 
 /**
- * 解析引擎返回的 previewUrl 为可加载的 URL（data:/blob:/http(s)/相对路径）。
+ * 解析引擎返回的同源相对 previewUrl；data URL 仅用于兼容本地降级结果。
+ * 绝对 Java 地址不属于渲染进程契约，收到时直接拒绝。
  */
-const resolveEngineUrl = (previewUrl: string): string | null => {
-  if (previewUrl.startsWith("data:")) {
+export const resolveEngineUrl = (previewUrl: string): string | null => {
+  if (previewUrl.startsWith("data:image/")) {
     return previewUrl
   }
   if (previewUrl.startsWith("/")) {
     return previewUrl
-  }
-  if (previewUrl.startsWith("http://") || previewUrl.startsWith("https://")) {
-    try {
-      const parsed = new URL(previewUrl)
-      return parsed.pathname + parsed.search
-    } catch {
-      return null
-    }
   }
   return null
 }
@@ -62,9 +55,16 @@ const fetchThumbnail = async (filePath: string, maxWidth: number, maxHeight: num
     if (response.previewAvailable) {
       const url = resolveEngineUrl(response.previewUrl)
       if (url !== null) {
+        if (url.startsWith("data:")) {
+          return url
+        }
         const r = await fetch(url)
-        const blob = await r.blob()
-        return URL.createObjectURL(blob)
+        const contentType = r.headers.get("content-type")?.toLowerCase() ?? ""
+        if (r.ok && contentType.startsWith("image/")) {
+          // 保留相对路径：生产 app:// 页面中的 img 会解析为
+          // app://app/previews/<id>，避免把代理结果物化成 blob: 地址。
+          return url
+        }
       }
     }
   } catch {
