@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { mergeIdentityChain, resolvePresetIdentity } from "./resolveIdentity"
+import { mergeIdentityChain, resolveIdentityForQueueItem, resolvePresetIdentity } from "./resolveIdentity"
 import type { PhotoIdentity, PhotoAssetStore, ShootingPreset } from "../types"
 import { createEmptyAssetStore, createEmptyIdentity } from "../types"
 
@@ -169,5 +169,35 @@ describe("mergeIdentityChain 优先级", () => {
     expect(merged.captureFormat).toBe("6x6")
     const noOverride = mergeIdentityChain({ override: null, preset: presetPartial, exif })
     expect(noOverride.captureFormat).toBe("135")
+  })
+})
+
+describe("resolveIdentityForQueueItem 导出快照", () => {
+  it("只读取传入的冻结队列项，不按 id 取得之后的覆盖值", () => {
+    const frozenItem = {
+      filePath: "/photos/a.jpg",
+      presetId: null,
+      identityOverride: { camera: "导出开始时的相机" }
+    }
+    const laterQueueItem = {
+      ...frozenItem,
+      identityOverride: { camera: "用户之后编辑的相机" }
+    }
+
+    const frozenIdentity = resolveIdentityForQueueItem(
+      frozenItem,
+      [],
+      makeAssetStore(),
+      new Map()
+    )
+    const laterIdentity = resolveIdentityForQueueItem(
+      laterQueueItem,
+      [],
+      makeAssetStore(),
+      new Map()
+    )
+
+    expect(frozenIdentity.camera).toBe("导出开始时的相机")
+    expect(laterIdentity.camera).toBe("用户之后编辑的相机")
   })
 })

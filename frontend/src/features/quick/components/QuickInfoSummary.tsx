@@ -14,7 +14,7 @@ import { captureFormatLabel } from "../../metadata/constants/captureFormats"
 import { CAPTURE_FORMAT_GROUPS } from "../../metadata/constants/captureFormats"
 import { IDENTITY_SOURCE_LABELS } from "../../metadata/utils/resolveIdentityFieldSources"
 import type { IdentitySourceMap } from "../../metadata/utils/resolveIdentityFieldSources"
-import type { BatchScope, QueueItem } from "../../queue/types"
+import type { OperationScope, QueueItem } from "../../queue/types"
 
 type QuickInfoSummaryProps = {
   readonly activeItem: QueueItem
@@ -23,9 +23,11 @@ type QuickInfoSummaryProps = {
   readonly presets: readonly ShootingPreset[]
   /** 批量选中数量（用于作用范围提示）。 */
   readonly checkedCount: number
-  readonly onApplyPreset: (presetId: string, scope: BatchScope) => void
-  readonly onClearPreset: (scope: BatchScope) => void
-  readonly onCreatePresetFromText: (draft: PresetDraft, scope: BatchScope) => void
+  readonly operationScope: OperationScope
+  readonly onOperationScopeChange: (scope: OperationScope) => void
+  readonly onApplyPreset: (presetId: string, scope: OperationScope) => void
+  readonly onClearPreset: (scope: OperationScope) => void
+  readonly onCreatePresetFromText: (draft: PresetDraft, scope: OperationScope) => void
 }
 
 /** 快速创建预设的表单草稿（与 utils/buildPresetFromText 对齐）。 */
@@ -78,11 +80,11 @@ const ScopeSelector = ({
   checkedCount,
   onChange
 }: {
-  readonly value: BatchScope
+  readonly value: OperationScope
   readonly checkedCount: number
-  readonly onChange: (scope: BatchScope) => void
+  readonly onChange: (scope: OperationScope) => void
 }): JSX.Element => {
-  const options: readonly { readonly scope: BatchScope; readonly label: string }[] = [
+  const options: readonly { readonly scope: OperationScope; readonly label: string }[] = [
     { scope: "active", label: "当前图片" },
     { scope: "checked", label: `已选 ${checkedCount} 张` },
     { scope: "all", label: "全部图片" }
@@ -110,11 +112,12 @@ export const QuickInfoSummary = ({
   sources,
   presets,
   checkedCount,
+  operationScope,
+  onOperationScopeChange,
   onApplyPreset,
   onClearPreset,
   onCreatePresetFromText
 }: QuickInfoSummaryProps): JSX.Element => {
-  const [scope, setScope] = useState<BatchScope>("active")
   const [selectedPresetId, setSelectedPresetId] = useState<string>("")
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [draft, setDraft] = useState<PresetDraft>(EMPTY_DRAFT)
@@ -129,8 +132,8 @@ export const QuickInfoSummary = ({
     if (selectedPresetId.length === 0) {
       return
     }
-    onApplyPreset(selectedPresetId, scope)
-  }, [selectedPresetId, scope, onApplyPreset])
+    onApplyPreset(selectedPresetId, operationScope)
+  }, [selectedPresetId, operationScope, onApplyPreset])
 
   /** 提交创建预设表单。 */
   const handleSubmitCreate = useCallback((): void => {
@@ -147,10 +150,10 @@ export const QuickInfoSummary = ({
       return
     }
     setDraftError(null)
-    onCreatePresetFromText(draft, scope)
+    onCreatePresetFromText(draft, operationScope)
     setShowCreateForm(false)
     setDraft(EMPTY_DRAFT)
-  }, [draft, scope, onCreatePresetFromText])
+  }, [draft, operationScope, onCreatePresetFromText])
 
   const presetOptions = presets.length > 0
     ? presets
@@ -198,7 +201,7 @@ export const QuickInfoSummary = ({
         <div className="quickPresetBarHeader">
           <span className="quickInfoTitle">摄影预设</span>
           <span className="quickPresetScopeHint">
-            应用范围：{scope === "all" ? "全部图片" : scope === "checked" ? `已选 ${checkedCount} 张` : "当前图片"}
+            应用范围：{operationScope === "all" ? "全部图片" : operationScope === "checked" ? `已选 ${checkedCount} 张` : "当前图片"}
           </span>
         </div>
 
@@ -227,13 +230,13 @@ export const QuickInfoSummary = ({
                 应用
               </button>
             </div>
-            <ScopeSelector value={scope} checkedCount={checkedCount} onChange={setScope} />
+            <ScopeSelector value={operationScope} checkedCount={checkedCount} onChange={onOperationScopeChange} />
             <div className="quickPresetClearRow">
               <button
                 type="button"
                 className="ghostButton"
-                disabled={activeItem.presetId === null && scope === "active"}
-                onClick={() => onClearPreset(scope)}
+                disabled={activeItem.presetId === null && operationScope === "active"}
+                onClick={() => onClearPreset(operationScope)}
               >
                 清除该范围预设
               </button>

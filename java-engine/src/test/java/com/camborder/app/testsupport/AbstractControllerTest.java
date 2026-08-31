@@ -17,6 +17,7 @@ import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -141,18 +142,35 @@ public abstract class AbstractControllerTest {
     }
 
     /**
-     * 提交一个导出任务，返回状态响应里的 outputPath（指向真实文件）。
-     * POST /api/render-jobs 同步返回最终状态（completed），直接读取 outputPath。
+     * 提交一个导出任务并等待单图终态，返回逐项结果里的 outputPath（指向真实文件）。
+     * POST 只会返回 202 + jobId；测试显式走 GET 轮询，确保断言异步契约而非旧同步行为。
      */
     protected String submitExport(final com.camborder.app.dto.RenderJobRequest request)
             throws Exception {
         String responseBody = mockMvc.perform(post("/api/render-jobs")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("completed"))
+                .andExpect(status().isAccepted())
                 .andReturn().getResponse().getContentAsString();
 
-        return objectMapper.readTree(responseBody).get("outputPath").asText();
+        String jobId = objectMapper.readTree(responseBody).get("jobId").asText();
+        return waitForRenderJob(jobId).path("items").get(0).path("outputPath").asText();
+    }
+
+    /** 等待异步导出任务到达终态；测试用短轮询，超时直接给出明确错误。 */
+    protected com.fasterxml.jackson.databind.JsonNode waitForRenderJob(final String jobId)
+            throws Exception {
+        for (int attempt = 0; attempt < 100; attempt++) {
+            String responseBody = mockMvc.perform(get("/api/render-jobs/" + jobId))
+                    .andExpect(status().isOk())
+                    .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+            com.fasterxml.jackson.databind.JsonNode statusNode = objectMapper.readTree(responseBody);
+            String jobStatus = statusNode.path("status").asText();
+            if ("completed".equals(jobStatus) || "failed".equals(jobStatus) || "cancelled".equals(jobStatus)) {
+                return statusNode;
+            }
+            Thread.sleep(10L);
+        }
+        throw new AssertionError("render job did not reach a terminal state");
     }
 }

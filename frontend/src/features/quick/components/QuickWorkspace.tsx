@@ -16,9 +16,9 @@ import type { RenderSettings } from "../../settings/types"
 import type { QueueController, QueueItem } from "../../queue/types"
 import type { PhotoIdentity, ShootingPreset } from "../../metadata/types"
 import type { IdentitySourceMap } from "../../metadata/utils/resolveIdentityFieldSources"
-import type { BatchScope } from "../../queue/types"
+import type { OperationScope } from "../../queue/types"
 import { PreviewPanel } from "../../preview/components/PreviewPanel"
-import type { ResolvedQueueItem } from "../../preview/components/PreviewPanel"
+import type { ExportController } from "../../preview/hooks/useExportController"
 import { QueuePanel } from "../../queue/components/QueuePanel"
 import { QuickInfoSummary } from "./QuickInfoSummary"
 import type { PresetDraft } from "./QuickInfoSummary"
@@ -38,13 +38,11 @@ type QuickWorkspaceProps = {
   readonly recommendedTemplateId: string | null
   /** 当前预览照片（模板卡片实时缩略图用）。 */
   readonly currentImage: HTMLImageElement | null
-  readonly resolveQueueItem: (item: QueueItem) => ResolvedQueueItem
-  readonly prepareExifForExport: (paths: readonly string[]) => Promise<void>
+  /** 根级导出控制器；快速/高级模式切换不会丢失任务状态。 */
+  readonly exportController: ExportController
   readonly resolvedBrand: string | null
   readonly resolvedTextOverride: string | null
   readonly resolvedTextLayers: readonly (string | null)[] | null
-  /** 批量导出目标图片（按作用范围计算）。 */
-  readonly batchExportItems: readonly QueueItem[]
   /** 批量导出按钮文案。 */
   readonly batchExportLabel: string
   /**
@@ -56,9 +54,11 @@ type QuickWorkspaceProps = {
   readonly engineUnavailableReason: string | null
   readonly onApplyTemplate: (patch: Partial<RenderSettings>) => void
   readonly onApplyInfoCardVariant: (variantId: string) => void
-  readonly onApplyPreset: (presetId: string, scope: BatchScope) => void
-  readonly onClearPreset: (scope: BatchScope) => void
-  readonly onCreatePresetFromText: (draft: PresetDraft, scope: BatchScope) => void
+  readonly operationScope: OperationScope
+  readonly onOperationScopeChange: (scope: OperationScope) => void
+  readonly onApplyPreset: (presetId: string, scope: OperationScope) => void
+  readonly onClearPreset: (scope: OperationScope) => void
+  readonly onCreatePresetFromText: (draft: PresetDraft, scope: OperationScope) => void
 }
 
 export const QuickWorkspace = ({
@@ -72,17 +72,17 @@ export const QuickWorkspace = ({
   activePresetId,
   recommendedTemplateId,
   currentImage,
-  resolveQueueItem,
-  prepareExifForExport,
+  exportController,
   resolvedBrand,
   resolvedTextOverride,
   resolvedTextLayers,
-  batchExportItems,
   batchExportLabel,
   engineAvailable,
   engineUnavailableReason,
   onApplyTemplate,
   onApplyInfoCardVariant,
+  operationScope,
+  onOperationScopeChange,
   onApplyPreset,
   onClearPreset,
   onCreatePresetFromText
@@ -98,15 +98,11 @@ export const QuickWorkspace = ({
             state={preview}
             settings={settings}
             hasSelectedImage={queue.activeFilePath !== null}
-            queueItems={queue.items}
-            batchExportItems={batchExportItems}
             batchExportLabel={batchExportLabel}
-            resolveQueueItem={resolveQueueItem}
-            prepareExifForExport={prepareExifForExport}
+            exportController={exportController}
             resolvedBrand={resolvedBrand}
             resolvedTextOverride={resolvedTextOverride}
             resolvedTextLayers={resolvedTextLayers}
-            autoOpenExportDirectory
             engineAvailable={engineAvailable}
             engineUnavailableReason={engineUnavailableReason}
           />
@@ -125,6 +121,8 @@ export const QuickWorkspace = ({
             }}
             presets={presets}
             checkedCount={queue.checkedCount}
+            operationScope={operationScope}
+            onOperationScopeChange={onOperationScopeChange}
             onApplyPreset={onApplyPreset}
             onClearPreset={onClearPreset}
             onCreatePresetFromText={onCreatePresetFromText}

@@ -5,8 +5,8 @@ import java.util.List;
 /**
  * 渲染配方（内部业务模型）：源图路径、边框、文字列表等。
  *
- * 当前兼具 DTO 嵌套模型角色：作为 {@code PreviewRequest.recipe} / {@code RenderJobRequest.recipe}
- * 的嵌套字段直接参与 JSON 序列化，字段保持不变以兼容前端契约。
+ * 当前兼具 DTO 嵌套模型角色：作为 {@code PreviewRequest.recipe} /
+ * {@code RenderJobSnapshot.recipe} 的嵌套字段直接参与 JSON 序列化，字段保持不变以兼容前端契约。
  */
 public final class RenderRecipe {
 

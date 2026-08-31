@@ -51,7 +51,6 @@ export const AssetLibraryPanel = ({
 
   const handleTabChange = useCallback((tab: AssetTab): void => {
     setActiveTab(tab)
-    setIsAdding(false)
   }, [])
 
   return (
@@ -82,37 +81,38 @@ export const AssetLibraryPanel = ({
       </div>
 
       <div className="assetContent">
-        {activeTab === "cameras" && (
+        {/* 三类资产分组始终挂载；标签切换只隐藏内容，避免未提交的表单草稿丢失。 */}
+        <div hidden={activeTab !== "cameras"}>
           <CameraSection
             items={store.cameras}
-            isAdding={isAdding}
+            isAdding={isAdding && activeTab === "cameras"}
             controller={assetController}
             onStartAdd={handleStartAdd}
             onCancelAdd={handleCancelAdd}
             onSaved={handleSaved}
           />
-        )}
-        {activeTab === "lenses" && (
+        </div>
+        <div hidden={activeTab !== "lenses"}>
           <LensSection
             items={store.lenses}
-            isAdding={isAdding}
+            isAdding={isAdding && activeTab === "lenses"}
             controller={assetController}
             onStartAdd={handleStartAdd}
             onCancelAdd={handleCancelAdd}
             onSaved={handleSaved}
           />
-        )}
-        {activeTab === "films" && (
+        </div>
+        <div hidden={activeTab !== "films"}>
           <FilmSection
             items={store.films}
-            isAdding={isAdding}
+            isAdding={isAdding && activeTab === "films"}
             controller={assetController}
             filmStocks={filmStocks}
             onStartAdd={handleStartAdd}
             onCancelAdd={handleCancelAdd}
             onSaved={handleSaved}
           />
-        )}
+        </div>
       </div>
 
       {!isAdding && (

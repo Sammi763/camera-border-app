@@ -58,25 +58,27 @@ describe("专业导出结构化结果", () => {
   describe("RenderJobRequest 透传专业字段", () => {
     it("tiff 请求包含所有专业字段", () => {
       const request: RenderJobRequest = {
-        recipe: {
-          imagePath: "/photos/img.jpg",
-          border: { top: 20, bottom: 80, left: 20, right: 20, color: "#ffffff" },
-          gradient: null,
-          texts: [],
-          filmFormat: null,
-          autoCrop: false
-        },
-        export: {
-          format: "tiff",
-          outputPath: "/tmp/output.tif",
-          jpegQuality: 95,
-          preserveMetadata: true,
-          preserveColorProfile: true,
-          preferHighBitDepth: true
-        }
+        items: [{
+          recipe: {
+            imagePath: "/photos/img.jpg",
+            border: { top: 20, bottom: 80, left: 20, right: 20, color: "#ffffff" },
+            gradient: null,
+            texts: [],
+            filmFormat: null,
+            autoCrop: false
+          },
+          export: {
+            format: "tiff",
+            outputPath: "/tmp/output.tif",
+            jpegQuality: 95,
+            preserveMetadata: true,
+            preserveColorProfile: true,
+            preferHighBitDepth: true
+          }
+        }]
       }
-      expect(request.export.format).toBe("tiff")
-      expect(request.export.preserveMetadata).toBe(true)
+      expect(request.items[0]?.export.format).toBe("tiff")
+      expect(request.items[0]?.export.preserveMetadata).toBe(true)
     })
   })
 

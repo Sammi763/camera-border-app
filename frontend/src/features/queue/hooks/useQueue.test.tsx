@@ -1,5 +1,5 @@
-import { describe, expect, it, afterEach, vi } from "vitest"
-import { act, renderHook } from "@testing-library/react"
+import { describe, expect, it, afterEach, beforeEach, vi } from "vitest"
+import { act, renderHook, waitFor } from "@testing-library/react"
 import { useQueue } from "./useQueue"
 import type { PhotoAssetStore, ShootingPreset } from "../../metadata/types"
 import { createEmptyAssetStore } from "../../metadata/types"
@@ -21,8 +21,14 @@ const makeAssets = (): PhotoAssetStore => ({
   films: [{ id: "film-1", brand: "Kodak", name: "Portra 400", iso: "400", type: "Color", colorProfile: "neutral", discontinued: false, notes: "" }]
 })
 
+beforeEach(() => {
+  localStorage.clear()
+})
+
 describe("useQueue（当前预览图与批量选中状态）", () => {
   afterEach(() => {
+    localStorage.clear()
+    delete (window as unknown as { desktop?: unknown }).desktop
     vi.restoreAllMocks()
   })
 
@@ -114,10 +120,88 @@ describe("useQueue（当前预览图与批量选中状态）", () => {
     expect(result.current.checkedItemIds).toEqual([])
     expect(result.current.activeFilePath).toBeNull()
   })
+
+  it("删除当前图时确定性选择下一张；删除末张时选择上一张", async () => {
+    const { result } = renderHook(() => useQueue())
+    await act(async () => {
+      await result.current.addFromPaths(["/photos/a.jpg", "/photos/b.jpg", "/photos/c.jpg"])
+    })
+    const [idA, idB, idC] = result.current.items.map((item) => item.id)
+
+    act(() => result.current.setActive(idB!))
+    act(() => result.current.removeItem(idB!))
+    expect(result.current.activeItemId).toBe(idC)
+
+    act(() => result.current.setActive(idC!))
+    act(() => result.current.removeItem(idC!))
+    expect(result.current.activeItemId).toBe(idA)
+  })
+
+  it("删除已选、清空与每图覆盖都可撤销/重做，且恢复 active/checked 快照", async () => {
+    const { result } = renderHook(() => useQueue())
+    await act(async () => {
+      await result.current.addFromPaths(["/photos/a.jpg", "/photos/b.jpg", "/photos/c.jpg"])
+    })
+    const ids = result.current.items.map((item) => item.id)
+    act(() => {
+      result.current.setActive(ids[1]!)
+      result.current.toggleChecked(ids[0]!)
+      result.current.toggleChecked(ids[2]!)
+      result.current.removeChecked()
+    })
+    expect(result.current.items.map((item) => item.fileName)).toEqual(["b.jpg"])
+    expect(result.current.activeItemId).toBe(ids[1])
+    expect(result.current.canUndo).toBe(true)
+
+    act(() => result.current.undo())
+    expect(result.current.items).toHaveLength(3)
+    expect(result.current.checkedItemIds).toEqual([ids[0], ids[2]])
+    act(() => result.current.redo())
+    expect(result.current.items.map((item) => item.fileName)).toEqual(["b.jpg"])
+
+    act(() => result.current.setActiveTextOverride("单图文字"))
+    expect(result.current.activeTextOverride).toBe("单图文字")
+    act(() => result.current.undo())
+    expect(result.current.activeTextOverride).toBeNull()
+    act(() => result.current.redo())
+    expect(result.current.activeTextOverride).toBe("单图文字")
+  })
+
+  it("恢复本地工作会话时检查源文件并标记丢失文件", async () => {
+    const restored = [
+      {
+        id: "available", filePath: "/photos/available.jpg", fileName: "available.jpg", sourcePath: "/photos/available.jpg",
+        sourceFormat: "jpg", converted: false, workingFormat: "jpg", textOverride: null, presetId: null, identityOverride: null
+      },
+      {
+        id: "missing", filePath: "/photos/missing.jpg", fileName: "missing.jpg", sourcePath: "/photos/missing.jpg",
+        sourceFormat: "jpg", converted: false, workingFormat: "jpg", textOverride: null, presetId: null, identityOverride: null
+      }
+    ]
+    localStorage.setItem("workspace.queue-session.v1", JSON.stringify({
+      items: restored,
+      activeItemId: "missing",
+      checkedItemIds: ["available"]
+    }))
+    ;(window as unknown as { desktop?: unknown }).desktop = {
+      checkImagePaths: vi.fn(async () => [true, false]),
+      convertHeicFiles: vi.fn(async (paths: readonly string[]) => paths)
+    }
+
+    const { result } = renderHook(() => useQueue())
+    await waitFor(() => expect(result.current.missingCount).toBe(1))
+    expect(result.current.items.find((item) => item.id === "missing")?.missing).toBe(true)
+    // 原 active 文件缺失时不让预览请求不存在的路径，确定性回退到可用条目。
+    expect(result.current.activeItemId).toBe("available")
+    expect(result.current.checkedItemIds).toEqual(["available"])
+    delete (window as unknown as { desktop?: unknown }).desktop
+  })
 })
 
 describe("useQueue（预设作用域应用：当前 / 已选 / 全部）", () => {
   afterEach(() => {
+    localStorage.clear()
+    delete (window as unknown as { desktop?: unknown }).desktop
     vi.restoreAllMocks()
   })
 

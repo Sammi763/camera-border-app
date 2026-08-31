@@ -78,15 +78,29 @@ function setupWorkspace() {
     }
     if (url.endsWith("/api/render-jobs") && method === "POST") {
       const body = JSON.parse(String(init?.body)) as {
-        recipe: { imagePath: string; texts: readonly { content: string }[]; filmFormat: string | null }
+        items: readonly { recipe: { imagePath: string; texts: readonly { content: string }[]; filmFormat: string | null } }[]
       }
-      callLog.push(`job:${body.recipe.imagePath}`)
-      renderJobs.push({
-        imagePath: body.recipe.imagePath,
-        texts: body.recipe.texts.map((t) => t.content),
-        filmFormat: body.recipe.filmFormat
-      })
-      return jsonResponse({ jobId: `job-${renderJobs.length}`, status: "completed", outputPath: "/tmp/out/x.jpg", actualFormat: "jpeg" })
+      for (const snapshot of body.items) {
+        callLog.push(`job:${snapshot.recipe.imagePath}`)
+        renderJobs.push({
+          imagePath: snapshot.recipe.imagePath,
+          texts: snapshot.recipe.texts.map((t) => t.content),
+          filmFormat: snapshot.recipe.filmFormat
+        })
+      }
+      return jsonResponse({
+        jobId: "job-batch",
+        status: "completed",
+        total: body.items.length,
+        completed: body.items.length,
+        items: body.items.map((snapshot, index) => ({
+          index,
+          status: "completed",
+          outputPath: `/tmp/out/${index}.jpg`,
+          actualFormat: "jpeg",
+          imagePath: snapshot.recipe.imagePath
+        }))
+      }, 202)
     }
     return jsonResponse({ error: `unexpected ${url}` }, 404)
   })

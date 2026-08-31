@@ -145,12 +145,20 @@ export type ExportSettings = {
 }
 
 /**
- * 导出任务请求体，提交至 POST /api/render-jobs。
- * recipe 与预览共享同一份核心渲染配置（ARCHITECTURE.md §4.1）。
+ * 单张导出任务快照。提交时将图片范围、RenderRecipe 与 ExportSettings 一起冻结，
+ * 后续编辑工作台不会改变已经被引擎接受的任务。
  */
-export type RenderJobRequest = {
+export type RenderJobSnapshot = {
   readonly recipe: RenderRecipe
   readonly export: ExportSettings
+}
+
+/**
+ * 批量导出任务请求体，提交至 POST /api/render-jobs。
+ * items 可以只包含一张，也可以包含多张；每项都使用同一份 RenderRecipe 核心模型。
+ */
+export type RenderJobRequest = {
+  readonly items: readonly RenderJobSnapshot[]
 }
 
 /** 专业能力应用状态（镜像 Java ImageEncoder.FeatureStatus）。 */
@@ -163,13 +171,37 @@ export type FeatureResult = {
 }
 
 /**
- * 导出任务状态响应，POST /api/render-jobs（同步完成）与 GET /api/render-jobs/{jobId} 返回。
- * 包含结构化的专业能力应用结果，前端据此展示真实导出摘要。
+ * 批量导出中单项的执行状态与结果。
+ */
+export type RenderJobItemStatus = {
+  readonly index: number
+  readonly imagePath?: string
+  readonly status: "queued" | "running" | "completed" | "failed" | "cancelled"
+  readonly outputPath?: string
+  readonly actualFormat?: string
+  readonly error?: string
+  readonly metadataPreservation?: FeatureResult
+  readonly colorProfilePreservation?: FeatureResult
+  readonly highBitDepth?: FeatureResult
+  readonly sourceDecode?: SourceDecode | null
+}
+
+/**
+ * 导出任务状态响应，POST /api/render-jobs 返回 202 + jobId，GET 返回持续进度。
+ * 包含聚合总进度、当前项、逐项结果和失败原因；单图仍兼容保留顶层摘要字段。
  */
 export type RenderJobStatusResponse = {
   readonly jobId: string
-  readonly status: "pending" | "running" | "completed" | "failed"
+  readonly status: "queued" | "pending" | "running" | "completed" | "failed" | "cancelled"
   readonly message?: string
+  readonly total?: number
+  readonly processed?: number
+  readonly completed?: number
+  readonly failed?: number
+  readonly cancelled?: number
+  /** 当前执行项，后端使用从 1 开始的序号。 */
+  readonly currentItem?: number | null
+  readonly items?: readonly RenderJobItemStatus[]
   readonly outputPath?: string
   readonly error?: string
   /** 导出摘要：实际使用的格式。 */

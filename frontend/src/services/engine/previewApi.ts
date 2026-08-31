@@ -18,10 +18,12 @@ import {
  *
  * @param request 渲染配方
  * @param timeoutMs 超时毫秒（测试可注入短超时）
+ * @param signal 当前预览被新请求替代时的取消信号
  */
 export const requestPreview = async (
   request: PreviewRequest,
-  timeoutMs: number = getPreviewRequestTimeoutMs()
+  timeoutMs: number = getPreviewRequestTimeoutMs(),
+  signal?: AbortSignal
 ): Promise<PreviewResponse> => {
   let response: Response
 
@@ -31,7 +33,8 @@ export const requestPreview = async (
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(request)
+        body: JSON.stringify(request),
+        ...(signal === undefined ? {} : { signal })
       },
       timeoutMs
     )

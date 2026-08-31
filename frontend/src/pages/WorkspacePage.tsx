@@ -30,6 +30,8 @@ import { BuiltInTemplatePanel } from "../features/template/components/BuiltInTem
 import { useEngineHealth } from "../features/preview/hooks/useEngineHealth"
 import { useQueue } from "../features/queue/hooks/useQueue"
 import { usePreview } from "../features/preview/hooks/usePreview"
+import { useExportController } from "../features/preview/hooks/useExportController"
+import { useWorkspaceDropRouter } from "../features/workspace/hooks/useWorkspaceDropRouter"
 import { useSettings } from "../features/settings/hooks/useSettings"
 import { useTemplates } from "../features/template/hooks/useTemplates"
 import { TemplateDropOverlay } from "../features/template/components/TemplateDropOverlay"
@@ -39,6 +41,7 @@ import { useShootingPresets } from "../features/metadata/hooks/useShootingPreset
 import { usePhotoAssets } from "../features/metadata/hooks/usePhotoAssets"
 import { useExifIndex } from "../features/metadata/hooks/useExifIndex"
 import { resolveEffectiveText } from "../features/metadata/utils/resolveEffectiveText"
+import { resolveIdentityForQueueItem } from "../features/metadata/utils/resolveIdentity"
 import { detectBrandFromIdentity } from "../features/settings/utils/brandDetection"
 import { BUILT_IN_TEMPLATES, PHOTO_INFO_CARD_TEMPLATE_IDS } from "../features/template/presets/builtInTemplates"
 import { fetchFilmStocks } from "../services/engine/filmStocksApi"
@@ -53,7 +56,7 @@ import type { RenderSettings } from "../features/settings/types"
 import type { Template } from "../features/template/types"
 import type { FilmStock } from "../features/metadata/types"
 import type { QueueItem } from "../features/queue/types"
-import type { BatchScope } from "../features/queue/types"
+import type { OperationScope } from "../features/queue/types"
 
 type WorkspacePageProps = {
   readonly runtime: DesktopRuntime
@@ -125,6 +128,8 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
   const [filmStocks, setFilmStocks] = useState<readonly FilmStock[]>([])
   const [activePresetId, setActivePresetId] = useState<string | null>(null)
   const [mode, setMode] = useState<WorkspaceMode>(readMode)
+  /** 所有批量行为共享同一个根级操作范围，不在各面板各自维护。 */
+  const [operationScope, setOperationScope] = useState<OperationScope>("active")
 
   // ---- 可调分栏状态 -------------------------------------------------------
   const [colLeft, setColLeft] = useState<number>(() => readColumnWidth(SESSION_KEY_LEFT, LEFT_DEFAULT))
@@ -356,20 +361,6 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
     exif.ensureExif(queue.activeFilePath)
   }, [exif.ensureExif, queue.activeFilePath])
 
-  // 阻止窗口级默认拖放行为：拖图片到预览区等空白处时，
-  // 避免 Electron/浏览器直接导航打开文件（拖入队列由 QueuePanel 处理）。
-  useEffect(() => {
-    const preventDefault = (event: DragEvent): void => {
-      event.preventDefault()
-    }
-    window.addEventListener("dragover", preventDefault)
-    window.addEventListener("drop", preventDefault)
-    return () => {
-      window.removeEventListener("dragover", preventDefault)
-      window.removeEventListener("drop", preventDefault)
-    }
-  }, [])
-
   // 计算当前图片的有效摄影身份（每图覆盖 > 摄影预设 > EXIF > 空）
   const selectedIdentity = activeItem !== null
     ? queue.getEffectiveIdentity(activeItem.id, presets.presets, assets.store, exif.getExifByPath())
@@ -434,7 +425,7 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
   }, [selectedIdentity])
 
   // 单张图片的批量导出解析结果（文字覆盖 + 多段文字变量 + 品牌）。
-  // 与 PreviewPanel 的 ResolvedQueueItem 类型对齐。
+  // 冻结设置由 useExportController 显式传入，避免等待 EXIF 时读取到之后的编辑。
   type ResolvedQueueItem = {
     readonly textOverride: string | null
     readonly resolvedLayers: readonly (string | null)[]
@@ -445,12 +436,19 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
   // 对全队列重复做变量解析（queueResolved* 不再全量预计算）。
   // EXIF 经 getExifByPath() 读取最新缓存：导出前确保全部 EXIF 已读取，解析时取到最新值。
   const resolveQueueItem = useCallback(
-    (item: QueueItem): ResolvedQueueItem => {
-      const identity = queue.getEffectiveIdentity(item.id, presets.presets, assets.store, exif.getExifByPath())
+    (item: QueueItem, renderSettings: RenderSettings = settings.settings): ResolvedQueueItem => {
+      // 导出控制器传入的是任务开始时复制的 QueueItem；不能再按 id 回读实时队列，
+      // 否则用户在 EXIF 等待期间编辑每图覆盖会污染已经冻结的 RenderRecipe。
+      const identity = resolveIdentityForQueueItem(
+        item,
+        presets.presets,
+        assets.store,
+        exif.getExifByPath()
+      )
       const textOverride = item.textOverride !== null
         ? resolveEffectiveText(item.textOverride, identity)
         : null
-      const resolvedLayers = settings.settings.textLayers.map((layer) => {
+      const resolvedLayers = renderSettings.textLayers.map((layer) => {
         if (!layer.enabled || layer.content.length === 0) {
           return null
         }
@@ -459,7 +457,7 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
       const brand = detectBrandFromIdentity(identity.camera).label
       return { textOverride, resolvedLayers, brand }
     },
-    [queue, presets.presets, assets.store, settings.settings.textLayers]
+    [queue, presets.presets, assets.store, settings.settings]
   )
 
   // 确定性模板推荐：只改变「建议模板」标记，不修改用户设置。
@@ -478,16 +476,16 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
   }, [activeItem, selectedIdentity, preview])
 
   // ---- 摄影预设作用域应用（当前 / 已选 / 全部） --------------------------------
-  const handleApplyPresetToScope = useCallback((presetId: string, scope: BatchScope): void => {
+  const handleApplyPresetToScope = useCallback((presetId: string, scope: OperationScope): void => {
     queue.assignPresetToScope(presetId, scope)
   }, [queue])
 
-  const handleClearPresetFromScope = useCallback((scope: BatchScope): void => {
+  const handleClearPresetFromScope = useCallback((scope: OperationScope): void => {
     queue.clearPresetFromScope(scope)
   }, [queue])
 
   /** 快速流程「创建摄影预设」：文本录入 -> 资产 + 预设 -> 应用到指定范围。 */
-  const handleCreatePresetFromText = useCallback((draft: PresetDraft, scope: BatchScope): void => {
+  const handleCreatePresetFromText = useCallback((draft: PresetDraft, scope: OperationScope): void => {
     const result = buildPresetFromText(draft, assets.store)
     if (result === null) {
       return
@@ -505,22 +503,47 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
     queue.assignPresetToScope(result.preset.id, scope)
   }, [assets, presets, queue])
 
-  // ---- 批量导出作用范围 --------------------------------------------------------
-  // 勾选了图片则导出勾选；未勾选且多于一张则导出全部；单张未勾选不显示批量导出。
+  // ---- 导出作用范围 ------------------------------------------------------------
+  // 与预设、每图管理共享 operationScope；active 与 checked 始终是独立状态。
   const batchExportItems = useMemo(() => {
-    if (queue.checkedItemIds.length > 0) {
-      const checkedSet = new Set(queue.checkedItemIds)
-      return queue.items.filter((item) => checkedSet.has(item.id))
+    switch (operationScope) {
+      case "active":
+        return queue.activeItem === null ? [] : [queue.activeItem]
+      case "checked": {
+        const checkedSet = new Set(queue.checkedItemIds)
+        return queue.items.filter((item) => checkedSet.has(item.id))
+      }
+      case "all":
+        return queue.items
     }
-    return queue.items.length > 1 ? queue.items : []
-  }, [queue.items, queue.checkedItemIds])
+  }, [operationScope, queue.activeItem, queue.checkedItemIds, queue.items])
 
   const batchExportLabel = useMemo(() => {
-    if (queue.checkedItemIds.length > 0) {
-      return `批量导出已选 ${queue.checkedItemIds.length} 张`
+    if (batchExportItems.length === 0) {
+      return ""
     }
-    return `批量导出 ${queue.items.length} 张`
-  }, [queue.checkedItemIds.length, queue.items.length])
+    switch (operationScope) {
+      case "active":
+        return "按范围导出当前图片"
+      case "checked":
+        return `批量导出已选 ${batchExportItems.length} 张`
+      case "all":
+        return `批量导出 ${batchExportItems.length} 张`
+    }
+  }, [batchExportItems.length, operationScope])
+
+  // 导出控制器必须位于页面根级：快速/高级模式切换会卸载各自的 PreviewPanel，
+  // 但已经提交给引擎的任务、进度与取消入口都应持续可见并可恢复操作。
+  const exportController = useExportController({
+    state: preview,
+    settings: settings.settings,
+    queueItems: queue.items,
+    batchExportItems,
+    resolveQueueItem,
+    prepareExifForExport: exif.ensureExifForExport,
+    autoOpenExportDirectory: true,
+    engineAvailable
+  })
 
   // 快速模式空队列：欢迎页入口
   const handleWelcomePickFiles = useCallback((): void => {
@@ -538,6 +561,9 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
   const handleWelcomeDropFiles = useCallback((paths: readonly string[]): void => {
     void queue.addFromPaths(paths)
   }, [queue])
+
+  // 根级唯一拖放路由：模板和图片绝不会同时处理同一个 drop 事件。
+  const workspaceDrop = useWorkspaceDropRouter({ onImagePaths: handleWelcomeDropFiles })
 
   // ---- 右侧检查器折叠分组（高级编辑模式） ---------------------------------------
   // 顺序：渲染设置 / 摄影信息 / 模板 / 摄影预设 / 资产库。默认仅展开渲染设置。
@@ -616,6 +642,8 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
           onClearError={presets.clearError}
           onApplyToScope={handleApplyPresetToScope}
           onClearScope={handleClearPresetFromScope}
+          operationScope={operationScope}
+          onOperationScopeChange={setOperationScope}
           hasSelectedImage={queue.activeFilePath !== null}
           queueCount={queue.items.length}
           checkedCount={queue.checkedCount}
@@ -639,7 +667,8 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
     handleResetTextLayers, handleReplaceTextLayers,
     templates, handleLoadTemplate, handleApplyPreset, activePresetId, handleImportTemplate,
     queue, activeItem, selectedIdentity, identitySources, presets, assets, filmStocks,
-    handleDeletePreset, presetUsageCounts, handleApplyPresetToScope, handleClearPresetFromScope
+    handleDeletePreset, presetUsageCounts, handleApplyPresetToScope, handleClearPresetFromScope,
+    operationScope
   ])
 
   const workspaceStyle = {
@@ -663,7 +692,6 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
             onPickFiles={handleWelcomePickFiles}
             onPickFolder={handleWelcomePickFolder}
             onLoadSamples={handleWelcomeLoadSamples}
-            onDropFiles={handleWelcomeDropFiles}
           />
         </main>
       )}
@@ -682,17 +710,17 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
             activePresetId={activePresetId}
             recommendedTemplateId={recommendedTemplateId}
             currentImage={preview.kind === "active" ? preview.currentImage : null}
-            resolveQueueItem={resolveQueueItem}
-            prepareExifForExport={exif.ensureExifForExport}
+            exportController={exportController}
             resolvedBrand={resolvedBrand}
             resolvedTextOverride={resolvedTextOverride}
             resolvedTextLayers={resolvedTextLayers}
             onApplyTemplate={handleApplyPreset}
             onApplyInfoCardVariant={handleApplyInfoCardVariant}
+            operationScope={operationScope}
+            onOperationScopeChange={setOperationScope}
             onApplyPreset={handleApplyPresetToScope}
             onClearPreset={handleClearPresetFromScope}
             onCreatePresetFromText={handleCreatePresetFromText}
-            batchExportItems={batchExportItems}
             batchExportLabel={batchExportLabel}
             engineAvailable={engineAvailable}
             engineUnavailableReason={engineUnavailableReason}
@@ -711,15 +739,11 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
               state={preview}
               settings={settings.settings}
               hasSelectedImage={queue.activeFilePath !== null}
-              queueItems={queue.items}
-              batchExportItems={batchExportItems}
               batchExportLabel={batchExportLabel}
-              resolveQueueItem={resolveQueueItem}
-              prepareExifForExport={exif.ensureExifForExport}
+              exportController={exportController}
               resolvedBrand={resolvedBrand}
               resolvedTextOverride={resolvedTextOverride}
               resolvedTextLayers={resolvedTextLayers}
-              autoOpenExportDirectory
               engineAvailable={engineAvailable}
               engineUnavailableReason={engineUnavailableReason}
             />
@@ -776,6 +800,8 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
         preview={preview}
       />
       <TemplateDropOverlay
+        droppedFile={workspaceDrop.droppedTemplateFile}
+        onDismiss={workspaceDrop.dismissDroppedTemplate}
         onApply={handleDropApply}
         onSave={handleDropSave}
       />

@@ -156,6 +156,10 @@ export type DesktopBridge = {
     maxWidth: number,
     maxHeight: number
   ) => Promise<LocalImagePreview | null>
+  /** 检查已恢复会话中的图片源路径是否仍可读取；不返回文件内容。 */
+  readonly checkImagePaths?: (paths: readonly string[]) => Promise<readonly boolean[]>
+  /** 读取图片 mtime 与字节数，供预览缓存按源文件版本失效。 */
+  readonly getImageFileVersions?: (paths: readonly string[]) => Promise<readonly (ImageFileVersion | null)[]>
   /**
    * 在系统默认应用中打开引擎日志文件。
    * 路径必须位于 userData/logs 下；不存在或打开失败时返回 false。
@@ -168,6 +172,12 @@ export type LocalImagePreview = {
   readonly dataUrl: string
   readonly width: number
   readonly height: number
+}
+
+/** 预览缓存使用的受限文件版本信息；不包含文件内容。 */
+export type ImageFileVersion = {
+  readonly mtimeMs: number
+  readonly sizeBytes: number
 }
 
 declare global {

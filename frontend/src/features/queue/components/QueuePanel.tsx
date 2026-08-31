@@ -16,7 +16,8 @@ const QueueRow = ({
   isActive,
   isChecked,
   onSelect,
-  onToggleCheck
+  onToggleCheck,
+  onRemove
 }: {
   readonly item: QueueItem
   readonly thumbUrl: string | undefined
@@ -24,6 +25,7 @@ const QueueRow = ({
   readonly isChecked: boolean
   readonly onSelect: (id: string) => void
   readonly onToggleCheck: (id: string) => void
+  readonly onRemove: (id: string) => void
 }): JSX.Element => {
   const rowClassName = isActive ? "queueItem isActive" : "queueItem"
   const hasPreset = item.presetId !== null
@@ -51,7 +53,7 @@ const QueueRow = ({
         onChange={() => onToggleCheck(item.id)}
         onClick={(e) => e.stopPropagation()}
       />
-      {thumbUrl !== undefined ? (
+      {!item.missing && thumbUrl !== undefined ? (
         <img className="queueThumbImg" src={thumbUrl} alt="" aria-hidden="true" />
       ) : (
         <span className="queueThumbPlaceholder" aria-hidden="true">
@@ -72,6 +74,9 @@ const QueueRow = ({
           {isRawFile(item.filePath) && getRawTier(item.filePath) === "preview-only" && (
             <span className="queueRawBadge" title="仅嵌入预览模式，非完整显影"> 预览</span>
           )}
+          {item.missing === true && (
+            <span className="queueRawBadge" title="恢复工作会话时未找到源文件"> 文件丢失</span>
+          )}
           {item.textOverride !== null && (
             <span className="queueTextOverrideIndicator" title="此图片有独立文字"> T</span>
           )}
@@ -87,6 +92,17 @@ const QueueRow = ({
       <span className="queueSelectBadge">
         {isActive ? "当前" : "选择"}
       </span>
+      <button
+        type="button"
+        className="ghostButton queueRemoveButton"
+        aria-label={`删除 ${item.fileName}`}
+        onClick={(event) => {
+          event.stopPropagation()
+          onRemove(item.id)
+        }}
+      >
+        删除
+      </button>
     </li>
   )
 }
@@ -94,11 +110,10 @@ const QueueRow = ({
 export const QueuePanel = ({ queue }: QueuePanelProps): JSX.Element => {
   const isEmpty = queue.items.length === 0
   const [folderHint, setFolderHint] = useState<string | null>(null)
-  const [dropHint, setDropHint] = useState<string | null>(null)
   const [dragActive, setDragActive] = useState(false)
 
   const filePaths = useMemo(
-    () => queue.items.map((item) => item.filePath),
+    () => queue.items.filter((item) => item.missing !== true).map((item) => item.filePath),
     [queue.items]
   )
 
@@ -133,25 +148,6 @@ export const QueuePanel = ({ queue }: QueuePanelProps): JSX.Element => {
     await queue.addImageFolder()
   }, [queue])
 
-  /** 拖拽导入：从拖入文件提取本地路径（Electron 的 File 带 path 属性）。 */
-  const handleDrop = useCallback((event: React.DragEvent<HTMLDivElement>): void => {
-    event.preventDefault()
-    setDragActive(false)
-    setDropHint(null)
-    if (queue.isBrowserMode) {
-      setDropHint("拖拽导入需要桌面模式，浏览器降级模式下请使用「加载浏览器样片」。")
-      return
-    }
-    const paths = Array.from(event.dataTransfer.files)
-      .map((file) => (file as File & { path?: string }).path)
-      .filter((p): p is string => p !== undefined && p.trim().length > 0)
-    if (paths.length === 0) {
-      setDropHint("未识别到可导入的本地图片文件。")
-      return
-    }
-    void queue.addFromPaths(paths)
-  }, [queue])
-
   const handleDragOver = useCallback((event: React.DragEvent<HTMLDivElement>): void => {
     event.preventDefault()
     setDragActive(true)
@@ -170,7 +166,7 @@ export const QueuePanel = ({ queue }: QueuePanelProps): JSX.Element => {
       className="queueDropZone"
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
+      onDrop={() => setDragActive(false)}
     >
       <Panel label="队列" title="源图片" className={`queuePanel${dragActive ? " queueDropActive" : ""}`}>
         {/* 主导入入口：文件 / 文件夹 */}
@@ -210,10 +206,6 @@ export const QueuePanel = ({ queue }: QueuePanelProps): JSX.Element => {
           <p className="panelHint queueFolderHint">{folderHint}</p>
         )}
 
-        {dropHint !== null && (
-          <p className="panelHint queueFolderHint">{dropHint}</p>
-        )}
-
       {/* HEIC 转换 / 导入结果反馈 */}
       {queue.lastImportResult !== null && (() => {
         const r = queue.lastImportResult
@@ -244,6 +236,7 @@ export const QueuePanel = ({ queue }: QueuePanelProps): JSX.Element => {
               isChecked={checkedIdSet.has(item.id)}
               onSelect={queue.setActive}
               onToggleCheck={queue.toggleChecked}
+              onRemove={queue.removeItem}
             />
           ))}
         </ul>
@@ -266,10 +259,19 @@ export const QueuePanel = ({ queue }: QueuePanelProps): JSX.Element => {
           >
             {allChecked ? "取消全选" : "全选"}
           </button>
+          <button type="button" className="ghostButton" disabled={queue.checkedCount === 0} onClick={queue.removeChecked}>
+            删除已选
+          </button>
           <button type="button" className="ghostButton" onClick={queue.clear}>
             清空
           </button>
+          <button type="button" className="ghostButton" disabled={!queue.canUndo} onClick={queue.undo}>撤销</button>
+          <button type="button" className="ghostButton" disabled={!queue.canRedo} onClick={queue.redo}>重做</button>
         </div>
+      )}
+
+      {queue.missingCount > 0 && (
+        <p className="panelHint queueFolderHint">{queue.missingCount} 张恢复图片的源文件已丢失，可删除条目后重新导入。</p>
       )}
 
       {/* 浏览器降级：弱化到底部，明确为开发降级，不抢主入口 */}

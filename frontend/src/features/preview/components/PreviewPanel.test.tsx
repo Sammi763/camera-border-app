@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
-import { PreviewPanel } from "./PreviewPanel"
+import type { ComponentProps } from "react"
+import { PreviewPanel as PreviewPanelView } from "./PreviewPanel"
+import { useExportController } from "../hooks/useExportController"
 import type { PreviewState } from "../types"
 import type { RenderSettings } from "../../settings/types"
 import type { QueueItem } from "../../queue/types"
@@ -89,6 +91,43 @@ const makeItem = (): QueueItem => ({
 const jsonResponse = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } })
 
+/**
+ * 测试适配层：生产环境由 WorkspacePage 持有根级 useExportController；
+ * 本文件保留原有面板场景写法，同时让每个测试都经过相同的任务控制器。
+ */
+type PreviewPanelHarnessProps = Omit<ComponentProps<typeof PreviewPanelView>, "exportController"> & {
+  readonly queueItems: readonly QueueItem[]
+  readonly batchExportItems: readonly QueueItem[]
+  readonly resolveQueueItem: (item: QueueItem) => {
+    readonly textOverride: string | null
+    readonly resolvedLayers: readonly (string | null)[]
+    readonly brand: string | null
+  }
+  readonly prepareExifForExport: (paths: readonly string[]) => Promise<void>
+  readonly autoOpenExportDirectory?: boolean
+}
+
+const PreviewPanel = ({
+  queueItems,
+  batchExportItems,
+  resolveQueueItem,
+  prepareExifForExport,
+  autoOpenExportDirectory = false,
+  ...viewProps
+}: PreviewPanelHarnessProps): JSX.Element => {
+  const exportController = useExportController({
+    state: viewProps.state,
+    settings: viewProps.settings,
+    queueItems,
+    batchExportItems,
+    resolveQueueItem: (item) => resolveQueueItem(item),
+    prepareExifForExport,
+    autoOpenExportDirectory,
+    engineAvailable: viewProps.engineAvailable ?? true
+  })
+  return <PreviewPanelView {...viewProps} exportController={exportController} />
+}
+
 describe("PreviewPanel 单图导出（EXIF 等待 + 解析一致）", () => {
   beforeEach(() => {
     // CanvasPreview 依赖 ResizeObserver / URL.createObjectURL，jsdom 需要桩
@@ -143,16 +182,22 @@ describe("PreviewPanel 单图导出（EXIF 等待 + 解析一致）", () => {
   })
 
   it("导出前等待 EXIF，并用 resolveQueueItem 的解析结果构建 RenderRecipe", async () => {
-    const renderJobBodies: { recipe: { imagePath: string; texts: readonly { content: string }[] } }[] = []
+    const renderJobBodies: { items: readonly { recipe: { imagePath: string; texts: readonly { content: string }[] } }[] }[] = []
     const callLog: string[] = []
 
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const url = String(input)
       if (url.endsWith("/api/render-jobs") && init?.method === "POST") {
-        const body = JSON.parse(String(init?.body)) as { recipe: { imagePath: string; texts: readonly { content: string }[] } }
+        const body = JSON.parse(String(init?.body)) as { items: readonly { recipe: { imagePath: string; texts: readonly { content: string }[] } }[] }
         callLog.push("job")
         renderJobBodies.push(body)
-        return jsonResponse({ jobId: "job-1", status: "completed", outputPath: "/tmp/out/single.jpg", actualFormat: "jpeg" })
+        return jsonResponse({
+          jobId: "job-1",
+          status: "completed",
+          total: 1,
+          completed: 1,
+          items: [{ index: 0, status: "completed", outputPath: "/tmp/out/single.jpg", actualFormat: "jpeg" }]
+        }, 202)
       }
       if (url.endsWith("/api/preview")) {
         return jsonResponse({ status: "ok", message: "", previewAvailable: false, previewUrl: "" })
@@ -214,7 +259,7 @@ describe("PreviewPanel 单图导出（EXIF 等待 + 解析一致）", () => {
     expect(resolveQueueItem).toHaveBeenCalledWith(expect.objectContaining({ filePath: FILE_PATH }))
 
     // 3) RenderRecipe 使用解析后的变量值
-    const recipe = renderJobBodies[0]!.recipe
+    const recipe = renderJobBodies[0]!.items[0]!.recipe
     expect(recipe.imagePath).toBe(FILE_PATH)
     expect(recipe.texts.map((t) => t.content)).toEqual(["NIKON Z6 · Nikkor 50mm", "6×10"])
 
@@ -320,11 +365,24 @@ describe("PreviewPanel 单图导出（EXIF 等待 + 解析一致）", () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const url = String(input)
       if (url.endsWith("/api/render-jobs") && init?.method === "POST") {
+        const body = JSON.parse(String(init?.body)) as { items: readonly { recipe: { imagePath: string } }[] }
         if (firstRun) {
-          // 500 → submitRenderJob 抛错 → 该项标记失败
-          return jsonResponse({ jobId: "job-fail", status: "failed", error: "渲染失败" }, 500)
+          return jsonResponse({
+            jobId: "job-fail",
+            status: "failed",
+            total: body.items.length,
+            failed: body.items.length,
+            error: "渲染失败",
+            items: body.items.map((item, index) => ({ index, imagePath: item.recipe.imagePath, status: "failed", error: "渲染失败" }))
+          }, 202)
         }
-        return jsonResponse({ jobId: "job-ok", status: "completed", outputPath: "/tmp/out/b.jpg", actualFormat: "jpeg" })
+        return jsonResponse({
+          jobId: "job-ok",
+          status: "completed",
+          total: body.items.length,
+          completed: body.items.length,
+          items: body.items.map((item, index) => ({ index, imagePath: item.recipe.imagePath, status: "completed", outputPath: `/tmp/out/${index}.jpg`, actualFormat: "jpeg" }))
+        }, 202)
       }
       return jsonResponse({ error: "unexpected" }, 404)
     })
@@ -379,12 +437,27 @@ describe("PreviewPanel 单图导出（EXIF 等待 + 解析一致）", () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const url = String(input)
       if (url.endsWith("/api/render-jobs") && init?.method === "POST") {
-        const body = JSON.parse(String(init?.body)) as { recipe: { imagePath: string } }
-        requestedPaths.push(body.recipe.imagePath)
-        if (firstRun && body.recipe.imagePath === "/photos/B.jpg") {
-          return jsonResponse({ jobId: "job-fail", status: "failed", error: "渲染失败" }, 500)
+        const body = JSON.parse(String(init?.body)) as { items: readonly { recipe: { imagePath: string } }[] }
+        requestedPaths.push(...body.items.map((item) => item.recipe.imagePath))
+        if (firstRun) {
+          return jsonResponse({
+            jobId: "job-first",
+            status: "failed",
+            total: body.items.length,
+            completed: 1,
+            failed: 1,
+            items: body.items.map((item, index) => item.recipe.imagePath === "/photos/B.jpg"
+              ? { index, imagePath: item.recipe.imagePath, status: "failed", error: "渲染失败" }
+              : { index, imagePath: item.recipe.imagePath, status: "completed", outputPath: "/tmp/out/a.jpg", actualFormat: "jpeg" })
+          }, 202)
         }
-        return jsonResponse({ jobId: "job-ok", status: "completed", outputPath: "/tmp/out.jpg", actualFormat: "jpeg" })
+        return jsonResponse({
+          jobId: "job-retry",
+          status: "completed",
+          total: body.items.length,
+          completed: body.items.length,
+          items: body.items.map((item, index) => ({ index, imagePath: item.recipe.imagePath, status: "completed", outputPath: "/tmp/out/b.jpg", actualFormat: "jpeg" }))
+        }, 202)
       }
       return jsonResponse({ error: "unexpected" }, 404)
     })
@@ -715,17 +788,52 @@ describe("PreviewPanel 单图导出（EXIF 等待 + 解析一致）", () => {
 
   describe("批量导出进度 + 通知", () => {
     it("批量进行中显示 current/total 与成功/失败计数（progressbar role）", async () => {
+      let statusReads = 0
       const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
         const url = String(input)
         if (url.endsWith("/api/render-jobs") && init?.method === "POST") {
-          // 延迟响应，确保 running 态的 progressbar 有足够时间渲染
-          await new Promise((resolve) => setTimeout(resolve, 80))
+          return jsonResponse({
+            jobId: "j1",
+            status: "queued",
+            total: 3,
+            processed: 0,
+            items: [
+              { index: 0, status: "queued" },
+              { index: 1, status: "queued" },
+              { index: 2, status: "queued" }
+            ]
+          }, 202)
+        }
+        if (url.endsWith("/api/render-jobs/j1")) {
+          statusReads++
+          if (statusReads === 1) {
+            return jsonResponse({
+              jobId: "j1",
+              status: "running",
+              total: 3,
+              processed: 1,
+              completed: 1,
+              failed: 0,
+              currentItem: 2,
+              items: [
+                { index: 0, status: "completed", outputPath: "/tmp/a.jpg", actualFormat: "jpeg" },
+                { index: 1, status: "running" },
+                { index: 2, status: "queued" }
+              ]
+            })
+          }
           return jsonResponse({
             jobId: "j1",
             status: "completed",
-            outputPath: "/tmp/o.jpg",
-            actualFormat: "jpeg",
-            metadataPreservation: { status: "SKIPPED", message: "当前格式不支持 EXIF" }
+            total: 3,
+            completed: 3,
+            items: [0, 1, 2].map((index) => ({
+              index,
+              status: "completed",
+              outputPath: `/tmp/${index}.jpg`,
+              actualFormat: "jpeg",
+              metadataPreservation: { status: "SKIPPED", message: "当前格式不支持 EXIF" }
+            }))
           })
         }
         return jsonResponse({ error: "unexpected" }, 404)
@@ -813,10 +921,24 @@ describe("PreviewPanel 单图导出（EXIF 等待 + 解析一致）", () => {
       const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
         const url = String(input)
         if (url.endsWith("/api/render-jobs") && init?.method === "POST") {
+          const body = JSON.parse(String(init?.body)) as { items: readonly { recipe: { imagePath: string } }[] }
           if (firstRun) {
-            return jsonResponse({ jobId: "j1", status: "failed", error: "渲染失败" }, 500)
+            return jsonResponse({
+              jobId: "j1",
+              status: "failed",
+              total: body.items.length,
+              failed: body.items.length,
+              error: "渲染失败",
+              items: body.items.map((item, index) => ({ index, imagePath: item.recipe.imagePath, status: "failed", error: "渲染失败" }))
+            }, 202)
           }
-          return jsonResponse({ jobId: "j2", status: "completed", outputPath: "/tmp/o.jpg", actualFormat: "jpeg" })
+          return jsonResponse({
+            jobId: "j2",
+            status: "completed",
+            total: body.items.length,
+            completed: body.items.length,
+            items: body.items.map((item, index) => ({ index, imagePath: item.recipe.imagePath, status: "completed", outputPath: `/tmp/${index}.jpg`, actualFormat: "jpeg" }))
+          }, 202)
         }
         return jsonResponse({ error: "unexpected" }, 404)
       })

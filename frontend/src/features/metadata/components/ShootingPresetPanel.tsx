@@ -4,7 +4,7 @@ import { createEmptyPreset } from "../types"
 import { CAPTURE_FORMAT_GROUPS, captureFormatLabel } from "../constants/captureFormats"
 import { validatePresetInput } from "../utils/shootingPresetCodec"
 import type { PresetFieldError } from "../utils/shootingPresetCodec"
-import type { BatchScope } from "../../queue/types"
+import type { OperationScope } from "../../queue/types"
 
 type ShootingPresetPanelProps = {
   readonly presets: readonly ShootingPreset[]
@@ -15,9 +15,12 @@ type ShootingPresetPanelProps = {
   readonly onDeletePreset: (id: string) => void
   readonly onClearError: () => void
   /** 应用预设到指定作用范围（当前 / 已选 / 全部）。 */
-  readonly onApplyToScope: (presetId: string, scope: BatchScope) => void
+  readonly onApplyToScope: (presetId: string, scope: OperationScope) => void
   /** 清除指定作用范围的预设绑定。 */
-  readonly onClearScope: (scope: BatchScope) => void
+  readonly onClearScope: (scope: OperationScope) => void
+  /** WorkspacePage 唯一持有的操作范围。 */
+  readonly operationScope: OperationScope
+  readonly onOperationScopeChange: (scope: OperationScope) => void
   /** 当前是否有当前预览图片。 */
   readonly hasSelectedImage: boolean
   /** 当前队列图片数量。 */
@@ -78,6 +81,8 @@ export const ShootingPresetPanel = ({
   onClearError,
   onApplyToScope,
   onClearScope,
+  operationScope,
+  onOperationScopeChange,
   hasSelectedImage,
   queueCount,
   checkedCount,
@@ -89,7 +94,6 @@ export const ShootingPresetPanel = ({
   const [errors, setErrors] = useState<readonly PresetFieldError[]>([])
   const [categoryFilter, setCategoryFilter] = useState<string>("")
   const [selectedPresetId, setSelectedPresetId] = useState<string>("")
-  const [applyScope, setApplyScope] = useState<BatchScope>("active")
 
   /** 全部存在的分类（去重排序）。 */
   const categories = useMemo(() => {
@@ -168,8 +172,8 @@ export const ShootingPresetPanel = ({
     if (selectedPresetId.length === 0) {
       return
     }
-    onApplyToScope(selectedPresetId, applyScope)
-  }, [selectedPresetId, applyScope, onApplyToScope])
+    onApplyToScope(selectedPresetId, operationScope)
+  }, [selectedPresetId, operationScope, onApplyToScope])
 
   return (
     <div className="presetPanelInner">
@@ -258,23 +262,23 @@ export const ShootingPresetPanel = ({
               <div className="presetScopeSelector" role="group" aria-label="应用范围">
                 <button
                   type="button"
-                  className={`ghostButton${applyScope === "active" ? " presetScopeActive" : ""}`}
-                  onClick={() => setApplyScope("active")}
+                  className={`ghostButton${operationScope === "active" ? " presetScopeActive" : ""}`}
+                  onClick={() => onOperationScopeChange("active")}
                 >
                   当前图片
                 </button>
                 <button
                   type="button"
-                  className={`ghostButton${applyScope === "checked" ? " presetScopeActive" : ""}`}
-                  onClick={() => setApplyScope("checked")}
+                  className={`ghostButton${operationScope === "checked" ? " presetScopeActive" : ""}`}
+                  onClick={() => onOperationScopeChange("checked")}
                   disabled={checkedCount === 0}
                 >
                   已选 {checkedCount} 张
                 </button>
                 <button
                   type="button"
-                  className={`ghostButton${applyScope === "all" ? " presetScopeActive" : ""}`}
-                  onClick={() => setApplyScope("all")}
+                  className={`ghostButton${operationScope === "all" ? " presetScopeActive" : ""}`}
+                  onClick={() => onOperationScopeChange("all")}
                 >
                   全部图片
                 </button>
@@ -296,22 +300,22 @@ export const ShootingPresetPanel = ({
                 <button
                   type="button"
                   className="ghostButton"
-                  disabled={!hasSelectedImage || selectedPresetId.length === 0 || (applyScope === "checked" && checkedCount === 0)}
+                  disabled={!hasSelectedImage || selectedPresetId.length === 0 || (operationScope === "checked" && checkedCount === 0)}
                   onClick={handleApply}
-                  title={`应用预设到${applyScope === "active" ? "当前图片" : applyScope === "checked" ? `已选 ${checkedCount} 张图片` : `全部 ${queueCount} 张图片`}`}
+                  title={`应用预设到${operationScope === "active" ? "当前图片" : operationScope === "checked" ? `已选 ${checkedCount} 张图片` : `全部 ${queueCount} 张图片`}`}
                 >
-                  应用{applyScope === "active" ? "当前" : applyScope === "checked" ? "已选" : "全部"}
+                  应用{operationScope === "active" ? "当前" : operationScope === "checked" ? "已选" : "全部"}
                 </button>
               </div>
               <div className="presetApplyRow">
                 <button
                   type="button"
                   className="ghostButton"
-                  disabled={!hasSelectedImage || (applyScope === "checked" && checkedCount === 0)}
-                  onClick={() => onClearScope(applyScope)}
-                  title={`清除${applyScope === "active" ? "当前图片" : applyScope === "checked" ? `已选 ${checkedCount} 张图片` : `全部 ${queueCount} 张图片`}的预设绑定`}
+                  disabled={!hasSelectedImage || (operationScope === "checked" && checkedCount === 0)}
+                  onClick={() => onClearScope(operationScope)}
+                  title={`清除${operationScope === "active" ? "当前图片" : operationScope === "checked" ? `已选 ${checkedCount} 张图片` : `全部 ${queueCount} 张图片`}的预设绑定`}
                 >
-                  清除{applyScope === "active" ? "当前" : applyScope === "checked" ? "已选" : "全部"}预设
+                  清除{operationScope === "active" ? "当前" : operationScope === "checked" ? "已选" : "全部"}预设
                 </button>
               </div>
             </fieldset>

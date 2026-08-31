@@ -78,6 +78,10 @@ export const exposeDesktopApi = (): void => {
       maxHeight: number
     ): Promise<import("../types/desktopApi.js").LocalImagePreview | null> =>
       ipcRenderer.invoke(IPC_CHANNELS.LOAD_LOCAL_IMAGE_PREVIEW, imagePath, maxWidth, maxHeight),
+    checkImagePaths: (paths: readonly string[]): Promise<readonly boolean[]> =>
+      ipcRenderer.invoke(IPC_CHANNELS.CHECK_IMAGE_PATHS, paths),
+    getImageFileVersions: (paths: readonly string[]): Promise<readonly (import("../types/desktopApi.js").ImageFileVersion | null)[]> =>
+      ipcRenderer.invoke(IPC_CHANNELS.GET_IMAGE_FILE_VERSIONS, paths),
     openLogFile: (logPath: string): Promise<boolean> =>
       ipcRenderer.invoke(IPC_CHANNELS.OPEN_LOG_FILE, logPath)
   }

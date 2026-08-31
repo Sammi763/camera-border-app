@@ -10,7 +10,8 @@
 ## 决策
 
 - `RenderRecipe` 是预览与导出的**共享核心渲染配置**。
-- `PreviewRequest` / `RenderJobRequest` 只能在外围补充差异字段（预览尺寸、导出设置如 `ExportSettings`）。
+- `PreviewRequest` / `RenderJobSnapshot` 只能在外围补充差异字段（预览尺寸、导出设置如 `ExportSettings`）；
+  `RenderJobRequest.items` 负责承载一张或多张快照，不复制 `RenderRecipe` 字段。
 - 禁止为预览和导出维护两套字段不一致的配置。
 
 ## 替代方案

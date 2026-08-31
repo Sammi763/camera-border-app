@@ -5,10 +5,13 @@ import com.camborder.app.exception.PreviewGenerationException;
 import com.camborder.app.service.RawDevelopService;
 import org.springframework.stereotype.Component;
 
+import javax.imageio.ImageReadParam;
 import javax.imageio.ImageIO;
+import javax.imageio.stream.ImageInputStream;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
+import java.util.Iterator;
 
 /**
  * 图片读取器（无状态组件）。
@@ -62,6 +65,14 @@ public final class ImageReader {
      * @throws PreviewGenerationException 文件不存在、不可读或不是支持的图片时抛出
      */
     public ReadResult readWithSource(final String imagePath) {
+        return readWithSource(imagePath, 0, 0);
+    }
+
+    /**
+     * 读取本地图片，并在预览有尺寸约束时于 ImageIO 解码阶段做 subsampling。
+     * 导出传入 0/0，因此始终读取原图，不会缓存或复用完整分辨率 BufferedImage。
+     */
+    public ReadResult readWithSource(final String imagePath, final int maxWidth, final int maxHeight) {
         final File file = new File(imagePath);
         if (!file.exists()) {
             throw new PreviewGenerationException("image file not found: " + imagePath);
@@ -72,12 +83,7 @@ public final class ImageReader {
 
         final String format = extensionOf(imagePath);
 
-        BufferedImage source;
-        try {
-            source = ImageIO.read(file);
-        } catch (final IOException e) {
-            throw new IllegalStateException("failed to read image file: " + imagePath, e);
-        }
+        final BufferedImage source = readStandardImage(file, maxWidth, maxHeight, imagePath);
 
         // 标准格式直接成功
         if (source != null) {
@@ -92,11 +98,11 @@ public final class ImageReader {
                     return new ReadResult(developed, SourceDecode.rawDeveloped(format));
                 } catch (final PreviewGenerationException e) {
                     return decodeEmbeddedWithWarning(imagePath, format,
-                            "RAW 真实显影失败，已降级为嵌入预览：" + e.getMessage());
+                            "RAW 真实显影失败，已降级为嵌入预览：" + e.getMessage(), maxWidth, maxHeight);
                 }
             }
             return decodeEmbeddedWithWarning(imagePath, format,
-                    "未配置 RAW 显影组件（LibRaw），当前显示为相机嵌入预览");
+                    "未配置 RAW 显影组件（LibRaw），当前显示为相机嵌入预览", maxWidth, maxHeight);
         }
 
         // 非 RAW 且 ImageIO 不支持
@@ -109,10 +115,43 @@ public final class ImageReader {
         return readWithSource(imagePath).getImage();
     }
 
+    /**
+     * 标准栅格格式通过 ImageReader 获取原始宽高后再设置 source subsampling。
+     * 不使用 ImageIO.read(file) 的全量解码路径，避免缩略图/预览先把原图展开到内存。
+     */
+    private BufferedImage readStandardImage(final File file, final int maxWidth, final int maxHeight,
+                                            final String imagePath) {
+        try (ImageInputStream input = ImageIO.createImageInputStream(file)) {
+            if (input == null) {
+                return null;
+            }
+            final Iterator<javax.imageio.ImageReader> readers = ImageIO.getImageReaders(input);
+            if (!readers.hasNext()) {
+                return null;
+            }
+            final javax.imageio.ImageReader reader = readers.next();
+            try {
+                reader.setInput(input, true, true);
+                final int width = reader.getWidth(0);
+                final int height = reader.getHeight(0);
+                final int subsampling = ImageDecodeSizing.subsamplingFor(width, height, maxWidth, maxHeight);
+                final ImageReadParam parameter = reader.getDefaultReadParam();
+                if (subsampling > 1) {
+                    parameter.setSourceSubsampling(subsampling, subsampling, 0, 0);
+                }
+                return reader.read(0, parameter);
+            } finally {
+                reader.dispose();
+            }
+        } catch (final IOException e) {
+            throw new IllegalStateException("failed to read image file: " + imagePath, e);
+        }
+    }
+
     /** 提取嵌入预览；失败时抛受控异常（保留降级原因链）。 */
     private ReadResult decodeEmbeddedWithWarning(final String imagePath, final String format,
-                                                 final String warning) {
-        final BufferedImage embedded = rawDecoder.decode(imagePath);
+                                                 final String warning, final int maxWidth, final int maxHeight) {
+        final BufferedImage embedded = rawDecoder.decode(imagePath, maxWidth, maxHeight);
         return new ReadResult(embedded, SourceDecode.embeddedFallback(format, warning));
     }
 

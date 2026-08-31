@@ -3,3 +3,8 @@
 app:
   preview-store:
     max-items: 100
+    # PNG 预览缓存同时受字节预算约束；只保存编码字节，不保留完整分辨率 BufferedImage。
+    max-bytes: 33554432
+  render-jobs:
+    # 单线程确保全分辨率和 16-bit 导出默认并发为 1；队列满时返回 429，不阻塞 HTTP 线程。
+    queue-capacity: 16

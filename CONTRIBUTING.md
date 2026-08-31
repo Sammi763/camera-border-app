@@ -87,6 +87,7 @@ cd electron && pnpm dev:managed   # Electron 自行启动 jar + 加载 frontend/
 | `pnpm --filter electron typecheck` | Electron 类型检查 |
 | `pnpm --filter electron test` | Electron 全量测试（Vitest） |
 | `pnpm test:scripts` | 脚本级测试：Windows 图标生成、打包产物校验、Electron 开发运行时准备、Java Runtime 解压布局（`scripts/*.test.*`） |
+| `pnpm perf:smoke` | 性能 smoke：连接已启动的本地 Java 引擎，模拟 100 项队列、双并发预览和连续异步导出；产物写入并清理专属临时目录 |
 | `cd electron && pnpm dev:managed` | Electron 托管模式 |
 | `pnpm typecheck` | 根目录快捷：electron + frontend 类型检查 |
 | `pnpm build:frontend` | 根目录快捷：构建 frontend |
@@ -151,6 +152,7 @@ T-05A 只验收打包实现和可在本机执行的合成检查；安装、启�
 | 托管模式启动失败 | 缺少 jar 或 frontend/dist | 按「托管模式」顺序先 `mvn package` 与 `pnpm build` |
 | HEIC/HEIF 图片导入后该项失败（resolved=null） | 当前开发实现依赖 macOS `sips`；Windows x64 的最终 HEIC/HEIF 支持为 `NOT_RUN`，Linux 不在最终发行平台 | 先转成 JPG/PNG；最终支持口径以 [docs/prd.md §0](docs/prd.md) 和 [样片矩阵](docs/test-samples.md) 为准 |
 | `GET /api/render-jobs/{jobId}` 返回 404 | 任务状态在内存（`RenderJobStore`），引擎重启即丢失 | 重新发起导出任务；批量导出重跑即可 |
+| 导出 POST 很快返回 `202` | 当前接口是异步任务契约，正文中的 `jobId` 需要交给 GET 轮询 | 使用前端根级 `useExportController` 或按 [`java-engine/README.md`](java-engine/README.md) 的 GET/DELETE 语义处理 |
 | 模板/资产/摄影预设数据「丢了」 | 桌面模式持久化在 `userData` 下；浏览器模式降级 localStorage，两者不互通。旧版本可能仍有 `rolls.json` | 检查对应存储文件和迁移日志；两种模式数据不共享是预期行为 |
 | 给 electron/package.json 加了 `"type": "module"` 后 preload 加载报错 | preload 必须按 CommonJS 编译（`tsconfig.json` 的 `module: CommonJS`） | 回退该字段；详见 electron/README.md |
 

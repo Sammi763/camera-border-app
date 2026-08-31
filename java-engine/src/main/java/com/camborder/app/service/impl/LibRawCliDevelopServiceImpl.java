@@ -7,13 +7,10 @@ import org.springframework.stereotype.Service;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
-import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * RAW 真实显影服务实现：通过受控子进程调用随包 LibRaw 原生程序。
@@ -26,19 +23,14 @@ import java.util.concurrent.ConcurrentHashMap;
  * - 超时（app.raw.timeout-ms，默认 30s）：destroyForcibly 终止进程并抛受控异常；
  * - 非零退出：读取 stderr 前 300 字符作为失败原因；
  * - 临时输出文件在 finally 中删除，超时/失败/成功均不残留；
- * - 结果缓存：key = 绝对路径 + ":" + lastModified，上限 {@link #CACHE_MAX_ENTRIES}，
- *   满后整体清空（简单有界，避免无限增长）。
+ * - 不缓存 BufferedImage：显影结果在本次调用完成后立即交给渲染器，避免长会话持有
+ *   完整分辨率像素数据；预览缓存只允许保存有字节上限的缩小 PNG。
  */
 @Service
 public final class LibRawCliDevelopServiceImpl implements RawDevelopService {
 
     private final String cliPath;
     private final long timeoutMs;
-
-    /** 解码结果缓存（路径+mtime → 图像）。 */
-    private final Map<String, BufferedImage> cache = new ConcurrentHashMap<>();
-
-    private static final int CACHE_MAX_ENTRIES = 6;
 
     public LibRawCliDevelopServiceImpl(
             @Value("${app.raw.cli-path:${CAMBORDER_LIBRAW_PATH:}}") final String cliPath,
@@ -60,12 +52,6 @@ public final class LibRawCliDevelopServiceImpl implements RawDevelopService {
     public BufferedImage develop(final String rawPath) {
         if (!isConfigured()) {
             throw new PreviewGenerationException("未配置 RAW 显影组件（LibRaw 原生程序缺失或不可执行）");
-        }
-
-        final String cacheKey = buildCacheKey(rawPath);
-        final BufferedImage cached = cache.get(cacheKey);
-        if (cached != null) {
-            return cached;
         }
 
         Path output = null;
@@ -92,7 +78,6 @@ public final class LibRawCliDevelopServiceImpl implements RawDevelopService {
                 throw new PreviewGenerationException("RAW 显影输出无法解码为图像: " + rawPath);
             }
 
-            putCache(cacheKey, image);
             return image;
         } catch (final InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -108,23 +93,6 @@ public final class LibRawCliDevelopServiceImpl implements RawDevelopService {
         final ProcessBuilder builder = new ProcessBuilder(cliPath, rawPath, output.toString());
         builder.redirectErrorStream(false);
         return builder.start();
-    }
-
-    /** 显影结果缓存 key：绝对路径 + 最后修改时间。源文件更新后自动失效。 */
-    private String buildCacheKey(final String rawPath) {
-        try {
-            final long mtime = new File(rawPath).lastModified();
-            return Paths.get(rawPath).toAbsolutePath() + ":" + mtime;
-        } catch (final Exception e) {
-            return rawPath;
-        }
-    }
-
-    private void putCache(final String key, final BufferedImage image) {
-        if (cache.size() >= CACHE_MAX_ENTRIES) {
-            cache.clear();
-        }
-        cache.put(key, image);
     }
 
     /** 读取子进程 stderr 前 300 字符作为失败摘要。 */

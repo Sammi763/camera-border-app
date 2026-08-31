@@ -5,17 +5,16 @@ import com.camborder.app.dto.RenderJobRequest;
 import com.camborder.app.model.BorderConfig;
 import com.camborder.app.model.RenderRecipe;
 import com.camborder.app.testsupport.AbstractControllerTest;
+import com.fasterxml.jackson.databind.JsonNode;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.hamcrest.Matchers.containsString;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -28,21 +27,17 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 final class RenderJobControllerTest extends AbstractControllerTest {
 
     @Test
-    void shouldCompleteRenderJobSynchronously() throws Exception {
+    void shouldAcceptRenderJobAsynchronously() throws Exception {
         ExportSettings export = new ExportSettings(
                 tempDir.resolve("result.png").toString(), "png", 95);
         RenderRecipe recipe = new RenderRecipe(writeTempImage(), null, null, null, false);
         RenderJobRequest request = new RenderJobRequest(recipe, export);
 
-        // 同步渲染：POST 直接返回最终状态（completed + outputPath），无需轮询
-        mockMvc.perform(post("/api/render-jobs")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.jobId").isNotEmpty())
-                .andExpect(jsonPath("$.status").value("completed"))
-                .andExpect(jsonPath("$.outputPath").isNotEmpty())
-                .andExpect(jsonPath("$.message").isNotEmpty());
+        JsonNode accepted = submitAccepted(request);
+        assertThat(accepted.path("total").asInt()).isEqualTo(1);
+        JsonNode terminal = waitForRenderJob(accepted.path("jobId").asText());
+        assertThat(terminal.path("status").asText()).isEqualTo("completed");
+        assertThat(terminal.path("items").get(0).path("outputPath").asText()).isNotBlank();
     }
 
     @Test
@@ -135,19 +130,14 @@ final class RenderJobControllerTest extends AbstractControllerTest {
         RenderRecipe recipe = new RenderRecipe(writeTempImage(), null, null, null, false);
         RenderJobRequest createRequest = new RenderJobRequest(recipe, export);
 
-        String responseBody = mockMvc.perform(post("/api/render-jobs")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(createRequest)))
-                .andReturn().getResponse().getContentAsString();
+        JsonNode accepted = submitAccepted(createRequest);
+        String jobId = accepted.path("jobId").asText();
+        JsonNode terminal = waitForRenderJob(jobId);
 
-        String jobId = objectMapper.readTree(responseBody).get("jobId").asText();
-
-        mockMvc.perform(get("/api/render-jobs/" + jobId))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.jobId").value(jobId))
-                .andExpect(jsonPath("$.status").value("completed"))
-                .andExpect(jsonPath("$.message").isNotEmpty())
-                .andExpect(jsonPath("$.outputPath").isNotEmpty());
+        assertThat(terminal.path("jobId").asText()).isEqualTo(jobId);
+        assertThat(terminal.path("status").asText()).isEqualTo("completed");
+        assertThat(terminal.path("message").asText()).isNotBlank();
+        assertThat(terminal.path("outputPath").asText()).isNotBlank();
     }
 
     @Test
@@ -163,6 +153,21 @@ final class RenderJobControllerTest extends AbstractControllerTest {
     private String submitExport(final RenderRecipe recipe, final ExportSettings export)
             throws Exception {
         return submitExport(new RenderJobRequest(recipe, export));
+    }
+
+    /** 提交后只断言 202，再由调用方明确等待终态。 */
+    private JsonNode submitAccepted(final RenderJobRequest request) throws Exception {
+        String body = mockMvc.perform(post("/api/render-jobs")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.jobId").isNotEmpty())
+                .andReturn().getResponse().getContentAsString();
+        return objectMapper.readTree(body);
+    }
+
+    private JsonNode submitAndWait(final RenderJobRequest request) throws Exception {
+        return waitForRenderJob(submitAccepted(request).path("jobId").asText());
     }
 
     @Test
@@ -299,7 +304,7 @@ final class RenderJobControllerTest extends AbstractControllerTest {
     }
 
     @Test
-    void shouldRejectExportWhenOutputPathIsNotWritable() throws Exception {
+    void shouldReportPerItemFailureWhenOutputPathIsNotWritable() throws Exception {
         // outputPath 指向一个已存在的文件（而非目录的子路径），父目录无法被创建
         Path existingFile = tempDir.resolve("blocker.txt");
         Files.writeString(existingFile, "block");
@@ -308,25 +313,21 @@ final class RenderJobControllerTest extends AbstractControllerTest {
                 existingFile.toString() + "/out.png", "png", 95);
         RenderJobRequest request = new RenderJobRequest(recipe, export);
 
-        mockMvc.perform(post("/api/render-jobs")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error").isNotEmpty());
+        JsonNode terminal = submitAndWait(request);
+        assertThat(terminal.path("status").asText()).isEqualTo("failed");
+        assertThat(terminal.path("items").get(0).path("error").asText()).isNotBlank();
     }
 
     @Test
-    void shouldRejectExportWhenImageFileNotFound() throws Exception {
+    void shouldReportPerItemFailureWhenImageFileNotFound() throws Exception {
         RenderRecipe recipe = new RenderRecipe("/no/such/file.png", null, null, null, false);
         ExportSettings export = new ExportSettings(
                 tempDir.resolve("out.png").toString(), "png", 95);
         RenderJobRequest request = new RenderJobRequest(recipe, export);
 
-        mockMvc.perform(post("/api/render-jobs")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error").value(containsString("not found")));
+        JsonNode terminal = submitAndWait(request);
+        assertThat(terminal.path("status").asText()).isEqualTo("failed");
+        assertThat(terminal.path("items").get(0).path("error").asText()).contains("not found");
     }
 
     // ---- 专业导出测试 ----------------------------------------------------------
@@ -339,10 +340,7 @@ final class RenderJobControllerTest extends AbstractControllerTest {
         RenderRecipe recipe = new RenderRecipe(imageFile, null, null, null, false);
         RenderJobRequest request = new RenderJobRequest(recipe, export);
 
-        mockMvc.perform(post("/api/render-jobs")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isOk());
+        submitAndWait(request);
 
         Path outputFile = tempDir.resolve("out.tif");
         assertThat(Files.exists(outputFile)).isTrue();
@@ -358,21 +356,11 @@ final class RenderJobControllerTest extends AbstractControllerTest {
         RenderRecipe recipe = new RenderRecipe(imageFile, null, null, null, false);
         RenderJobRequest request = new RenderJobRequest(recipe, export);
 
-        String response = mockMvc.perform(post("/api/render-jobs")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isOk())
-                .andReturn().getResponse().getContentAsString();
-
-        String jobId = objectMapper.readTree(response).get("jobId").asText();
-        String statusResponse = mockMvc.perform(get("/api/render-jobs/" + jobId))
-                .andExpect(status().isOk())
-                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        JsonNode statusResponse = submitAndWait(request);
 
         // metadataPreservation.status 应为 SKIPPED，message 包含"暂不支持"
-        String metadataStatus = objectMapper.readTree(statusResponse)
-                .path("metadataPreservation").path("status").asText();
-        String metadataMessage = objectMapper.readTree(statusResponse)
+        String metadataStatus = statusResponse.path("metadataPreservation").path("status").asText();
+        String metadataMessage = statusResponse
                 .path("metadataPreservation").path("message").asText();
         assertThat(metadataStatus).isEqualTo("SKIPPED");
         assertThat(metadataMessage).contains("暂不支持");
@@ -387,19 +375,8 @@ final class RenderJobControllerTest extends AbstractControllerTest {
         RenderRecipe recipe = new RenderRecipe(imageFile, null, null, null, false);
         RenderJobRequest request = new RenderJobRequest(recipe, export);
 
-        String response = mockMvc.perform(post("/api/render-jobs")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isOk())
-                .andReturn().getResponse().getContentAsString();
-
-        String jobId = objectMapper.readTree(response).get("jobId").asText();
-        String statusResponse = mockMvc.perform(get("/api/render-jobs/" + jobId))
-                .andExpect(status().isOk())
-                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
-
-        String colorProfileStatus = objectMapper.readTree(statusResponse)
-                .path("colorProfilePreservation").path("status").asText();
+        JsonNode statusResponse = submitAndWait(request);
+        String colorProfileStatus = statusResponse.path("colorProfilePreservation").path("status").asText();
         assertThat(colorProfileStatus).isEqualTo("NOT_REQUESTED");
     }
 
@@ -412,10 +389,7 @@ final class RenderJobControllerTest extends AbstractControllerTest {
         RenderRecipe recipe = new RenderRecipe(imageFile, null, null, null, false);
         RenderJobRequest request = new RenderJobRequest(recipe, export);
 
-        mockMvc.perform(post("/api/render-jobs")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isOk());
+        submitAndWait(request);
 
         Path outputFile = tempDir.resolve("out.tif");
         assertThat(Files.exists(outputFile)).isTrue();
@@ -430,19 +404,8 @@ final class RenderJobControllerTest extends AbstractControllerTest {
         RenderRecipe recipe = new RenderRecipe(imageFile, null, null, null, false);
         RenderJobRequest request = new RenderJobRequest(recipe, export);
 
-        String response = mockMvc.perform(post("/api/render-jobs")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isOk())
-                .andReturn().getResponse().getContentAsString();
-
-        String jobId = objectMapper.readTree(response).get("jobId").asText();
-        String statusResponse = mockMvc.perform(get("/api/render-jobs/" + jobId))
-                .andExpect(status().isOk())
-                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
-
-        String metadataStatus = objectMapper.readTree(statusResponse)
-                .path("metadataPreservation").path("status").asText();
+        JsonNode statusResponse = submitAndWait(request);
+        String metadataStatus = statusResponse.path("metadataPreservation").path("status").asText();
         assertThat(metadataStatus).isEqualTo("SKIPPED");
     }
 
@@ -455,20 +418,9 @@ final class RenderJobControllerTest extends AbstractControllerTest {
         RenderRecipe recipe = new RenderRecipe(imageFile, null, null, null, false);
         RenderJobRequest request = new RenderJobRequest(recipe, export);
 
-        String response = mockMvc.perform(post("/api/render-jobs")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isOk())
-                .andReturn().getResponse().getContentAsString();
-
-        String jobId = objectMapper.readTree(response).get("jobId").asText();
-        String statusResponse = mockMvc.perform(get("/api/render-jobs/" + jobId))
-                .andExpect(status().isOk())
-                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
-
-        String bitDepthStatus = objectMapper.readTree(statusResponse)
-                .path("highBitDepth").path("status").asText();
-        String bitDepthMessage = objectMapper.readTree(statusResponse)
+        JsonNode statusResponse = submitAndWait(request);
+        String bitDepthStatus = statusResponse.path("highBitDepth").path("status").asText();
+        String bitDepthMessage = statusResponse
                 .path("highBitDepth").path("message").asText();
         assertThat(bitDepthStatus).isEqualTo("SKIPPED");
         assertThat(bitDepthMessage).contains("8bit");
@@ -482,18 +434,8 @@ final class RenderJobControllerTest extends AbstractControllerTest {
         RenderRecipe recipe = new RenderRecipe(imageFile, null, null, null, false);
         RenderJobRequest request = new RenderJobRequest(recipe, export);
 
-        String response = mockMvc.perform(post("/api/render-jobs")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isOk())
-                .andReturn().getResponse().getContentAsString();
-
-        String jobId = objectMapper.readTree(response).get("jobId").asText();
-        String statusResponse = mockMvc.perform(get("/api/render-jobs/" + jobId))
-                .andExpect(status().isOk())
-                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
-
-        String actualFormat = objectMapper.readTree(statusResponse).path("actualFormat").asText();
+        JsonNode statusResponse = submitAndWait(request);
+        String actualFormat = statusResponse.path("actualFormat").asText();
         assertThat(actualFormat).isEqualTo("tiff");
     }
 }

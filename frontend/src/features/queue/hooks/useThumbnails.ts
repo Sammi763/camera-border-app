@@ -1,22 +1,32 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { requestPreview } from "../../../services/engine/previewApi"
+import {
+  createPreviewCacheKey,
+  hashRenderRecipe,
+  thumbnailUrlCache
+} from "../../../services/engine/previewCache"
+import { getImageFileVersions } from "../../../services/desktop/imageFileVersion"
 import { loadLocalImagePreview, isLocalPreviewSupported, isRawOrHeicFile } from "../../../services/desktop/localImagePreview"
+import type { PreviewRequest, RenderRecipe } from "../../../types/preview"
+import type { ImageFileVersion } from "../../../types/runtime"
 
 /**
  * 缩略图缓存与并发加载 Hook。
  *
  * 设计要点：
- * - 使用 Map<filePath, previewUrl> 做内存缓存，避免重复请求
- * - 并发控制（最多 3 个同时请求），避免队列加载时打爆后端
- * - 缩略图请求使用小尺寸（120px）且不加边框文字，尽量轻量
- * - 组件卸载或依赖变化时取消进行中的请求
+ * - 缩略图请求使用小尺寸（120px）且无边框文字，Java 与 nativeImage 均可在解码阶段 subsampling；
+ * - 严格最多 2 个并发请求，避免 100 图队列把引擎和 Renderer 同时打满；
+ * - 缓存键固定为 path + 请求尺寸 + mtime + RenderRecipe hash，文件替换或配方变化不会串图；
+ * - 缓存按已编码字节上限淘汰（见 previewCache.ts），不保存原图像素数据。
  */
 
 const THUMB_MAX = 120
-const MAX_CONCURRENT = 3
+const MAX_CONCURRENT = 2
 
-/** 全局缩略图缓存，跨组件实例共享，避免重复请求。 */
-const thumbCache = new Map<string, string>()
+type ThumbnailPayload = {
+  readonly url: string
+  readonly byteSize: number
+}
 
 /**
  * 解析引擎返回的同源相对 previewUrl；data URL 仅用于兼容本地降级结果。
@@ -26,120 +36,190 @@ export const resolveEngineUrl = (previewUrl: string): string | null => {
   if (previewUrl.startsWith("data:image/")) {
     return previewUrl
   }
-  if (previewUrl.startsWith("/")) {
+  // 预览资源只能来自受控的单段 /previews/{id} 路由；拒绝 //host、路径穿越和其它相对路径。
+  if (/^\/previews\/[A-Za-z0-9_-]+$/.test(previewUrl)) {
     return previewUrl
   }
   return null
 }
 
+/** 缩略图唯一使用的零边框 RenderRecipe；导出配方不受它影响。 */
+const buildThumbnailRecipe = (filePath: string): RenderRecipe => ({
+  imagePath: filePath,
+  border: { top: 0, bottom: 0, left: 0, right: 0, color: "#000000" },
+  gradient: null,
+  texts: [],
+  filmFormat: null,
+  autoCrop: false
+})
+
+export const buildThumbnailRequest = (filePath: string, maxWidth: number, maxHeight: number): PreviewRequest => ({
+  recipe: buildThumbnailRecipe(filePath),
+  maxWidth,
+  maxHeight
+})
+
+/** 将引擎 PNG 物化为 data URL，避免 PreviewStore 淘汰后 img.src 指向失效资源。 */
+const blobToDataUrl = async (blob: Blob): Promise<string> =>
+  await new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = (): void => typeof reader.result === "string"
+      ? resolve(reader.result)
+      : reject(new Error("thumbnail data URL conversion failed"))
+    reader.onerror = (): void => reject(new Error("thumbnail data URL conversion failed"))
+    reader.readAsDataURL(blob)
+  })
+
 /**
  * 拉取并物化一张缩略图：先尝试引擎；引擎失败时降级到本地 nativeImage 预览。
- * 任何步骤失败返回 null（不污染队列）。
+ * 任何步骤失败返回 null（不污染队列）。signal 表示该任务已被新的队列范围替代。
  */
-const fetchThumbnail = async (filePath: string, maxWidth: number, maxHeight: number): Promise<string | null> => {
-  // 引擎路径
-  const request = {
-    recipe: {
-      imagePath: filePath,
-      border: { top: 0, bottom: 0, left: 0, right: 0, color: "#000000" },
-      gradient: null,
-      texts: [],
-      filmFormat: null,
-      autoCrop: false
-    },
-    maxWidth,
-    maxHeight
-  }
+const fetchThumbnail = async (
+  filePath: string,
+  maxWidth: number,
+  maxHeight: number,
+  signal: AbortSignal
+): Promise<ThumbnailPayload | null> => {
+  const request = buildThumbnailRequest(filePath, maxWidth, maxHeight)
   try {
-    const response = await requestPreview(request)
+    const response = await requestPreview(request, undefined, signal)
     if (response.previewAvailable) {
       const url = resolveEngineUrl(response.previewUrl)
       if (url !== null) {
         if (url.startsWith("data:")) {
-          return url
+          return { url, byteSize: Math.max(1, url.length) }
         }
-        const r = await fetch(url)
-        const contentType = r.headers.get("content-type")?.toLowerCase() ?? ""
-        if (r.ok && contentType.startsWith("image/")) {
-          // 保留相对路径：生产 app:// 页面中的 img 会解析为
-          // app://app/previews/<id>，避免把代理结果物化成 blob: 地址。
-          return url
+        const imageResponse = await fetch(url, { signal })
+        const contentType = imageResponse.headers.get("content-type")?.toLowerCase() ?? ""
+        if (imageResponse.ok && contentType.startsWith("image/")) {
+          const blob = await imageResponse.blob()
+          return { url: await blobToDataUrl(blob), byteSize: Math.max(1, blob.size) }
         }
       }
     }
   } catch {
-    // 引擎不可达：降级到本地预览
+    // 取消时不再做本地兜底；其他引擎失败才进入 nativeImage 路径。
+    if (signal.aborted) return null
   }
-  // 本地降级：仅 JPEG/PNG/WebP/BMP/TIFF 等系统可解码格式
-  if (isRawOrHeicFile(filePath) || !isLocalPreviewSupported(filePath)) {
+  if (signal.aborted || isRawOrHeicFile(filePath) || !isLocalPreviewSupported(filePath)) {
     return null
   }
   const local = await loadLocalImagePreview(filePath, maxWidth, maxHeight)
-  if (local === null) {
+  if (signal.aborted || local === null) {
     return null
   }
-  // 队列缩略图直接复用 dataURL，不再二次 blob 化
-  return local.dataUrl
+  // 队列缩略图直接复用 dataURL，不再二次 blob 化。
+  return { url: local.dataUrl, byteSize: Math.max(1, local.dataUrl.length) }
 }
 
-export const useThumbnails = (
-  filePaths: readonly string[]
+const versionForPath = (
+  versions: ReadonlyMap<string, ImageFileVersion | null>,
+  filePath: string
+): ImageFileVersion | null =>
+  versions.get(filePath) ?? null
+
+const thumbnailKey = (filePath: string, version: ImageFileVersion | null): string => {
+  const request = buildThumbnailRequest(filePath, THUMB_MAX, THUMB_MAX)
+  return createPreviewCacheKey({
+    imagePath: filePath,
+    maxWidth: THUMB_MAX,
+    maxHeight: THUMB_MAX,
+    modifiedAtMs: version?.mtimeMs ?? null,
+    sourceSizeBytes: version?.sizeBytes ?? null,
+    recipeHash: hashRenderRecipe(request.recipe)
+  })
+}
+
+const cachedThumbnailMap = (
+  filePaths: readonly string[],
+  versions: ReadonlyMap<string, ImageFileVersion | null>
 ): Map<string, string> => {
-  const [thumbnails, setThumbnails] = useState<Map<string, string>>(new Map(thumbCache))
-  const activeRef = useRef(true)
+  const result = new Map<string, string>()
+  for (const filePath of filePaths) {
+    const cached = thumbnailUrlCache.get(thumbnailKey(filePath, versionForPath(versions, filePath)))
+    if (cached !== null) {
+      result.set(filePath, cached)
+    }
+  }
+  return result
+}
+
+export const useThumbnails = (filePaths: readonly string[]): Map<string, string> => {
+  const pathSignature = useMemo(() => [...filePaths].join("\u0000"), [filePaths])
+  const [versions, setVersions] = useState<ReadonlyMap<string, ImageFileVersion | null> | null>(null)
+  const [thumbnails, setThumbnails] = useState<Map<string, string>>(new Map())
+
+  // 读取受限 mtime；桥不存在时服务返回等长 null，仍可安全使用 unknown-mtime 缓存键。
+  useEffect(() => {
+    let active = true
+    setVersions(null)
+    void getImageFileVersions(filePaths).then((results) => {
+      if (!active) return
+      const next = new Map<string, ImageFileVersion | null>()
+      filePaths.forEach((filePath, index) => next.set(filePath, results[index] ?? null))
+      setVersions(next)
+    })
+    return () => { active = false }
+  }, [filePaths, pathSignature])
 
   useEffect(() => {
-    activeRef.current = true
-    return () => { activeRef.current = false }
-  }, [])
-
-  useEffect(() => {
-    const uncached = filePaths.filter((p) => !thumbCache.has(p))
-    if (uncached.length === 0) {
-      setThumbnails(new Map(thumbCache))
+    if (versions === null) {
+      setThumbnails(new Map())
       return
     }
 
+    let active = true
     let running = 0
     let nextIndex = 0
+    const controllers = new Set<AbortController>()
+    const uniquePaths = [...new Set(filePaths)]
+    const uncached = uniquePaths.filter((filePath) =>
+      thumbnailUrlCache.get(thumbnailKey(filePath, versionForPath(versions, filePath))) === null)
+
+    setThumbnails(cachedThumbnailMap(filePaths, versions))
+
+    const publish = (): void => {
+      if (active) {
+        setThumbnails(cachedThumbnailMap(filePaths, versions))
+      }
+    }
 
     const processNext = (): void => {
-      while (running < MAX_CONCURRENT && nextIndex < uncached.length) {
+      while (active && running < MAX_CONCURRENT && nextIndex < uncached.length) {
         const filePath = uncached[nextIndex]
         nextIndex++
-        if (filePath === undefined) {
-          continue
-        }
+        if (filePath === undefined) continue
+        const controller = new AbortController()
+        controllers.add(controller)
         running++
 
-        if (thumbCache.has(filePath)) {
-          running--
-          processNext()
-          continue
-        }
-
-        void fetchThumbnail(filePath, THUMB_MAX, THUMB_MAX)
-          .then((dataUrl) => {
-            if (!activeRef.current || dataUrl === null) {
-              return
-            }
-            thumbCache.set(filePath, dataUrl)
-            setThumbnails(new Map(thumbCache))
+        void fetchThumbnail(filePath, THUMB_MAX, THUMB_MAX, controller.signal)
+          .then((payload) => {
+            if (!active || payload === null) return
+            thumbnailUrlCache.set(
+              thumbnailKey(filePath, versionForPath(versions, filePath)),
+              payload.url,
+              payload.byteSize
+            )
+            publish()
           })
           .catch(() => {
-            // 缩略图加载失败时静默跳过
+            // 单张缩略图失败时静默跳过，队列仍保留可操作的占位状态。
           })
           .finally(() => {
+            controllers.delete(controller)
             running--
-            if (activeRef.current) {
-              processNext()
-            }
+            processNext()
           })
       }
     }
 
     processNext()
-  }, [filePaths])
+    return () => {
+      active = false
+      for (const controller of controllers) controller.abort()
+    }
+  }, [filePaths, pathSignature, versions])
 
   return thumbnails
 }

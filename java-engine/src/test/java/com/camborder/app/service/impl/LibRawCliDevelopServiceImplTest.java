@@ -75,9 +75,10 @@ final class LibRawCliDevelopServiceImplTest {
     }
 
     @Test
-    void successPathDevelopsViaCliAndCachesResult() throws IOException {
+    void successPathDevelopsViaCliWithoutCachingFullResolutionResult() throws IOException {
+        final Path invocationLog = tempDir.resolve("develop-invocations.txt");
         final String cli = writeScript("ok-cli.sh",
-                "cp \"" + fixturePng + "\" \"$2\"");
+                "printf x >> \"" + invocationLog + "\"; cp \"" + fixturePng + "\" \"$2\"");
         final LibRawCliDevelopServiceImpl service =
                 new LibRawCliDevelopServiceImpl(cli, 10_000);
 
@@ -90,9 +91,10 @@ final class LibRawCliDevelopServiceImplTest {
         assertThat(first).isNotNull();
         assertThat(first.getWidth()).isEqualTo(64);
 
-        // 二次 develop 走缓存（同路径同 mtime），仍返回有效图像
+        // 二次 develop 必须重新调用 CLI；完整分辨率 BufferedImage 不可跨请求缓存。
         final BufferedImage second = service.develop(raw.toString());
         assertThat(second).isNotNull();
+        assertThat(Files.readString(invocationLog)).isEqualTo("xx");
     }
 
     @Test

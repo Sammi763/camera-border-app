@@ -255,4 +255,31 @@ describe("usePreview 超时降级到本地预览", () => {
     const calls = fetchMock.mock.calls as unknown[][]
     expect(calls.every((call) => !String(call[0]).startsWith("http://127.0.0.1"))).toBe(true)
   })
+
+  it("切换当前图会主动取消旧的裸图和带配方预览请求，只保留最新请求", async () => {
+    const signals: AbortSignal[] = []
+    vi.stubGlobal("fetch", (_input: unknown, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal
+        if (signal !== null && signal !== undefined) {
+          signals.push(signal)
+          signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true })
+        }
+      })
+    )
+    installDesktopBridge(() => null)
+
+    const settings = makeSettings()
+    const { rerender } = renderHook(
+      ({ filePath }: { readonly filePath: string }) => usePreview(filePath, settings, 1),
+      { initialProps: { filePath: "/photos/first.jpg" } }
+    )
+
+    await waitFor(() => expect(signals.length).toBeGreaterThanOrEqual(2))
+    rerender({ filePath: "/photos/second.jpg" })
+
+    await waitFor(() => {
+      expect(signals.slice(0, 2).every((signal) => signal.aborted)).toBe(true)
+    })
+  })
 })

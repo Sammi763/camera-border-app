@@ -80,6 +80,34 @@ final class PreviewStoreTest {
     }
 
     @Test
+    @DisplayName("字节预算优先于条目数：超出预算时淘汰最久未访问预览")
+    void storeBeyondByteBudgetEvictsLeastRecentlyUsedPreview() {
+        PreviewStore store = new PreviewStore(10, 6);
+
+        String first = store.store(new byte[]{1, 2, 3});
+        String second = store.store(new byte[]{4, 5});
+        // 读取 first 后，它应成为最近使用项；随后加入 3 字节时应淘汰 second。
+        assertThat(store.load(first)).isPresent();
+        String third = store.store(new byte[]{6, 7, 8});
+
+        assertThat(store.load(first)).isPresent();
+        assertThat(store.load(second)).isEmpty();
+        assertThat(store.load(third)).isPresent();
+        assertThat(store.storedByteCount()).isLessThanOrEqualTo(6);
+    }
+
+    @Test
+    @DisplayName("单张预览超过字节预算时拒绝写入，避免缓存无界增长")
+    void storeRejectsPreviewLargerThanByteBudget() {
+        PreviewStore store = new PreviewStore(10, 4);
+
+        assertThatThrownBy(() -> store.store(new byte[]{1, 2, 3, 4, 5}))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("preview data exceeds");
+        assertThat(store.storedByteCount()).isZero();
+    }
+
+    @Test
     @DisplayName("非法 maxItems 配置回退到默认值")
     void invalidMaxItemsFallsBackToDefault() {
         // <=0 的配置应回退为默认容量，注册表仍能正常保留预览

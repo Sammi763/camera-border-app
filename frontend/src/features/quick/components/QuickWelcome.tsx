@@ -8,15 +8,11 @@
  * 并展示本地优先的价值提示：本地处理、无需登录、EXIF 自动读取、批量导出。
  */
 
-import { useCallback, useState } from "react"
-
 type QuickWelcomeProps = {
   readonly isBrowserMode: boolean
   readonly onPickFiles: () => void
   readonly onPickFolder: () => void
   readonly onLoadSamples: () => void
-  /** 拖入的本地图片路径（桌面模式）。 */
-  readonly onDropFiles: (paths: readonly string[]) => void
 }
 
 const VALUE_HINTS: readonly { readonly title: string; readonly body: string }[] = [
@@ -30,47 +26,10 @@ export const QuickWelcome = ({
   isBrowserMode,
   onPickFiles,
   onPickFolder,
-  onLoadSamples,
-  onDropFiles
+  onLoadSamples
 }: QuickWelcomeProps): JSX.Element => {
-  const [dragActive, setDragActive] = useState(false)
-  const [dropHint, setDropHint] = useState<string | null>(null)
-
-  const handleDrop = useCallback((event: React.DragEvent<HTMLDivElement>): void => {
-    event.preventDefault()
-    setDragActive(false)
-    setDropHint(null)
-    if (isBrowserMode) {
-      setDropHint("拖拽导入需要桌面模式，浏览器降级模式下请使用「加载样片」。")
-      return
-    }
-    const paths = Array.from(event.dataTransfer.files)
-      .map((file) => (file as File & { path?: string }).path)
-      .filter((p): p is string => p !== undefined && p.trim().length > 0)
-    if (paths.length === 0) {
-      setDropHint("未识别到可导入的本地图片文件。")
-      return
-    }
-    onDropFiles(paths)
-  }, [isBrowserMode, onDropFiles])
-
-  const handleDragOver = useCallback((event: React.DragEvent<HTMLDivElement>): void => {
-    event.preventDefault()
-    setDragActive(true)
-  }, [])
-
-  const handleDragLeave = useCallback((event: React.DragEvent<HTMLDivElement>): void => {
-    event.preventDefault()
-    setDragActive(false)
-  }, [])
-
   return (
-    <div
-      className={`quickWelcome${dragActive ? " quickWelcomeDragActive" : ""}`}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
-    >
+    <div className="quickWelcome">
       <div className="quickWelcomeInner">
         <h1 className="quickWelcomeTitle">把照片变成摄影作品卡</h1>
         <p className="quickWelcomeSubtitle">
@@ -101,10 +60,6 @@ export const QuickWelcome = ({
             ? "或点击「加载样片」使用内置样片体验流程"
             : "也可以直接把照片拖进这个窗口"}
         </p>
-
-        {dropHint !== null && (
-          <p className="panelHint quickWelcomeDropError">{dropHint}</p>
-        )}
 
         <div className="quickWelcomeValues">
           {VALUE_HINTS.map((hint) => (

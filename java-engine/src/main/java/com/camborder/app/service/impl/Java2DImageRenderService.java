@@ -52,8 +52,9 @@ public final class Java2DImageRenderService implements ImageRenderService {
 
     @Override
     public ComposeOutcome compose(final RenderRecipe recipe, final int maxWidth, final int maxHeight) {
-        // 读取并记录解码来源（标准格式 / RAW 真实显影 / 嵌入预览降级）
-        final ImageReader.ReadResult read = imageReader.readWithSource(recipe.getImagePath());
+        // 预览在读取阶段按目标盒做 subsampling；导出传 0/0 则保持原图解码。
+        final ImageReader.ReadResult read = imageReader.readWithSource(
+                recipe.getImagePath(), maxWidth, maxHeight);
         BufferedImage source = read.getImage();
         BufferedImage scaled = imageScaler.scale(source, maxWidth, maxHeight);
         BufferedImage canvas = borderComposer.compose(scaled, recipe.getBorder(), recipe.getGradient());

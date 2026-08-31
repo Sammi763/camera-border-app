@@ -4,6 +4,8 @@ import com.camborder.app.exception.PreviewGenerationException;
 import org.springframework.stereotype.Component;
 
 import javax.imageio.ImageIO;
+import javax.imageio.ImageReadParam;
+import javax.imageio.stream.ImageInputStream;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.File;
@@ -11,6 +13,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.Set;
 
 /**
@@ -71,6 +74,14 @@ public final class RawDecoder {
      * @throws PreviewGenerationException 当文件不存在、不可读或无法提取嵌入式预览时抛出
      */
     public BufferedImage decode(final String imagePath) {
+        return decode(imagePath, 0, 0);
+    }
+
+    /**
+     * 读取 RAW 内嵌 JPEG；预览传入目标盒时仅对嵌入 JPEG 做 subsampling，
+     * 导出传 0/0 保持内嵌预览的原始像素尺寸。
+     */
+    public BufferedImage decode(final String imagePath, final int maxWidth, final int maxHeight) {
         File file = new File(imagePath);
         if (!file.exists()) {
             throw new PreviewGenerationException("RAW 文件不存在: " + imagePath);
@@ -87,7 +98,7 @@ public final class RawDecoder {
         }
 
         // 扫描 JPEG SOI 标记并尝试解码
-        BufferedImage result = scanForJpegPreview(fileBytes);
+        BufferedImage result = scanForJpegPreview(fileBytes, maxWidth, maxHeight);
         if (result != null) {
             return result;
         }
@@ -123,7 +134,7 @@ public final class RawDecoder {
      * 扫描字节数组中的 JPEG SOI 标记，尝试解码为 BufferedImage。
      * 返回第一个成功解码的有效图像；未找到时返回 null。
      */
-    private BufferedImage scanForJpegPreview(final byte[] data) {
+    private BufferedImage scanForJpegPreview(final byte[] data, final int maxWidth, final int maxHeight) {
         int length = data.length;
         // 最少需要 SOI(2) + APP标记(1) + 其他(1) = 4 字节
         for (int i = 0; i < length - 3; i++) {
@@ -131,7 +142,7 @@ public final class RawDecoder {
                     && data[i + 1] == JPEG_SOI_MARKER_2
                     && data[i + 2] == JPEG_APP_MARKER) {
                 // 找到潜在的 JPEG SOI，尝试从该偏移解码
-                BufferedImage image = tryDecodeJpeg(data, i, length);
+                BufferedImage image = tryDecodeJpeg(data, i, length, maxWidth, maxHeight);
                 if (image != null) {
                     return image;
                 }
@@ -144,18 +155,38 @@ public final class RawDecoder {
      * 尝试从指定偏移解码 JPEG 数据。
      * 只返回尺寸大于最小阈值的有效图像，避免误取 EXIF 内嵌缩略图。
      */
-    private BufferedImage tryDecodeJpeg(final byte[] data, final int offset, final int totalLength) {
+    private BufferedImage tryDecodeJpeg(final byte[] data, final int offset, final int totalLength,
+                                        final int maxWidth, final int maxHeight) {
         // 可用字节数
         int available = totalLength - offset;
         if (available < MIN_JPEG_SIZE) {
             return null;
         }
 
-        try {
-            ByteArrayInputStream bais = new ByteArrayInputStream(data, offset, available);
-            BufferedImage image = ImageIO.read(bais);
-            if (image != null && image.getWidth() > 0 && image.getHeight() > 0) {
-                return image;
+        try (ByteArrayInputStream bais = new ByteArrayInputStream(data, offset, available);
+             ImageInputStream input = ImageIO.createImageInputStream(bais)) {
+            if (input == null) {
+                return null;
+            }
+            final Iterator<javax.imageio.ImageReader> readers = ImageIO.getImageReaders(input);
+            if (!readers.hasNext()) {
+                return null;
+            }
+            final javax.imageio.ImageReader reader = readers.next();
+            try {
+                reader.setInput(input, true, true);
+                final int subsampling = ImageDecodeSizing.subsamplingFor(
+                        reader.getWidth(0), reader.getHeight(0), maxWidth, maxHeight);
+                final ImageReadParam parameter = reader.getDefaultReadParam();
+                if (subsampling > 1) {
+                    parameter.setSourceSubsampling(subsampling, subsampling, 0, 0);
+                }
+                final BufferedImage image = reader.read(0, parameter);
+                if (image != null && image.getWidth() > 0 && image.getHeight() > 0) {
+                    return image;
+                }
+            } finally {
+                reader.dispose();
             }
         } catch (Exception ignored) {
             // 解码失败，继续扫描下一个 SOI

@@ -190,4 +190,9 @@ export type SettingsController = {
   readonly resetTextLayers: () => void
   /** 替换全部文字图层。 */
   readonly replaceTextLayers: (layers: readonly TextLayerSettings[]) => void
+  /** 渲染设置历史（不含每图覆盖；每图覆盖由 QueueController 管理）。 */
+  readonly canUndo: boolean
+  readonly canRedo: boolean
+  readonly undo: () => void
+  readonly redo: () => void
 }

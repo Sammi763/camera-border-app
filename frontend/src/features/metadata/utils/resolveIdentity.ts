@@ -95,6 +95,35 @@ export const resolvePresetIdentity = (
   return result
 }
 
+/** 导出任务使用的图片身份输入；调用方应传入任务开始时复制的快照。 */
+export type QueueIdentityInput = {
+  readonly filePath: string
+  readonly presetId: string | null
+  readonly identityOverride: Partial<PhotoIdentity> | null
+}
+
+/**
+ * 按指定的队列快照解析身份，不通过 id 回读实时队列。
+ *
+ * 导出开始后即使用户继续编辑同一图片的覆盖值，也不能污染已经排队的任务；
+ * EXIF 则由调用方在准备阶段完成读取后通过快照路径映射传入。
+ */
+export const resolveIdentityForQueueItem = (
+  item: QueueIdentityInput,
+  presets: readonly ShootingPreset[],
+  assetStore: PhotoAssetStore,
+  exifByPath: ReadonlyMap<string, PhotoMetadata>
+): PhotoIdentity => {
+  const preset = item.presetId === null
+    ? null
+    : presets.find((candidate) => candidate.id === item.presetId) ?? null
+  return mergeIdentityChain({
+    override: item.identityOverride,
+    preset: preset === null ? null : resolvePresetIdentity(preset, assetStore),
+    exif: exifByPath.get(item.filePath) ?? null
+  })
+}
+
 /**
  * 合并身份链：每图覆盖 > 摄影预设 > EXIF > 空。
  *

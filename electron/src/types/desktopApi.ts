@@ -125,6 +125,16 @@ export type DesktopApi = {
     maxHeight: number
   ) => Promise<LocalImagePreview | null>
   /**
+   * 检查工作会话中已知图片源路径是否仍是可读取的常规文件。
+   * 仅接受受支持图片扩展名与数量上限内的绝对路径；不返回文件内容或其他元数据。
+   */
+  readonly checkImagePaths: (paths: readonly string[]) => Promise<readonly boolean[]>
+  /**
+   * 获取预览缓存失效所需的最小文件版本信息。
+   * 仅接受受支持图片扩展名与数量上限内的绝对路径；结果与输入等长，非法/缺失项为 null。
+   */
+  readonly getImageFileVersions: (paths: readonly string[]) => Promise<readonly (ImageFileVersion | null)[]>
+  /**
    * 在系统默认应用中打开引擎日志文件（绝对路径）。
    * 由 IPC 层校验路径必须在 userData/logs 下；不存在或打开失败时返回 false。
    * 用于「查看日志」按钮直接打开日志文件本身（而非所在目录）。
@@ -137,6 +147,12 @@ export type LocalImagePreview = {
   readonly dataUrl: string
   readonly width: number
   readonly height: number
+}
+
+/** 图片缓存版本：只暴露 mtime 与字节数，不暴露文件内容或目录信息。 */
+export type ImageFileVersion = {
+  readonly mtimeMs: number
+  readonly sizeBytes: number
 }
 
 /**
@@ -183,5 +199,7 @@ export const IPC_CHANNELS = {
   RETRY_ENGINE_START: "desktop:retry-engine-start",
   SHOW_NOTIFICATION: "desktop:show-notification",
   LOAD_LOCAL_IMAGE_PREVIEW: "desktop:load-local-image-preview",
+  CHECK_IMAGE_PATHS: "desktop:check-image-paths",
+  GET_IMAGE_FILE_VERSIONS: "desktop:get-image-file-versions",
   OPEN_LOG_FILE: "desktop:open-log-file"
 } as const

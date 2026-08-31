@@ -31,8 +31,15 @@ export const fetchWithTimeout = (
   input: RequestInfo | URL,
   init: RequestInit | undefined,
   timeoutMs: number
-): Promise<Response> =>
-  fetch(input, { ...init, signal: AbortSignal.timeout(timeoutMs) })
+): Promise<Response> => {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs)
+  const callerSignal = init?.signal ?? undefined
+  // 预览切图时的主动取消与超时必须同时生效：任一信号终止都结束 fetch。
+  const signal = callerSignal === undefined
+    ? timeoutSignal
+    : AbortSignal.any([callerSignal, timeoutSignal])
+  return fetch(input, { ...init, signal })
+}
 
 export type EngineErrorBody = {
   readonly code?: unknown

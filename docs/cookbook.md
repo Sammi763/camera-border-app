@@ -197,6 +197,32 @@ grep -rn '](\.' README.md AGENTS.md CONTRIBUTING.md ARCHITECTURE.md DESIGN.md do
 
 **可验证终点**：以上命令全部通过；无指向不存在文件的相对链接。
 
+## 10. 实现异步导出、工作区状态与性能控制（阶段 2）
+
+**起点**：需要扩展批量导出、队列操作或预览吞吐；先确认不要把任务状态重新放回局部面板，
+也不要为预览和导出复制一套渲染字段。
+
+**步骤**：
+
+1. 导出请求使用 `RenderJobRequest.items`，每项同时携带冻结的 `RenderRecipe` 与
+   `ExportSettings`。`POST /api/render-jobs` 只接受任务并返回 `202 + jobId`；使用
+   `GET /api/render-jobs/{jobId}` 轮询总进度、当前项、逐项结果和失败原因；取消使用
+   `DELETE`，只取消尚未执行的项。
+2. 前端在 `WorkspacePage` 挂载根级 `useExportController`，提交前复制图片范围、设置和配方；
+   `PreviewPanel` 只负责显示状态和触发命令。单图、已选和全部图片由唯一
+   `operationScope`（`active / checked / all`）解析，`active` 与 `checked` 不互相改写。
+3. 队列删除、清空、撤销/重做和会话恢复都通过 `useQueue` 的快照完成。会话只保存结构化路径
+   与覆盖；恢复后用受限桌面 IPC 检查文件，丢失项标记为缺失，不恢复预览二进制或 object URL。
+   设置历史由 `useSettings` 管理；检查器分组用隐藏而非卸载保留表单草稿。
+4. 缩略图固定最多 2 个并发请求，预览请求切换时取消旧请求。解码请求带目标尺寸；缓存键必须
+   包含路径、目标尺寸、mtime、源字节数和配方哈希，并由字节上限控制，淘汰时释放 `blob:` URL。
+   不缓存完整分辨率 `BufferedImage`。
+5. 引擎已启动时执行 `pnpm perf:smoke`；脚本默认模拟 100 项队列，先用双并发预览，再提交
+   一个批量 `render-jobs` 并轮询至终态。性能 smoke 只使用专属临时目录，完成后自动清理。
+
+**可验证终点**：两端测试覆盖成功和失败路径；导出任务在面板切换后仍能显示进度，删除/撤销/恢复
+选择具有确定性；100 项 smoke 不超过声明的预览并发，导出逐项完成且无完整分辨率缓存残留。
+
 ## 新增一种边框风格（Canvas + Java2D 双端）
 
 风格几何规格的唯一权威定义在 `java-engine/src/main/java/com/camborder/app/util/BorderStyleRenderer`

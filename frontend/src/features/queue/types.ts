@@ -32,10 +32,14 @@ export type QueueItem = {
   readonly presetId: string | null
   /** 每张图独立的摄影身份覆盖。null 表示使用摄影预设或全局默认。 */
   readonly identityOverride: Partial<PhotoIdentity> | null
+  /** 会话恢复时发现源文件不可读取。保留条目供用户删除或重新导入。 */
+  readonly missing?: boolean
 }
 
-/** 批量操作作用范围：当前预览图 / 复选框选中图片 / 全部图片。 */
-export type BatchScope = "active" | "checked" | "all"
+/** 工作区唯一操作范围：当前预览图 / 复选框选中图片 / 全部图片。 */
+export type OperationScope = "active" | "checked" | "all"
+/** 旧名称兼容层；所有新状态与组件统一使用 OperationScope。 */
+export type BatchScope = OperationScope
 
 /** 导入结果（HEIC 转换反馈等）。 */
 export type ImportResult = {
@@ -67,6 +71,11 @@ export type QueueController = {
   readonly isBrowserMode: boolean
   /** 最近一次导入的结果（HEIC 转换反馈等）。 */
   readonly lastImportResult: ImportResult | null
+  /** 恢复会话后标记为丢失的图片数量。 */
+  readonly missingCount: number
+  /** 队列内容与每图覆盖的撤销/重做状态。 */
+  readonly canUndo: boolean
+  readonly canRedo: boolean
   readonly addImages: () => Promise<void>
   readonly addImageFiles: () => Promise<void>
   readonly addImageFolder: () => Promise<void>
@@ -78,14 +87,21 @@ export type QueueController = {
   /** 全选 / 取消全选。 */
   readonly checkAll: () => void
   readonly uncheckAll: () => void
+  /** 删除一张图片；删除当前图时确定性选择下一张，否则上一张。 */
+  readonly removeItem: (id: string) => void
+  /** 删除所有勾选图片。 */
+  readonly removeChecked: () => void
   readonly clear: () => void
+  /** 撤销/重做队列管理及每图覆盖更改。 */
+  readonly undo: () => void
+  readonly redo: () => void
   /** 更新当前预览图片的文字覆盖。 */
   readonly setActiveTextOverride: (text: string | null) => void
   readonly getEffectiveText: (id: string, globalText: string) => string
   /** 应用摄影预设到指定作用范围。 */
-  readonly assignPresetToScope: (presetId: string | null, scope: BatchScope) => void
+  readonly assignPresetToScope: (presetId: string | null, scope: OperationScope) => void
   /** 清除指定作用范围的预设绑定。 */
-  readonly clearPresetFromScope: (scope: BatchScope) => void
+  readonly clearPresetFromScope: (scope: OperationScope) => void
   /** 清除绑定到指定预设 ID 的所有图片的预设绑定（删除预设时调用）。 */
   readonly clearPresetBinding: (presetId: string) => void
   /** 更新当前预览图片的摄影身份覆盖。 */

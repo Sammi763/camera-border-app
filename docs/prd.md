@@ -936,8 +936,9 @@ Java Engine：
 - `GET /api/dev/photos`（样片浏览器，扫描仓库根 `photos/`）
 - `POST /api/preview`
 - `GET /previews/{id}`
-- `POST /api/render-jobs`（同步渲染，直接返回最终状态 completed + outputPath）
-- `GET /api/render-jobs/{jobId}`（查询最近一次任务，兼容保留）
+- `POST /api/render-jobs`（提交 1–100 个冻结快照，返回 `202 + jobId`；不等待渲染完成）
+- `GET /api/render-jobs/{jobId}`（查询总进度、当前项、逐项结果和失败原因）
+- `DELETE /api/render-jobs/{jobId}`（取消尚未执行的项；正在执行的项自然收尾）
 - `GET /api/film-formats`（拍摄画幅枚举 + 边框布局建议：数码 M43/APS-C/135 全画幅/4433，胶片半格/135/645/6×6/6×7/6×8/6×9/6×10/6×12；产品模型逐步统一为 capture formats）
 - `POST /api/photo-metadata`
 - `GET /api/fonts`（可用字体与内置字体）
@@ -950,7 +951,7 @@ Java Engine：
 - `GET /api/logos`：返回品牌 Logo 清单。
 - `GET /api/output-presets`：返回三个固定导出档位（快速分享、标准交付、高保真归档）；不返回未在 §0.3 定义的尺寸档位。
 - `POST /api/templates/validate`：校验版式 JSON 是否可用。
-- `POST /api/render-jobs/batch`：批量导出任务。
+- 不另设批量端点：单个 `POST /api/render-jobs` 的 `items` 数组同时覆盖单图和批量导出。
 - `POST /api/contact-sheets`：生成 Contact Sheet（延期能力，不进入 MVP）。
 - `GET /api/render-jobs/{jobId}/fidelity-report`：获取导出保真报告。
 - `POST /api/fidelity/compare`：对比原图和导出图的色彩与元数据差异。
@@ -989,6 +990,11 @@ Java Engine：
 ### 阶段 2：效率与排版增强
 
 目标：减少重复操作，让摄影师能更快地完成一组照片的统一出图和个别修正。
+
+本阶段当前实现的稳定性基线包括：异步 `render-jobs` 有界队列、根级导出控制器、独立的
+`active / checked / all` 作用域、队列与设置撤销/重做、工作会话恢复及丢失文件标记；预览与
+缩略图按目标尺寸解码、缩略图最多双并发、预览只保留最新请求，缓存按路径/尺寸/mtime/源字节数/
+配方哈希隔离并受字节预算约束。性能 smoke 用 `pnpm perf:smoke` 执行，前置为本机 Java 引擎已启动。
 
 任务：
 

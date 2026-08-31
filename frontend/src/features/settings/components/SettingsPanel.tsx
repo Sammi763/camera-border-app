@@ -69,7 +69,7 @@ export const SettingsPanel = ({
   setTextOverride,
   detectedBrandLabel
 }: SettingsPanelProps): JSX.Element => {
-  const { settings, update, updateNumber, updateTextLayer, resetTextLayers, replaceTextLayers } = controller
+  const { settings, update, updateNumber, updateTextLayer, resetTextLayers, replaceTextLayers, canUndo, canRedo, undo, redo } = controller
   const { fonts } = useSystemFonts()
   const [filmFormats, setFilmFormats] = useState<readonly FilmFormatInfo[]>(FALLBACK_FORMATS)
   const [exifStatus, setExifStatus] = useState<"idle" | "loading" | "error" | "empty">("idle")
@@ -189,6 +189,10 @@ export const SettingsPanel = ({
 
   return (
     <div className="settingsPanelInner">
+      <div className="presetActions" aria-label="渲染设置历史">
+        <button type="button" className="ghostButton" disabled={!canUndo} onClick={undo}>撤销设置</button>
+        <button type="button" className="ghostButton" disabled={!canRedo} onClick={redo}>重做设置</button>
+      </div>
       {!hasSelectedImage && (
         <p className="settingsCapabilityHint">
           请先加载并选择一张图片，设置将自动生效。

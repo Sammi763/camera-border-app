@@ -69,6 +69,16 @@ describe("requestPreview 超时兜底", () => {
     vi.stubGlobal("fetch", async () => jsonResponse({ error: "invalid recipe" }, 400))
     await expect(requestPreview(previewRequest, 30)).rejects.toThrow("invalid recipe")
   })
+
+  it("调用方切换图片时可主动取消旧预览请求", async () => {
+    hangingFetch()
+    const controller = new AbortController()
+    const pending = requestPreview(previewRequest, 1_000, controller.signal)
+
+    controller.abort()
+
+    await expect(pending).rejects.toThrow("引擎不可达")
+  })
 })
 
 describe("fetchEngineHealth 超时", () => {

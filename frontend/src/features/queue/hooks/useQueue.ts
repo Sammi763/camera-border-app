@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { fetchDevPhotos } from "../../../services/engine/devPhotosApi"
 import { resolveHeicPaths } from "../../../services/desktop/heicConvert"
 import { isHeicFile } from "../../metadata/constants/imageFormats"
@@ -7,64 +7,212 @@ import { createEmptyIdentity } from "../../metadata/types"
 import { mergeIdentityChain, resolvePresetIdentity } from "../../metadata/utils/resolveIdentity"
 import type { PhotoAssetStore, PhotoIdentity, ShootingPreset } from "../../metadata/types"
 import type { PhotoMetadata } from "../../../types/preview"
-import type { BatchScope, ImportResult, QueueController, QueueItem } from "../types"
+import type { ImportResult, OperationScope, QueueController, QueueItem } from "../types"
 import { resolveIdentityFieldSources } from "../../metadata/utils/resolveIdentityFieldSources"
+
+/** 工作会话只保存可恢复的队列状态，不保存二进制预览或临时 object URL。 */
+const QUEUE_SESSION_KEY = "workspace.queue-session.v1"
+const HISTORY_LIMIT = 50
+
+type QueueSnapshot = {
+  readonly items: readonly QueueItem[]
+  readonly activeItemId: string | null
+  readonly checkedItemIds: readonly string[]
+}
+
+const EMPTY_SNAPSHOT: QueueSnapshot = { items: [], activeItemId: null, checkedItemIds: [] }
+
+const cloneSnapshot = (snapshot: QueueSnapshot): QueueSnapshot => ({
+  items: [...snapshot.items],
+  activeItemId: snapshot.activeItemId,
+  checkedItemIds: [...snapshot.checkedItemIds]
+})
+
+const snapshotsEqual = (left: QueueSnapshot, right: QueueSnapshot): boolean =>
+  left.items === right.items
+  && left.activeItemId === right.activeItemId
+  && left.checkedItemIds === right.checkedItemIds
+
+const isPersistedQueueItem = (value: unknown): value is QueueItem => {
+  if (value === null || typeof value !== "object") return false
+  const item = value as Record<string, unknown>
+  return typeof item["id"] === "string"
+    && typeof item["filePath"] === "string"
+    && typeof item["fileName"] === "string"
+    && typeof item["sourcePath"] === "string"
+    && typeof item["sourceFormat"] === "string"
+    && typeof item["converted"] === "boolean"
+    && typeof item["workingFormat"] === "string"
+}
+
+/** 从本地会话恢复队列；损坏数据仅回退为空队列，不影响工作台启动。 */
+const readPersistedSnapshot = (): QueueSnapshot => {
+  try {
+    const raw = localStorage.getItem(QUEUE_SESSION_KEY)
+    if (raw === null) return EMPTY_SNAPSHOT
+    const parsed = JSON.parse(raw) as unknown
+    if (parsed === null || typeof parsed !== "object") return EMPTY_SNAPSHOT
+    const record = parsed as Record<string, unknown>
+    if (!Array.isArray(record["items"])) return EMPTY_SNAPSHOT
+    const items = record["items"].filter(isPersistedQueueItem)
+    const validIds = new Set(items.map((item) => item.id))
+    const activeItemId = typeof record["activeItemId"] === "string" && validIds.has(record["activeItemId"])
+      ? record["activeItemId"]
+      : (items[0]?.id ?? null)
+    const checkedItemIds = Array.isArray(record["checkedItemIds"])
+      ? record["checkedItemIds"].filter((id): id is string => typeof id === "string" && validIds.has(id))
+      : []
+    return { items, activeItemId, checkedItemIds: [...new Set(checkedItemIds)] }
+  } catch {
+    return EMPTY_SNAPSHOT
+  }
+}
+
+const writePersistedSnapshot = (snapshot: QueueSnapshot): void => {
+  try {
+    localStorage.setItem(QUEUE_SESSION_KEY, JSON.stringify(snapshot))
+  } catch {
+    // 私密模式或配额不足时不影响内存中的工作会话。
+  }
+}
+
+/** 从文件路径提取格式扩展名（不含点，小写）。 */
+const extractFormat = (filePath: string): string => {
+  const dotIndex = filePath.lastIndexOf(".")
+  return dotIndex > 0 ? filePath.slice(dotIndex + 1).toLowerCase() : ""
+}
+
+/** 删除后保持当前图选择确定：优先同下标的下一张，否则上一张。 */
+const selectAfterRemoval = (
+  before: readonly QueueItem[],
+  after: readonly QueueItem[],
+  activeItemId: string | null,
+  removedIds: ReadonlySet<string>
+): string | null => {
+  if (after.length === 0) return null
+  if (activeItemId !== null && !removedIds.has(activeItemId)) return activeItemId
+  const activeIndex = activeItemId === null ? -1 : before.findIndex((item) => item.id === activeItemId)
+  if (activeIndex < 0) return after[0]!.id
+  return after[activeIndex]?.id ?? after[activeIndex - 1]?.id ?? after[0]!.id
+}
+
+/** 会话恢复发现当前图丢失时，按队列顺序选择下一张可用图，否则上一张。 */
+const selectAvailableAfterMissing = (items: readonly QueueItem[], activeItemId: string | null): string | null => {
+  const current = activeItemId === null ? null : items.find((item) => item.id === activeItemId)
+  if (current !== null && current !== undefined && current.missing !== true) return current.id
+  const index = activeItemId === null ? -1 : items.findIndex((item) => item.id === activeItemId)
+  const after = items.slice(Math.max(0, index + 1)).find((item) => item.missing !== true)
+  if (after !== undefined) return after.id
+  const before = [...items.slice(0, Math.max(0, index))].reverse().find((item) => item.missing !== true)
+  return before?.id ?? null
+}
+
+const removeItemsFromSnapshot = (snapshot: QueueSnapshot, ids: ReadonlySet<string>): QueueSnapshot => {
+  if (ids.size === 0) return snapshot
+  const items = snapshot.items.filter((item) => !ids.has(item.id))
+  if (items.length === snapshot.items.length) return snapshot
+  return {
+    items,
+    activeItemId: selectAfterRemoval(snapshot.items, items, snapshot.activeItemId, ids),
+    checkedItemIds: snapshot.checkedItemIds.filter((id) => !ids.has(id))
+  }
+}
 
 /**
  * 维护图片队列及「当前预览图 / 批量选中」两组独立状态。
  *
- * 状态语义：
- * - activeItemId：点击缩略图切换，驱动预览与单图编辑；入队首张自动激活；
- * - checkedItemIds：复选框控制的批量选中集合，驱动预设批量应用与批量导出范围；
- *   清空队列时两组状态一并重置。
- *
- * 模式检测逻辑：
- * - Electron 模式：window.desktop 存在，使用系统文件/文件夹选择器
- * - 浏览器模式：window.desktop 不存在，降级调用 GET /api/dev/photos 获取样片
+ * 队列快照是图片删除、每图覆盖和预设绑定的唯一历史来源；active/checked 的
+ * 纯选择变化不污染撤销栈，因此 Ctrl+Z 始终撤销内容变更而不是浏览行为。
  */
 export const useQueue = (): QueueController => {
-  const [items, setItems] = useState<readonly QueueItem[]>([])
-  const [activeItemId, setActiveItemId] = useState<string | null>(null)
-  const [checkedItemIds, setCheckedItemIds] = useState<readonly string[]>([])
+  const snapshotRef = useRef<QueueSnapshot>(readPersistedSnapshot())
+  const undoStackRef = useRef<QueueSnapshot[]>([])
+  const redoStackRef = useRef<QueueSnapshot[]>([])
+  const [items, setItems] = useState<readonly QueueItem[]>(() => snapshotRef.current.items)
+  const [activeItemId, setActiveItemId] = useState<string | null>(() => snapshotRef.current.activeItemId)
+  const [checkedItemIds, setCheckedItemIds] = useState<readonly string[]>(() => snapshotRef.current.checkedItemIds)
   const [lastImportResult, setLastImportResult] = useState<ImportResult | null>(null)
+  // 历史实际存放在 ref，revision 仅用于让 canUndo/canRedo 同步重渲染。
+  const [, setHistoryRevision] = useState(0)
   const isBrowserMode = window.desktop === undefined
 
-  /** 从文件路径提取格式扩展名（不含点，小写）。 */
-  const extractFormat = (filePath: string): string => {
-    const dotIndex = filePath.lastIndexOf(".")
-    return dotIndex > 0 ? filePath.slice(dotIndex + 1).toLowerCase() : ""
-  }
+  const syncSnapshot = useCallback((next: QueueSnapshot): void => {
+    snapshotRef.current = next
+    setItems(next.items)
+    setActiveItemId(next.activeItemId)
+    setCheckedItemIds(next.checkedItemIds)
+  }, [])
 
-  /** 将路径列表追加到队列。队列原本为空时自动激活首张。HEIC 文件自动转换。 */
+  const commit = useCallback((mutate: (snapshot: QueueSnapshot) => QueueSnapshot, trackHistory = true): void => {
+    const previous = snapshotRef.current
+    const next = mutate(previous)
+    if (snapshotsEqual(previous, next)) return
+    if (trackHistory) {
+      undoStackRef.current = [...undoStackRef.current, cloneSnapshot(previous)].slice(-HISTORY_LIMIT)
+      redoStackRef.current = []
+      setHistoryRevision((version) => version + 1)
+    }
+    syncSnapshot(next)
+  }, [syncSnapshot])
+
+  // 每次内容或选择变化后写入本地会话；只保存结构化路径/设置，不缓存图片数据。
+  useEffect(() => {
+    writePersistedSnapshot({ items, activeItemId, checkedItemIds })
+  }, [activeItemId, checkedItemIds, items])
+
+  // 恢复后由受限 preload 白名单检查源文件是否仍存在；HEIC 会重新建立临时 JPEG。
+  useEffect(() => {
+    const checkImagePaths = window.desktop?.checkImagePaths
+    if (checkImagePaths === undefined || snapshotRef.current.items.length === 0) return
+    let active = true
+    void (async () => {
+      const originalPaths = snapshotRef.current.items.map((item) => item.sourcePath)
+      try {
+        const exists = await checkImagePaths(originalPaths)
+        if (!active) return
+        const converted = await resolveHeicPaths(originalPaths)
+        if (!active) return
+        commit((previous) => {
+          const restoredItems = previous.items.map((item, index) => {
+            const sourceExists = exists[index] === true
+            const resolved = converted[index]
+            const resolvedPath = resolved?.resolved
+            if (!sourceExists || resolvedPath === null || resolvedPath === undefined) {
+              return { ...item, missing: true }
+            }
+            return {
+              ...item,
+              filePath: resolvedPath,
+              converted: resolved?.converted ?? false,
+              workingFormat: resolved?.converted === true ? "jpg" : extractFormat(item.sourcePath),
+              missing: false
+            }
+          })
+          return {
+            items: restoredItems,
+            activeItemId: selectAvailableAfterMissing(restoredItems, previous.activeItemId),
+            checkedItemIds: previous.checkedItemIds
+          }
+        }, false)
+      } catch {
+        // 文件检查失败时保留会话，不把暂时性 IPC 故障误判为图片丢失。
+      }
+    })()
+    return () => { active = false }
+  }, [commit])
+
+  /** 将路径列表追加到队列；队列为空时自动激活首张。HEIC 文件自动转换。 */
   const appendPaths = useCallback(async (paths: readonly string[]): Promise<void> => {
-    if (paths.length === 0) {
-      return
-    }
-
-    // 转换 HEIC 文件为临时 JPEG（桌面模式）
+    if (paths.length === 0) return
     const converted = await resolveHeicPaths(paths)
-
     const validItems = converted.filter((item) => item.resolved !== null)
-    const failedFiles = converted
-      .filter((item) => item.resolved === null)
-      .map((item) => toFileName(item.original))
-    const convertedFiles = converted
-      .filter((item) => item.converted)
-      .map((item) => toFileName(item.original))
+    const failedFiles = converted.filter((item) => item.resolved === null).map((item) => toFileName(item.original))
+    const convertedFiles = converted.filter((item) => item.converted).map((item) => toFileName(item.original))
     const hasHeicUnsupported = paths.some(isHeicFile) && converted.some((item) => item.resolved === null && isHeicFile(item.original))
+    setLastImportResult({ successCount: validItems.length, failedFiles, convertedFiles, heicUnsupported: hasHeicUnsupported })
+    if (validItems.length === 0) return
 
-    setLastImportResult({
-      successCount: validItems.length,
-      failedFiles,
-      convertedFiles,
-      heicUnsupported: hasHeicUnsupported
-    })
-
-    if (validItems.length === 0) {
-      return
-    }
-
-    const added = validItems.map((item) => ({
+    const added: readonly QueueItem[] = validItems.map((item) => ({
       id: crypto.randomUUID(),
       filePath: item.resolved!,
       fileName: toFileName(item.original),
@@ -74,205 +222,179 @@ export const useQueue = (): QueueController => {
       workingFormat: item.converted ? "jpg" : extractFormat(item.original),
       textOverride: null,
       presetId: null,
-      identityOverride: null
+      identityOverride: null,
+      missing: false
     }))
+    commit((previous) => ({
+      items: [...previous.items, ...added],
+      activeItemId: previous.items.length === 0 ? added[0]!.id : previous.activeItemId,
+      checkedItemIds: previous.checkedItemIds
+    }))
+  }, [commit])
 
-    // 队列原本为空（首次导入或清空后重新导入）时自动激活第一张；
-    // 后续导入不改变当前预览图，也不改变批量选中集合。
-    const wasEmpty = items.length === 0
-    setItems((previous) => [...previous, ...added])
-    if (wasEmpty && added.length > 0) {
-      setActiveItemId(added[0]!.id)
-    }
-  }, [items.length])
-
-  /** 统一入口：Electron 模式用 selectImageSources，浏览器模式降级。 */
+  /** Electron 模式使用原生选择器；浏览器开发模式回退到引擎样片。 */
   const addImages = useCallback(async (): Promise<void> => {
-    const paths = await loadSourcePaths()
-    appendPaths(paths)
+    await appendPaths(await loadSourcePaths())
   }, [appendPaths])
 
-  /** 选择图片文件加入队列。 */
   const addImageFiles = useCallback(async (): Promise<void> => {
     const bridge = window.desktop
     if (bridge !== undefined) {
-      // Electron 模式：使用独立文件选择器
-      const selectFiles = bridge.selectImageFiles
-      if (selectFiles !== undefined) {
-        const paths = await selectFiles()
-        appendPaths(paths)
+      if (bridge.selectImageFiles !== undefined) {
+        await appendPaths(await bridge.selectImageFiles())
         return
       }
-      // 回退到旧 API
       const result = await bridge.selectImageSources()
-      if (result === null || result.paths.length === 0) {
-        return
-      }
-      appendPaths(result.paths)
+      if (result !== null) await appendPaths(result.paths)
       return
     }
-
-    // 浏览器模式降级
     try {
-      const paths = await fetchDevPhotos()
-      appendPaths(paths)
+      await appendPaths(await fetchDevPhotos())
     } catch {
-      // 静默忽略
+      // 开发样片不可用时保持当前队列。
     }
   }, [appendPaths])
 
-  /** 选择图片文件夹加入队列。 */
   const addImageFolder = useCallback(async (): Promise<void> => {
     const bridge = window.desktop
     if (bridge !== undefined) {
-      // Electron 模式：使用独立文件夹选择器
-      const selectFolder = bridge.selectImageFolder
-      if (selectFolder !== undefined) {
-        const result = await selectFolder()
-        if (result === null) {
-          // 用户取消了选择
-          return
-        }
-        if (result.paths.length === 0) {
-          // 空文件夹，由 UI 层提示
-          appendPaths([])
-          return
-        }
-        appendPaths(result.paths)
+      if (bridge.selectImageFolder !== undefined) {
+        const result = await bridge.selectImageFolder()
+        if (result !== null) await appendPaths(result.paths)
         return
       }
-      // 回退到旧 API
       const result = await bridge.selectImageSources()
-      if (result === null || result.paths.length === 0) {
-        return
-      }
-      appendPaths(result.paths)
+      if (result !== null) await appendPaths(result.paths)
       return
     }
-
-    // 浏览器模式降级
     try {
-      const paths = await fetchDevPhotos()
-      appendPaths(paths)
+      await appendPaths(await fetchDevPhotos())
     } catch {
-      // 静默忽略
+      // 开发样片不可用时保持当前队列。
     }
   }, [appendPaths])
 
-  /** 切换当前预览图片。不改变批量选中集合。 */
+  /** 切换预览图不影响 checked，且不进入撤销栈。 */
   const setActive = useCallback((id: string): void => {
-    setActiveItemId(id)
-  }, [])
+    commit((previous) => previous.items.some((item) => item.id === id)
+      ? { ...previous, activeItemId: id }
+      : previous, false)
+  }, [commit])
 
-  /** 切换某张图片的批量选中状态。不影响当前预览图。 */
+  /** 勾选状态与 active 完全独立，且不进入内容撤销栈。 */
   const toggleChecked = useCallback((id: string): void => {
-    setCheckedItemIds((previous) =>
-      previous.includes(id)
-        ? previous.filter((checkedId) => checkedId !== id)
-        : [...previous, id]
-    )
-  }, [])
+    commit((previous) => {
+      if (!previous.items.some((item) => item.id === id)) return previous
+      return {
+        ...previous,
+        checkedItemIds: previous.checkedItemIds.includes(id)
+          ? previous.checkedItemIds.filter((checkedId) => checkedId !== id)
+          : [...previous.checkedItemIds, id]
+      }
+    }, false)
+  }, [commit])
 
-  /** 全选队列全部图片。 */
   const checkAll = useCallback((): void => {
-    setCheckedItemIds(items.map((item) => item.id))
-  }, [items])
+    commit((previous) => ({ ...previous, checkedItemIds: previous.items.map((item) => item.id) }), false)
+  }, [commit])
 
-  /** 取消全选。 */
   const uncheckAll = useCallback((): void => {
-    setCheckedItemIds([])
-  }, [])
+    commit((previous) => ({ ...previous, checkedItemIds: [] }), false)
+  }, [commit])
+
+  const removeItem = useCallback((id: string): void => {
+    commit((previous) => removeItemsFromSnapshot(previous, new Set([id])))
+  }, [commit])
+
+  const removeChecked = useCallback((): void => {
+    commit((previous) => removeItemsFromSnapshot(previous, new Set(previous.checkedItemIds)))
+  }, [commit])
 
   const clear = useCallback((): void => {
-    setItems([])
-    setActiveItemId(null)
-    setCheckedItemIds([])
-  }, [])
+    commit(() => EMPTY_SNAPSHOT)
+  }, [commit])
 
-  /** 更新当前预览图片的文字覆盖。 */
-  const setActiveTextOverride = useCallback((text: string | null): void => {
-    setItems((previous) =>
-      previous.map((item) =>
-        item.id === activeItemId ? { ...item, textOverride: text } : item
-      )
-    )
-  }, [activeItemId])
+  const undo = useCallback((): void => {
+    const previous = undoStackRef.current.at(-1)
+    if (previous === undefined) return
+    undoStackRef.current = undoStackRef.current.slice(0, -1)
+    redoStackRef.current = [...redoStackRef.current, cloneSnapshot(snapshotRef.current)].slice(-HISTORY_LIMIT)
+    syncSnapshot(cloneSnapshot(previous))
+    setHistoryRevision((version) => version + 1)
+  }, [syncSnapshot])
 
-  const getEffectiveText = useCallback((id: string, globalText: string): string => {
-    const item = items.find((i) => i.id === id)
-    if (item?.textOverride !== null && item?.textOverride !== undefined) {
-      return item.textOverride
-    }
-    return globalText
-  }, [items])
+  const redo = useCallback((): void => {
+    const next = redoStackRef.current.at(-1)
+    if (next === undefined) return
+    redoStackRef.current = redoStackRef.current.slice(0, -1)
+    undoStackRef.current = [...undoStackRef.current, cloneSnapshot(snapshotRef.current)].slice(-HISTORY_LIMIT)
+    syncSnapshot(cloneSnapshot(next))
+    setHistoryRevision((version) => version + 1)
+  }, [syncSnapshot])
 
-  /** 解析作用范围对应的图片 id 集合。 */
-  const resolveScopeIds = useCallback((scope: BatchScope, currentItems: readonly QueueItem[], currentActiveId: string | null, currentCheckedIds: readonly string[]): readonly string[] => {
+  const resolveScopeIds = useCallback((scope: OperationScope, snapshot: QueueSnapshot): readonly string[] => {
     switch (scope) {
       case "active":
-        return currentActiveId !== null ? [currentActiveId] : []
+        return snapshot.activeItemId === null ? [] : [snapshot.activeItemId]
       case "checked":
-        return currentCheckedIds
+        return snapshot.checkedItemIds
       case "all":
-        return currentItems.map((item) => item.id)
+        return snapshot.items.map((item) => item.id)
     }
   }, [])
 
-  /** 应用摄影预设到指定作用范围（当前预览图 / 已选图片 / 全部图片）。 */
-  const assignPresetToScope = useCallback((presetId: string | null, scope: BatchScope): void => {
-    setItems((previous) => {
-      const targetIds = new Set(resolveScopeIds(scope, previous, activeItemId, checkedItemIds))
-      if (targetIds.size === 0) {
-        return previous
+  const assignPresetToScope = useCallback((presetId: string | null, scope: OperationScope): void => {
+    commit((previous) => {
+      const targetIds = new Set(resolveScopeIds(scope, previous))
+      if (targetIds.size === 0) return previous
+      return {
+        ...previous,
+        items: previous.items.map((item) => targetIds.has(item.id) ? { ...item, presetId } : item)
       }
-      return previous.map((item) =>
-        targetIds.has(item.id) ? { ...item, presetId } : item
-      )
     })
-  }, [activeItemId, checkedItemIds, resolveScopeIds])
+  }, [commit, resolveScopeIds])
 
-  /** 清除指定作用范围的预设绑定。 */
-  const clearPresetFromScope = useCallback((scope: BatchScope): void => {
+  const clearPresetFromScope = useCallback((scope: OperationScope): void => {
     assignPresetToScope(null, scope)
   }, [assignPresetToScope])
 
-  /** 清除绑定到指定预设 ID 的所有图片的预设绑定（删除预设时调用）。 */
   const clearPresetBinding = useCallback((presetId: string): void => {
-    setItems((previous) =>
-      previous.map((item) =>
-        item.presetId === presetId ? { ...item, presetId: null } : item
-      )
-    )
-  }, [])
+    commit((previous) => ({
+      ...previous,
+      items: previous.items.map((item) => item.presetId === presetId ? { ...item, presetId: null } : item)
+    }))
+  }, [commit])
 
-  /** 更新当前预览图片的摄影身份覆盖。 */
+  const setActiveTextOverride = useCallback((text: string | null): void => {
+    commit((previous) => ({
+      ...previous,
+      items: previous.items.map((item) => item.id === previous.activeItemId ? { ...item, textOverride: text } : item)
+    }))
+  }, [commit])
+
   const setActiveIdentityOverride = useCallback((patch: Partial<PhotoIdentity>): void => {
-    setItems((previous) =>
-      previous.map((item) => {
-        if (item.id !== activeItemId) {
-          return item
-        }
-        const current = item.identityOverride ?? {}
-        const merged = { ...current, ...patch }
-        // 清理所有值为空字符串的字段
-        const cleaned = Object.fromEntries(
-          Object.entries(merged).filter(([, v]) => v !== "")
-        ) as Partial<PhotoIdentity>
-        // 如果所有字段都为空，设为 null
-        const hasValues = Object.keys(cleaned).length > 0
-        return { ...item, identityOverride: hasValues ? cleaned : null }
+    commit((previous) => ({
+      ...previous,
+      items: previous.items.map((item) => {
+        if (item.id !== previous.activeItemId) return item
+        const merged = { ...(item.identityOverride ?? {}), ...patch }
+        const cleaned = Object.fromEntries(Object.entries(merged).filter(([, value]) => value !== "")) as Partial<PhotoIdentity>
+        return { ...item, identityOverride: Object.keys(cleaned).length === 0 ? null : cleaned }
       })
-    )
-  }, [activeItemId])
+    }))
+  }, [commit])
 
-  /** 清除当前预览图片的摄影身份覆盖。 */
   const clearActiveIdentityOverride = useCallback((): void => {
-    setItems((previous) =>
-      previous.map((item) =>
-        item.id === activeItemId ? { ...item, identityOverride: null } : item
-      )
-    )
-  }, [activeItemId])
+    commit((previous) => ({
+      ...previous,
+      items: previous.items.map((item) => item.id === previous.activeItemId ? { ...item, identityOverride: null } : item)
+    }))
+  }, [commit])
+
+  const getEffectiveText = useCallback((id: string, globalText: string): string => {
+    const item = snapshotRef.current.items.find((candidate) => candidate.id === id)
+    return item?.textOverride ?? globalText
+  }, [])
 
   const getEffectiveIdentity = useCallback((
     itemId: string,
@@ -280,50 +402,34 @@ export const useQueue = (): QueueController => {
     assetStore: PhotoAssetStore,
     exifByPath?: ReadonlyMap<string, PhotoMetadata>
   ): PhotoIdentity => {
-    const item = items.find((i) => i.id === itemId)
-    if (item === undefined) {
-      return createEmptyIdentity()
-    }
-
-    // 优先级：每图覆盖 > 摄影预设 > EXIF > 空默认（合并逻辑见 metadata/utils/resolveIdentity.ts）
-    const preset = item.presetId !== null
-      ? presets.find((p) => p.id === item.presetId) ?? null
-      : null
-    const presetIdentity = preset !== null ? resolvePresetIdentity(preset, assetStore) : null
-    const exif = exifByPath?.get(item.filePath) ?? null
-
+    const item = snapshotRef.current.items.find((candidate) => candidate.id === itemId)
+    if (item === undefined) return createEmptyIdentity()
+    const preset = item.presetId === null ? null : presets.find((candidate) => candidate.id === item.presetId) ?? null
     return mergeIdentityChain({
       override: item.identityOverride,
-      preset: presetIdentity,
-      exif
+      preset: preset === null ? null : resolvePresetIdentity(preset, assetStore),
+      exif: exifByPath?.get(item.filePath) ?? null
     })
-  }, [items])
+  }, [])
 
-  /** 计算各展示字段的来源标识（判定逻辑与 getEffectiveIdentity 的合并链一致）。 */
   const getIdentitySources = useCallback((
     itemId: string,
     presets: readonly ShootingPreset[],
     assetStore: PhotoAssetStore,
     exifByPath?: ReadonlyMap<string, PhotoMetadata>
   ): ReturnType<typeof resolveIdentityFieldSources> => {
-    const item = items.find((i) => i.id === itemId)
-    if (item === undefined) {
-      return resolveIdentityFieldSources({ override: null, preset: null, exif: null })
-    }
-    const preset = item.presetId !== null
-      ? presets.find((p) => p.id === item.presetId) ?? null
-      : null
-    const presetIdentity = preset !== null ? resolvePresetIdentity(preset, assetStore) : null
-    const exif = exifByPath?.get(item.filePath) ?? null
+    const item = snapshotRef.current.items.find((candidate) => candidate.id === itemId)
+    if (item === undefined) return resolveIdentityFieldSources({ override: null, preset: null, exif: null })
+    const preset = item.presetId === null ? null : presets.find((candidate) => candidate.id === item.presetId) ?? null
     return resolveIdentityFieldSources({
       override: item.identityOverride,
-      preset: presetIdentity,
-      exif
+      preset: preset === null ? null : resolvePresetIdentity(preset, assetStore),
+      exif: exifByPath?.get(item.filePath) ?? null
     })
-  }, [items])
+  }, [])
 
   const activeItem = items.find((item) => item.id === activeItemId) ?? null
-  const activeFilePath = activeItem === null ? null : activeItem.filePath
+  const activeFilePath = activeItem === null || activeItem.missing === true ? null : activeItem.filePath
   const activeTextOverride = activeItem?.textOverride ?? null
 
   return {
@@ -336,6 +442,9 @@ export const useQueue = (): QueueController => {
     activeTextOverride,
     isBrowserMode,
     lastImportResult,
+    missingCount: items.filter((item) => item.missing === true).length,
+    canUndo: undoStackRef.current.length > 0,
+    canRedo: redoStackRef.current.length > 0,
     addImages,
     addImageFiles,
     addImageFolder,
@@ -344,7 +453,11 @@ export const useQueue = (): QueueController => {
     toggleChecked,
     checkAll,
     uncheckAll,
+    removeItem,
+    removeChecked,
     clear,
+    undo,
+    redo,
     setActiveTextOverride,
     getEffectiveText,
     assignPresetToScope,
@@ -357,32 +470,16 @@ export const useQueue = (): QueueController => {
   }
 }
 
-/**
- * 获取图片来源路径列表。
- *
- * Electron 模式：优先使用 selectImageSources（支持文件+文件夹选择）；
- *   若不存在则回退到旧 selectImages。
- * 浏览器模式：从 Java 引擎的 /api/dev/photos 端点获取样片路径。
- *
- * 返回空数组表示用户取消或无可用图片，调用方静默忽略即可。
- */
+/** 获取图片来源路径列表。 */
 const loadSourcePaths = async (): Promise<readonly string[]> => {
   const bridge = window.desktop
   if (bridge !== undefined) {
-    // 优先使用新的统一图片来源选择 API
     if (bridge.selectImageSources !== undefined) {
       const result = await bridge.selectImageSources()
-      if (result === null) {
-        // 用户取消了选择
-        return []
-      }
-      return result.paths
+      return result?.paths ?? []
     }
-    // 回退到旧 API（兼容）
     return bridge.selectImages()
   }
-
-  // 浏览器模式降级
   try {
     return await fetchDevPhotos()
   } catch {

@@ -90,6 +90,12 @@ const DEFAULT_SETTINGS: RenderSettings = {
   }
 }
 
+/** 设置含嵌套图层/渐变对象；历史快照必须深复制，不能保留可变引用。 */
+const cloneSettings = (settings: RenderSettings): RenderSettings =>
+  JSON.parse(JSON.stringify(settings)) as RenderSettings
+
+const SETTINGS_HISTORY_LIMIT = 50
+
 /**
  * 设置防抖延迟（毫秒）。
  * 用户连续输入文字时，不会每个键都触发预览请求，
@@ -121,9 +127,14 @@ const clampNumber = (value: number, fallback: number, min: number, max: number):
  * - textLayers 变化也触发防抖预览
  */
 export const useSettings = (): SettingsController => {
-  const [settings, setSettings] = useState<RenderSettings>(DEFAULT_SETTINGS)
+  const settingsRef = useRef<RenderSettings>(cloneSettings(DEFAULT_SETTINGS))
+  const undoStackRef = useRef<RenderSettings[]>([])
+  const redoStackRef = useRef<RenderSettings[]>([])
+  const [settings, setSettings] = useState<RenderSettings>(() => settingsRef.current)
   const [settingsVersion, setSettingsVersion] = useState(0)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // 历史本体存 ref；revision 只用于让 canUndo/canRedo 及时刷新。
+  const [, setHistoryRevision] = useState(0)
 
   const scheduleVersionBump = useCallback(() => {
     if (debounceRef.current !== null) {
@@ -143,56 +154,103 @@ export const useSettings = (): SettingsController => {
     }
   }, [])
 
-  const update = useCallback((patch: Partial<RenderSettings>): void => {
-    setSettings((prev) => ({ ...prev, ...patch }))
+  /** 记录一次内容变更并切断嵌套对象引用。 */
+  const commitSettings = useCallback((mutate: (current: RenderSettings) => RenderSettings): void => {
+    const previous = settingsRef.current
+    const next = mutate(previous)
+    if (next === previous) {
+      return
+    }
+    undoStackRef.current = [...undoStackRef.current, cloneSettings(previous)].slice(-SETTINGS_HISTORY_LIMIT)
+    redoStackRef.current = []
+    const frozenNext = cloneSettings(next)
+    settingsRef.current = frozenNext
+    setSettings(frozenNext)
+    setHistoryRevision((version) => version + 1)
     scheduleVersionBump()
   }, [scheduleVersionBump])
 
+  const update = useCallback((patch: Partial<RenderSettings>): void => {
+    commitSettings((previous) => ({ ...previous, ...patch }))
+  }, [commitSettings])
+
   const updateNumber = useCallback(
     (key: NumberSettingKey, value: number, min: number, max: number): void => {
-      setSettings((prev) => {
-        const fallback = prev[key]
-        return { ...prev, [key]: clampNumber(value, fallback, min, max) }
+      commitSettings((previous) => {
+        const fallback = previous[key]
+        return { ...previous, [key]: clampNumber(value, fallback, min, max) }
       })
-      scheduleVersionBump()
     },
-    [scheduleVersionBump]
+    [commitSettings]
   )
 
   /** 更新指定文字图层。 */
   const updateTextLayer = useCallback(
     (layerId: string, patch: Partial<TextLayerSettings>): void => {
-      setSettings((prev) => ({
-        ...prev,
-        textLayers: prev.textLayers.map((layer) =>
+      commitSettings((previous) => ({
+        ...previous,
+        textLayers: previous.textLayers.map((layer) =>
           layer.id === layerId ? { ...layer, ...patch } : layer
         )
       }))
-      scheduleVersionBump()
     },
-    [scheduleVersionBump]
+    [commitSettings]
   )
 
   /** 恢复默认 3 段文字图层。 */
   const resetTextLayers = useCallback((): void => {
-    setSettings((prev) => ({
-      ...prev,
+    commitSettings((previous) => ({
+      ...previous,
       textLayers: createDefaultTextLayers()
     }))
-    scheduleVersionBump()
-  }, [scheduleVersionBump])
+  }, [commitSettings])
 
   /** 替换全部文字图层。 */
   const replaceTextLayers = useCallback(
     (layers: readonly TextLayerSettings[]): void => {
-      setSettings((prev) => ({
-        ...prev,
+      commitSettings((previous) => ({
+        ...previous,
         textLayers: layers
       }))
-      scheduleVersionBump()
     },
-    [scheduleVersionBump]
+    [commitSettings]
   )
 
-  return { settings, settingsVersion, update, updateNumber, updateTextLayer, resetTextLayers, replaceTextLayers }
+  const undo = useCallback((): void => {
+    const previous = undoStackRef.current.at(-1)
+    if (previous === undefined) return
+    undoStackRef.current = undoStackRef.current.slice(0, -1)
+    redoStackRef.current = [...redoStackRef.current, cloneSettings(settingsRef.current)].slice(-SETTINGS_HISTORY_LIMIT)
+    const restored = cloneSettings(previous)
+    settingsRef.current = restored
+    setSettings(restored)
+    setHistoryRevision((version) => version + 1)
+    scheduleVersionBump()
+  }, [scheduleVersionBump])
+
+  const redo = useCallback((): void => {
+    const next = redoStackRef.current.at(-1)
+    if (next === undefined) return
+    redoStackRef.current = redoStackRef.current.slice(0, -1)
+    undoStackRef.current = [...undoStackRef.current, cloneSettings(settingsRef.current)].slice(-SETTINGS_HISTORY_LIMIT)
+    const restored = cloneSettings(next)
+    settingsRef.current = restored
+    setSettings(restored)
+    setHistoryRevision((version) => version + 1)
+    scheduleVersionBump()
+  }, [scheduleVersionBump])
+
+  return {
+    settings,
+    settingsVersion,
+    update,
+    updateNumber,
+    updateTextLayer,
+    resetTextLayers,
+    replaceTextLayers,
+    canUndo: undoStackRef.current.length > 0,
+    canRedo: redoStackRef.current.length > 0,
+    undo,
+    redo
+  }
 }

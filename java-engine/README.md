@@ -29,8 +29,9 @@ java-engine/src/main/java/com/camborder/app/
 | GET | `/api/dev/photos` | 样片浏览器：扫描仓库根 `photos/`（可用 `app.dev.photos-dir` 覆盖） |
 | POST | `/api/preview` | 生成预览，返回预览 id |
 | GET | `/previews/{id}` | 获取预览 PNG |
-| POST | `/api/render-jobs` | 同步渲染导出（直接返回 completed + outputPath） |
-| GET | `/api/render-jobs/{jobId}` | 查询最近一次任务（兼容保留） |
+| POST | `/api/render-jobs` | 提交 1–100 个冻结导出快照，返回 `202 + jobId` |
+| GET | `/api/render-jobs/{jobId}` | 查询总进度、当前项、逐项结果与失败原因 |
+| DELETE | `/api/render-jobs/{jobId}` | 取消尚未执行的项；当前写盘项自然收尾 |
 | GET | `/api/film-formats` | 画幅枚举 + 推荐边框（仅建议，不强制）：数码 M43/APS-C/135 全画幅/4433，胶片半格/135/645/6x6/6x7/6x8/6x9/6x10/6x12（6x10 新增、6x12 保留，与前端画幅目录契约一致） |
 | POST | `/api/photo-metadata` | EXIF 元数据读取 |
 | GET | `/api/fonts` | 引擎可用字体族列表 |
@@ -44,11 +45,11 @@ Origin 加入该配置。
 
 ## 渲染管线（预览与导出共用）
 
-`ImageReader`（ImageIO；RAW 仅由 `RawDecoder` 提取可读取的内嵌 JPEG 预览；无内嵌 JPEG
-时返回受控失败，来源随响应 sourceDecode 返回）
+`ImageReader`（预览/缩略图按目标盒在 ImageIO 解码阶段 subsampling；导出传无约束尺寸；RAW
+仅由 `RawDecoder` 提取可读取的内嵌 JPEG 预览；无内嵌 JPEG 时返回受控失败）
 → `ImageScaler`（按目标尺寸等比缩放）
 → `BorderComposer` / `GradientPainter` / `BorderStyleRenderer` / `TextRenderer` / `LogoRenderer`
-→ `ImageEncoder`（PNG/JPEG）→ `OutputPathValidator`（导出路径校验，父目录可写）。
+→ `ImageEncoder`（PNG/JPEG/TIFF）→ `OutputPathValidator`（导出路径校验，父目录可写）。
 
 预览与导出共享同一套 `ImageRenderService` 渲染逻辑，避免「预览对、导出不对」（[ADR-0002](../docs/adr/0002-preview-export-share-recipe.md)）。
 
@@ -70,7 +71,8 @@ archive-label-box）。几何规格的唯一权威定义在 `util/BorderStyleRen
 
 ## 存储语义
 
-- `RenderJobStore` / `PreviewStore`：**内存** `ConcurrentHashMap`，进程重启即丢失（[ADR-0006](../docs/adr/0006-three-process-memory-stores.md)）。
+- `RenderJobStore`：内存任务状态表，进程重启即丢失；`PreviewStore`：按 LRU 条目数和 PNG
+  字节数同时受限的内存预览表，绝不缓存完整分辨率 `BufferedImage`（[ADR-0006](../docs/adr/0006-three-process-memory-stores.md)）。
 - 无数据库；用户数据（模板、相机/镜头/胶片资产、摄影预设）由 Electron 主进程持久化，引擎不持有；旧 Roll 数据迁移由 Electron/前端处理。
 
 ## 验证

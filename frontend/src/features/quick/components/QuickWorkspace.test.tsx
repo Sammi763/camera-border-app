@@ -6,6 +6,7 @@ import type { PreviewState } from "../../preview/types"
 import type { RenderSettings } from "../../settings/types"
 import type { PhotoIdentity } from "../../metadata/types"
 import type { BatchScope } from "../../queue/types"
+import type { ExportController } from "../../preview/hooks/useExportController"
 
 /**
  * 快速出图模式导出禁用回归测试：
@@ -54,6 +55,9 @@ const makeQueue = (items: readonly QueueItem[]): QueueController => ({
   activeTextOverride: null,
   checkedItemIds: [],
   checkedCount: 0,
+  missingCount: 0,
+  canUndo: false,
+  canRedo: false,
   isBrowserMode: false,
   lastImportResult: null,
   addImages: vi.fn(async () => {}),
@@ -64,7 +68,11 @@ const makeQueue = (items: readonly QueueItem[]): QueueController => ({
   toggleChecked: vi.fn(),
   checkAll: vi.fn(),
   uncheckAll: vi.fn(),
+  removeItem: vi.fn(),
+  removeChecked: vi.fn(),
   clear: vi.fn(),
+  undo: vi.fn(),
+  redo: vi.fn(),
   setActiveTextOverride: vi.fn(),
   getEffectiveText: vi.fn(() => ""),
   assignPresetToScope: vi.fn(),
@@ -82,6 +90,18 @@ const identity: PhotoIdentity = {
   camera: "", lens: "", film: "", developer: "", scanner: "", lab: "", location: "", rollName: "", frameNumber: "", captureFormat: ""
 }
 
+const makeExportController = (): ExportController => ({
+  single: { kind: "idle" },
+  batch: { kind: "idle" },
+  isExporting: false,
+  isBatchExporting: false,
+  startSingleExport: vi.fn(async () => {}),
+  startBatchExport: vi.fn(async () => {}),
+  retryFailed: vi.fn(async () => {}),
+  cancelActiveExport: vi.fn(async () => {}),
+  openExportDirectory: vi.fn()
+})
+
 const renderQuick = (engineAvailable: boolean, engineUnavailableReason: string | null = null): void => {
   const items = [makeItem("a", "/photos/a.jpg"), makeItem("b", "/photos/b.jpg")]
   render(    <QuickWorkspace
@@ -95,17 +115,17 @@ const renderQuick = (engineAvailable: boolean, engineUnavailableReason: string |
       activePresetId={null}
       recommendedTemplateId={null}
       currentImage={document.createElement("img")}
-      resolveQueueItem={vi.fn(() => ({ textOverride: null, resolvedLayers: [], brand: null }))}
-      prepareExifForExport={vi.fn(async () => {})}
+      exportController={makeExportController()}
       resolvedBrand={null}
       resolvedTextOverride={null}
       resolvedTextLayers={null}
-      batchExportItems={items}
       batchExportLabel="批量导出 2 张"
       engineAvailable={engineAvailable}
       engineUnavailableReason={engineUnavailableReason}
       onApplyTemplate={vi.fn()}
       onApplyInfoCardVariant={vi.fn()}
+      operationScope="all"
+      onOperationScopeChange={vi.fn()}
       onApplyPreset={vi.fn((_id: string, _scope: BatchScope) => {})}
       onClearPreset={vi.fn((_scope: BatchScope) => {})}
       onCreatePresetFromText={vi.fn()}

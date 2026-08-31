@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { requestPreview } from "../../../services/engine/previewApi"
+import {
+  createPreviewCacheKey,
+  hashRenderRecipe,
+  previewUrlCache
+} from "../../../services/engine/previewCache"
+import { getImageFileVersions } from "../../../services/desktop/imageFileVersion"
 import { toFileName } from "../../../utils/fileName"
 import { buildPlainImagePreviewRequest, buildPreviewRequest } from "../../settings/utils/buildRecipe"
 import { loadLocalImagePreview, isLocalPreviewSupported, isRawOrHeicFile } from "../../../services/desktop/localImagePreview"
@@ -15,10 +21,11 @@ const PREVIEW_MAX_HEIGHT = 1280
  * 生产环境的绝对 Java 地址不会进入渲染进程；data URL 仅用于本地降级预览。
  */
 const resolveDisplayUrl = (previewUrl: string): string | null => {
-  if (previewUrl.startsWith("data:")) {
+  if (previewUrl.startsWith("data:image/")) {
     return previewUrl
   }
-  if (previewUrl.startsWith("/")) {
+  // Java 只允许返回单段预览资源；避免 //host 或 /../ 路径绕过 app:// 代理边界。
+  if (/^\/previews\/[A-Za-z0-9_-]+$/.test(previewUrl)) {
     return previewUrl
   }
   return null
@@ -40,7 +47,7 @@ const toErrorMessage = (error: unknown): string => {
  *
  * textOverride 为当前图片的快捷单段文字覆盖，会覆盖 textLayers[0] 的 content。
  * resolvedTextLayers 为每段文字图层解析变量后的内容数组，用于多段文字模式。
- * 旧请求通过 active 标记丢弃，确保不会覆盖新选图/新设置。
+ * 旧请求由 AbortController 物理取消，确保不会占用引擎并覆盖新选图/新设置。
  */
 export const usePreview = (
   selectedFilePath: string | null,
@@ -86,7 +93,9 @@ export const usePreview = (
     }
 
     let active = true
-    let currentObjectUrl: string | null = null
+    let ownedObjectUrl: string | null = null
+    let cacheKey: string | null = null
+    const requestController = new AbortController()
 
     setState({
       kind: "active",
@@ -142,69 +151,87 @@ export const usePreview = (
       if (result === null) {
         return null
       }
-      currentObjectUrl = result.dataUrl
+      if (cacheKey !== null) {
+        previewUrlCache.set(cacheKey, result.dataUrl)
+      }
       return loadImageFromUrl(result.dataUrl)
     }
 
-    void requestPreview(imageRequest)
-      .then((response) => {
-        if (!active) {
-          return
+    const applyImage = (image: HTMLImageElement): void => {
+      if (!active) return
+      setState((prev) => {
+        if (prev.kind !== "active" || prev.filePath !== selectedFilePath) {
+          return prev
         }
-        const url = resolveDisplayUrl(response.previewUrl)
-        if (url === null) {
-          return
-        }
-        return fetch(url)
+        return { ...prev, currentImage: image }
       })
-      .then((fetchResponse) => {
-        if (!active || fetchResponse === undefined) {
-          return
-        }
-        return fetchResponse.blob()
+    }
+
+    const loadEnginePreview = async (): Promise<void> => {
+      const versions = await getImageFileVersions([selectedFilePath])
+      if (!active) return
+      cacheKey = createPreviewCacheKey({
+        imagePath: selectedFilePath,
+        maxWidth: PREVIEW_MAX_WIDTH,
+        maxHeight: PREVIEW_MAX_HEIGHT,
+        modifiedAtMs: versions[0]?.mtimeMs ?? null,
+        sourceSizeBytes: versions[0]?.sizeBytes ?? null,
+        recipeHash: hashRenderRecipe(imageRequest.recipe)
       })
-      .then((blob) => {
-        if (!active || blob === undefined) {
-          return
-        }
-        const objectUrl = URL.createObjectURL(blob)
-        currentObjectUrl = objectUrl
-        return loadImageFromUrl(objectUrl)
-      })
-      .then((img) => {
-        if (!active || img === undefined) {
-          return
-        }
-        setState((prev) => {
-          if (prev.kind !== "active" || prev.filePath !== selectedFilePath) {
-            return prev
-          }
-          return { ...prev, currentImage: img }
-        })
-      })
-      .catch(async () => {
-        // 引擎不可达：降级到本地 nativeImage 预览（仅 JPEG/PNG/WebP/BMP/TIFF）
-        if (!active) {
-          return
-        }
-        const img = await tryLocalPreview()
-        if (!active || img === null) {
-          // 引擎失败 + 本地无法解码（RAW/HEIC 或桥接不可用）：保持 currentImage=null
-          // 状态文本由 EngineStatusBar 提示用户等待引擎恢复
-          return
-        }
-        setState((prev) => {
-          if (prev.kind !== "active" || prev.filePath !== selectedFilePath) {
-            return prev
-          }
-          return { ...prev, currentImage: img }
-        })
-      })
+
+      const cachedUrl = previewUrlCache.get(cacheKey)
+      if (cachedUrl !== null) {
+        applyImage(await loadImageFromUrl(cachedUrl))
+        return
+      }
+
+      const response = await requestPreview(imageRequest, undefined, requestController.signal)
+      if (!active || !response.previewAvailable) return
+      const displayUrl = resolveDisplayUrl(response.previewUrl)
+      if (displayUrl === null) return
+      if (displayUrl.startsWith("data:")) {
+        const image = await loadImageFromUrl(displayUrl)
+        if (!active) return
+        previewUrlCache.set(cacheKey, displayUrl)
+        applyImage(image)
+        return
+      }
+
+      const fetchResponse = await fetch(displayUrl, { signal: requestController.signal })
+      if (!fetchResponse.ok) {
+        throw new Error("preview image response failed")
+      }
+      const blob = await fetchResponse.blob()
+      if (!active) return
+      const objectUrl = URL.createObjectURL(blob)
+      ownedObjectUrl = objectUrl
+      const image = await loadImageFromUrl(objectUrl)
+      if (!active) return
+      // 缓存接管 object URL；达到字节预算时会由缓存立即 revoke，不能在这里再次释放。
+      previewUrlCache.set(cacheKey, objectUrl, blob.size)
+      ownedObjectUrl = null
+      applyImage(image)
+    }
+
+    void loadEnginePreview().catch(async () => {
+      // 引擎不可达：降级到本地 nativeImage 预览（仅 JPEG/PNG/WebP/BMP/TIFF）
+      if (!active || requestController.signal.aborted) {
+        return
+      }
+      const img = await tryLocalPreview()
+      if (!active || img === null) {
+        // 引擎失败 + 本地无法解码（RAW/HEIC 或桥接不可用）：保持 currentImage=null
+        // 状态文本由 EngineStatusBar 提示用户等待引擎恢复
+        return
+      }
+      applyImage(img)
+    })
 
     return () => {
       active = false
-      if (currentObjectUrl !== null && currentObjectUrl.startsWith("blob:")) {
-        URL.revokeObjectURL(currentObjectUrl)
+      requestController.abort()
+      if (ownedObjectUrl !== null && ownedObjectUrl.startsWith("blob:")) {
+        URL.revokeObjectURL(ownedObjectUrl)
       }
     }
   }, [selectedFilePath])
@@ -235,6 +262,8 @@ export const usePreview = (
     }
 
     let active = true
+    // 设置变更时 cleanup 会主动终止旧请求；引擎只保留最新 RenderRecipe 的预览工作。
+    const requestController = new AbortController()
 
     setState((prev) => {
       if (prev.kind !== "active") {
@@ -246,7 +275,7 @@ export const usePreview = (
     void requestPreview(buildPreviewRequest(
       selectedFilePath, settings, PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT,
       textOverride, stableResolvedTextLayers, resolvedBrand
-    ))
+    ), undefined, requestController.signal)
       .then((response) => {
         if (!active) {
           return
@@ -289,6 +318,7 @@ export const usePreview = (
 
     return () => {
       active = false
+      requestController.abort()
     }
   }, [
     selectedFilePath,

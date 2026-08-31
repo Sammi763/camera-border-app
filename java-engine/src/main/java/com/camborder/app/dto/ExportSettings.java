@@ -2,7 +2,7 @@ package com.camborder.app.dto;
 
 /**
  * 图像导出设置 DTO：输出路径、格式（png/jpeg/tiff）、JPEG 压缩质量、目标尺寸、专业导出选项。
- * 作为请求字段嵌套在 {@link RenderJobRequest} 中，故归入 dto 包。
+ * 作为请求字段嵌套在 {@link RenderJobSnapshot} 中，故归入 dto 包。
  *
  * 目标尺寸（maxWidth/maxHeight）：导出前对原图做等比缩小的上限，0 表示不限制（原图尺寸）。
  * 与预览请求的 maxWidth/maxHeight 语义一致（见 ImageScaler）。

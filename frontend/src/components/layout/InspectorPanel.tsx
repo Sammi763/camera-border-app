@@ -131,9 +131,8 @@ export const InspectorPanel = ({
                 <span className="inspectorSectionLabel">{section.label}</span>
                 <span className="inspectorSectionChevron" aria-hidden="true">▸</span>
               </button>
-              {isOpen && (
-                <div className="inspectorSectionBody">{section.content}</div>
-              )}
+              {/* 保持内容挂载：切换检查器分组不得丢失导出/导入/管理表单草稿。 */}
+              <div className="inspectorSectionBody" hidden={!isOpen}>{section.content}</div>
             </section>
           )
         })}

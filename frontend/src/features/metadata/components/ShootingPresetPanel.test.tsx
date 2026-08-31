@@ -49,6 +49,8 @@ const renderPanel = (overrides: Partial<PanelProps> = {}): { props: PanelProps &
     onClearError: vi.fn(),
     onApplyToScope: vi.fn(),
     onClearScope: vi.fn(),
+    operationScope: "active",
+    onOperationScopeChange: vi.fn(),
     hasSelectedImage: true,
     queueCount: 3,
     checkedCount: 0,
@@ -185,7 +187,7 @@ describe("ShootingPresetPanel（集成）", () => {
   })
 
   it("应用作用域：当前图片 / 已选图片 / 全部图片，选择预设后调用回调", async () => {
-    const { props } = renderPanel({ checkedCount: 2 })
+    const { props, rerender } = renderPanel({ checkedCount: 2 })
     const applySelect = screen.getByLabelText(/选择预设/)
     fireEvent.change(applySelect, { target: { value: "p2" } })
 
@@ -195,8 +197,10 @@ describe("ShootingPresetPanel（集成）", () => {
     fireEvent.click(applyCurrent)
     expect(props.onApplyToScope).toHaveBeenCalledWith("p2", "active")
 
-    // 已选图片作用域：点击「已选 2 张」后按钮变为「应用已选」
+    // 已选图片作用域由根级 operationScope 接收选择事件，再回传受控值。
     fireEvent.click(screen.getByRole("button", { name: "已选 2 张" }))
+    expect(props.onOperationScopeChange).toHaveBeenCalledWith("checked")
+    rerender(<ShootingPresetPanel {...props} operationScope="checked" />)
     const applyChecked = screen.getByRole("button", { name: "应用已选" })
     expect(applyChecked.hasAttribute("disabled")).toBe(false)
     fireEvent.click(applyChecked)
@@ -204,6 +208,8 @@ describe("ShootingPresetPanel（集成）", () => {
 
     // 全部图片作用域
     fireEvent.click(screen.getByRole("button", { name: "全部图片" }))
+    expect(props.onOperationScopeChange).toHaveBeenCalledWith("all")
+    rerender(<ShootingPresetPanel {...props} operationScope="all" />)
     const applyAll = screen.getByRole("button", { name: "应用全部" })
     expect(applyAll.hasAttribute("disabled")).toBe(false)
     fireEvent.click(applyAll)
