@@ -12,6 +12,15 @@ test("性能 smoke 固定模拟 100 项队列、双并发预览与异步连续�
   assert.match(script, /waitForTerminalJob/)
 })
 
+test("性能 smoke 采集 RSS 基线、峰值和空闲增长并执行阈值断言", () => {
+  assert.match(script, /process\.memoryUsage\(\)\.rss/)
+  assert.match(script, /baselineRssBytes/)
+  assert.match(script, /peakRssBytes/)
+  assert.match(script, /idleRssBytes/)
+  assert.match(script, /idleGrowthBytes <= maxIdleGrowthMb/)
+  assert.match(script, /RSS：baseline=/)
+})
+
 test("性能 smoke 的导出产物只写入并清理专属临时目录", () => {
   assert.match(script, /mkdtempSync\(path\.join\(tmpdir\(\), "camborder-performance-smoke-"\)\)/)
   assert.match(script, /rmSync\(outputDir, \{ recursive: true, force: true \}\)/)

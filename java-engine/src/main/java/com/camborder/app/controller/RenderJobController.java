@@ -6,8 +6,10 @@ import com.camborder.app.dto.RenderJobSnapshot;
 import com.camborder.app.dto.RenderJobStatusResponse;
 import com.camborder.app.exception.ApiException;
 import com.camborder.app.exception.ResourceNotFoundException;
+import com.camborder.app.exception.RenderOutputConflictException;
 import com.camborder.app.model.RenderRecipe;
 import com.camborder.app.service.RenderJobService;
+import com.camborder.app.util.OutputPathValidator;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -18,6 +20,10 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -52,14 +58,18 @@ public final class RenderJobController {
         if (snapshots.size() > MAX_SNAPSHOTS_PER_JOB) {
             throw new ApiException("items must contain at most " + MAX_SNAPSHOTS_PER_JOB + " snapshots", HttpStatus.BAD_REQUEST);
         }
+        Set<Path> outputPaths = new HashSet<>();
         for (int index = 0; index < snapshots.size(); index++) {
-            validateSnapshot(snapshots.get(index), index, snapshots.size() > 1);
+            Path outputPath = validateSnapshot(snapshots.get(index), index, snapshots.size() > 1);
+            if (!outputPaths.add(outputPath)) {
+                throw new RenderOutputConflictException("items[" + index + "] outputPath conflicts with another item");
+            }
         }
 
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(renderJobService.submitJob(request));
     }
 
-    private void validateSnapshot(final RenderJobSnapshot snapshot, final int index, final boolean batch) {
+    private Path validateSnapshot(final RenderJobSnapshot snapshot, final int index, final boolean batch) {
         String prefix = batch ? "items[" + index + "] " : "";
         if (snapshot == null || snapshot.getRecipe() == null) {
             throw new ApiException(prefix + "recipe is required", HttpStatus.BAD_REQUEST);
@@ -83,6 +93,28 @@ public final class RenderJobController {
         if (export.getMaxWidth() < 0 || export.getMaxHeight() < 0) {
             throw new ApiException(prefix + "maxWidth and maxHeight must be non-negative", HttpStatus.BAD_REQUEST);
         }
+
+        final Path imagePath;
+        try {
+            imagePath = Path.of(recipe.getImagePath().trim());
+        } catch (InvalidPathException exception) {
+            throw new ApiException(prefix + "imagePath is invalid", HttpStatus.BAD_REQUEST);
+        }
+        if (!Files.isRegularFile(imagePath) || !Files.isReadable(imagePath)) {
+            throw new ApiException(prefix + "imagePath must point to a readable file", HttpStatus.BAD_REQUEST);
+        }
+
+        Path normalizedImagePath = OutputPathValidator.normalizeForComparison(
+                recipe.getImagePath(), prefix + "imagePath");
+        Path normalizedOutputPath = OutputPathValidator.normalizeForComparison(
+                export.getOutputPath(), prefix + "outputPath");
+        if (normalizedImagePath.equals(normalizedOutputPath)) {
+            throw new RenderOutputConflictException(prefix + "outputPath must not overwrite imagePath");
+        }
+        if (Files.exists(normalizedOutputPath)) {
+            throw new RenderOutputConflictException(prefix + "outputPath already exists");
+        }
+        return normalizedOutputPath;
     }
 
     @GetMapping("/render-jobs/{jobId}")

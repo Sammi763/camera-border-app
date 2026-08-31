@@ -121,6 +121,35 @@ describe("useQueue（当前预览图与批量选中状态）", () => {
     expect(result.current.activeFilePath).toBeNull()
   })
 
+  it("清空后的撤销恢复完整队列、当前预览图和勾选状态", async () => {
+    const { result } = renderHook(() => useQueue())
+    await act(async () => {
+      await result.current.addFromPaths(["/photos/a.jpg", "/photos/b.jpg", "/photos/c.jpg"])
+    })
+    const ids = result.current.items.map((item) => item.id)
+    act(() => {
+      result.current.setActive(ids[1]!)
+      result.current.toggleChecked(ids[0]!)
+      result.current.toggleChecked(ids[2]!)
+      result.current.clear()
+    })
+
+    expect(result.current.items).toEqual([])
+    expect(result.current.activeItemId).toBeNull()
+    expect(result.current.checkedItemIds).toEqual([])
+    expect(result.current.canUndo).toBe(true)
+
+    act(() => result.current.undo())
+    expect(result.current.items.map((item) => item.id)).toEqual(ids)
+    expect(result.current.activeItemId).toBe(ids[1])
+    expect(result.current.checkedItemIds).toEqual([ids[0], ids[2]])
+
+    act(() => result.current.redo())
+    expect(result.current.items).toEqual([])
+    expect(result.current.activeItemId).toBeNull()
+    expect(result.current.checkedItemIds).toEqual([])
+  })
+
   it("删除当前图时确定性选择下一张；删除末张时选择上一张", async () => {
     const { result } = renderHook(() => useQueue())
     await act(async () => {

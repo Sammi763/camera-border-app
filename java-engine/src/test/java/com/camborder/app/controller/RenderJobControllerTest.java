@@ -88,6 +88,56 @@ final class RenderJobControllerTest extends AbstractControllerTest {
     }
 
     @Test
+    void shouldRejectUnreadableImagePathBeforeAcceptingJob() throws Exception {
+        ExportSettings export = new ExportSettings(
+                tempDir.resolve("missing-source-output.png").toString(), "png", 95);
+        RenderJobRequest request = new RenderJobRequest(
+                new RenderRecipe(tempDir.resolve("missing-source.png").toString(), null, null, null, false), export);
+
+        mockMvc.perform(post("/api/render-jobs")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("imagePath must point to a readable file"));
+    }
+
+    @Test
+    void shouldRejectOutputPathThatWouldOverwriteSource() throws Exception {
+        String imagePath = writeTempImage();
+        Path source = Path.of(imagePath);
+        byte[] before = Files.readAllBytes(source);
+        ExportSettings export = new ExportSettings(imagePath, "png", 95);
+        RenderJobRequest request = new RenderJobRequest(
+                new RenderRecipe(imagePath, null, null, null, false), export);
+
+        mockMvc.perform(post("/api/render-jobs")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("outputPath must not overwrite imagePath"));
+
+        assertThat(Files.readAllBytes(source)).containsExactly(before);
+    }
+
+    @Test
+    void shouldRejectAnExistingOutputPathInsteadOfOverwritingIt() throws Exception {
+        String imagePath = writeTempImage();
+        Path output = tempDir.resolve("existing-output.png");
+        Files.writeString(output, "do not overwrite");
+        ExportSettings export = new ExportSettings(output.toString(), "png", 95);
+        RenderJobRequest request = new RenderJobRequest(
+                new RenderRecipe(imagePath, null, null, null, false), export);
+
+        mockMvc.perform(post("/api/render-jobs")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("outputPath already exists"));
+
+        assertThat(Files.readString(output)).isEqualTo("do not overwrite");
+    }
+
+    @Test
     void shouldRejectRenderJobWithInvalidFormat() throws Exception {
         ExportSettings export = new ExportSettings("/output/out.bmp", "bmp", 95);
         RenderJobRequest request = new RenderJobRequest(minimalRecipe(), export);
@@ -319,15 +369,17 @@ final class RenderJobControllerTest extends AbstractControllerTest {
     }
 
     @Test
-    void shouldReportPerItemFailureWhenImageFileNotFound() throws Exception {
+    void shouldRejectImageFileNotFoundBeforeAcceptingJob() throws Exception {
         RenderRecipe recipe = new RenderRecipe("/no/such/file.png", null, null, null, false);
         ExportSettings export = new ExportSettings(
                 tempDir.resolve("out.png").toString(), "png", 95);
         RenderJobRequest request = new RenderJobRequest(recipe, export);
 
-        JsonNode terminal = submitAndWait(request);
-        assertThat(terminal.path("status").asText()).isEqualTo("failed");
-        assertThat(terminal.path("items").get(0).path("error").asText()).contains("not found");
+        mockMvc.perform(post("/api/render-jobs")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("imagePath must point to a readable file"));
     }
 
     // ---- 专业导出测试 ----------------------------------------------------------

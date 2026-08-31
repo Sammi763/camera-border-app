@@ -11,6 +11,7 @@ const DEFAULT_BASE_URL = "http://127.0.0.1:8099"
 const DEFAULT_SAMPLE = path.join(ROOT, "photos", "78330006.jpg")
 const REQUEST_TIMEOUT_MS = 30_000
 const JOB_TIMEOUT_MS = 10 * 60_000
+const DEFAULT_MAX_IDLE_GROWTH_MB = 128
 
 const sleep = async (ms) => await new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -22,14 +23,22 @@ const parsePositiveInteger = (value, label) => {
   return parsed
 }
 
+const parseNonNegativeNumber = (value, label) => {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`${label} 必须是非负数字`)
+  }
+  return parsed
+}
+
 const readOption = (name) => {
   const index = process.argv.indexOf(name)
   return index < 0 ? undefined : process.argv[index + 1]
 }
 
 const usage = () => {
-  console.log("用法：pnpm perf:smoke [--count 100] [--base-url http://127.0.0.1:8099] [--sample /绝对路径/样片.jpg]")
-  console.log("前置：本地 Java 引擎已启动。脚本用固定样片模拟 100 项队列、双并发缩略图预览和连续导出。")
+  console.log("用法：pnpm perf:smoke [--count 100] [--base-url http://127.0.0.1:8099] [--sample /绝对路径/样片.jpg] [--max-idle-growth-mb 128]")
+  console.log("前置：本地 Java 引擎已启动。脚本用固定样片模拟 100 项队列、双并发缩略图预览和连续导出，并采集 RSS 基线/峰值/空闲增长。")
 }
 
 const fetchJson = async (url, init = {}) => {
@@ -89,12 +98,14 @@ const runWithConcurrency = async (items, concurrency, worker) => {
   await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, runWorker))
 }
 
-const waitForTerminalJob = async (baseUrl, jobId) => {
+const waitForTerminalJob = async (baseUrl, jobId, onSampleRss = () => {}) => {
   const deadline = Date.now() + JOB_TIMEOUT_MS
   let latest = null
   while (Date.now() < deadline) {
+    onSampleRss()
     latest = await fetchJson(`${baseUrl}/api/render-jobs/${encodeURIComponent(jobId)}`)
     if (["completed", "failed", "cancelled"].includes(latest.status)) {
+      onSampleRss()
       return latest
     }
     await sleep(250)
@@ -111,6 +122,10 @@ const main = async () => {
   const count = parsePositiveInteger(readOption("--count") ?? process.env.CAMBORDER_PERF_COUNT ?? DEFAULT_QUEUE_COUNT, "count")
   const baseUrl = (readOption("--base-url") ?? process.env.CAMBORDER_PERF_BASE_URL ?? DEFAULT_BASE_URL).replace(/\/$/, "")
   const samplePath = path.resolve(readOption("--sample") ?? process.env.CAMBORDER_PERF_SAMPLE ?? DEFAULT_SAMPLE)
+  const maxIdleGrowthMb = parseNonNegativeNumber(
+    readOption("--max-idle-growth-mb") ?? process.env.CAMBORDER_PERF_MAX_IDLE_GROWTH_MB ?? DEFAULT_MAX_IDLE_GROWTH_MB,
+    "max-idle-growth-mb"
+  )
   if (!existsSync(samplePath) || !statSync(samplePath).isFile()) {
     throw new Error(`找不到性能样片：${samplePath}`)
   }
@@ -118,7 +133,13 @@ const main = async () => {
   const outputDir = mkdtempSync(path.join(tmpdir(), "camborder-performance-smoke-"))
   const queuedPaths = Array.from({ length: count }, () => samplePath)
   const startedAt = Date.now()
+  const baselineRssBytes = process.memoryUsage().rss
+  let peakRssBytes = baselineRssBytes
+  const sampleRss = () => {
+    peakRssBytes = Math.max(peakRssBytes, process.memoryUsage().rss)
+  }
   try {
+    sampleRss()
     await fetchJson(`${baseUrl}/api/health`)
     console.log(`[performance-smoke] 已连接引擎：${baseUrl}；队列项：${count}`)
 
@@ -132,6 +153,7 @@ const main = async () => {
       })
       assert.equal(preview.previewAvailable, true, "批量缩略图预览必须返回可访问预览")
       previewsCompleted++
+      sampleRss()
     })
     console.log(`[performance-smoke] 批量预览完成：${previewsCompleted}/${count}，并发=${THUMBNAIL_CONCURRENCY}，耗时=${Date.now() - previewStartedAt}ms`)
 
@@ -144,7 +166,7 @@ const main = async () => {
       body: JSON.stringify({ items: snapshots })
     })
     assert.equal(typeof accepted.jobId, "string", "连续导出必须返回 jobId")
-    const terminal = await waitForTerminalJob(baseUrl, accepted.jobId)
+    const terminal = await waitForTerminalJob(baseUrl, accepted.jobId, sampleRss)
     assert.equal(terminal.status, "completed", `连续导出失败：${JSON.stringify(terminal.items ?? terminal)}`)
     assert.equal(terminal.completed, count, "连续导出必须逐项完成")
     assert.equal(Array.isArray(terminal.items), true, "连续导出终态必须返回逐项结果")
@@ -155,6 +177,17 @@ const main = async () => {
       assert.equal(statSync(item.outputPath).size > 0, true, `第 ${index + 1} 项产出为空文件`)
     }
     console.log(`[performance-smoke] 连续导出完成：${count}/${count}，jobId=${accepted.jobId}，耗时=${Date.now() - exportStartedAt}ms`)
+    // 让请求、JSON 解析和临时结果有一个明确的空闲窗口，再比较 RSS 趋势。
+    await sleep(1_000)
+    sampleRss()
+    const idleRssBytes = process.memoryUsage().rss
+    const idleGrowthBytes = idleRssBytes - baselineRssBytes
+    const toMiB = (bytes) => (bytes / (1024 * 1024)).toFixed(1)
+    assert.ok(
+      idleGrowthBytes <= maxIdleGrowthMb * 1024 * 1024,
+      `RSS 空闲增长超过阈值：${toMiB(idleGrowthBytes)}MiB > ${maxIdleGrowthMb}MiB`
+    )
+    console.log(`[performance-smoke] RSS：baseline=${toMiB(baselineRssBytes)}MiB，peak=${toMiB(peakRssBytes)}MiB，idle=${toMiB(idleRssBytes)}MiB，idle增长=${toMiB(idleGrowthBytes)}MiB，阈值=${maxIdleGrowthMb}MiB`)
     console.log(`[performance-smoke] PASS，总耗时=${Date.now() - startedAt}ms`)
   } finally {
     // 仅清理脚本刚创建的专属临时目录，避免 100 张 smoke 产物残留在工作区。

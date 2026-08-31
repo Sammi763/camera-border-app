@@ -205,20 +205,25 @@ grep -rn '](\.' README.md AGENTS.md CONTRIBUTING.md ARCHITECTURE.md DESIGN.md do
 **步骤**：
 
 1. 导出请求使用 `RenderJobRequest.items`，每项同时携带冻结的 `RenderRecipe` 与
-   `ExportSettings`。`POST /api/render-jobs` 只接受任务并返回 `202 + jobId`；使用
-   `GET /api/render-jobs/{jobId}` 轮询总进度、当前项、逐项结果和失败原因；取消使用
-   `DELETE`，只取消尚未执行的项。
+   `ExportSettings`。`POST /api/render-jobs` 先检查源图可读性和输出路径冲突：缺失/不可读
+   源图返回 400，覆盖源图、已有目标或同批重复目标返回 409；只有通过前置检查的请求才
+   返回 `202 + jobId`。使用 `GET /api/render-jobs/{jobId}` 轮询总进度、当前项、逐项结果
+   和失败原因；取消使用 `DELETE`，只取消尚未执行的项。编码器还会在执行时拒绝已出现的
+   目标文件，防止并发竞态导致覆盖。
 2. 前端在 `WorkspacePage` 挂载根级 `useExportController`，提交前复制图片范围、设置和配方；
    `PreviewPanel` 只负责显示状态和触发命令。单图、已选和全部图片由唯一
    `operationScope`（`active / checked / all`）解析，`active` 与 `checked` 不互相改写。
 3. 队列删除、清空、撤销/重做和会话恢复都通过 `useQueue` 的快照完成。会话只保存结构化路径
    与覆盖；恢复后用受限桌面 IPC 检查文件，丢失项标记为缺失，不恢复预览二进制或 object URL。
    设置历史由 `useSettings` 管理；检查器分组用隐藏而非卸载保留表单草稿。
-4. 缩略图固定最多 2 个并发请求，预览请求切换时取消旧请求。解码请求带目标尺寸；缓存键必须
+4. 缩略图只为滚动容器中可见的队列行发起请求，且固定最多 2 个并发请求；预览请求切换时取消旧请求。
+   解码请求带目标尺寸；缓存键必须
    包含路径、目标尺寸、mtime、源字节数和配方哈希，并由字节上限控制，淘汰时释放 `blob:` URL。
    不缓存完整分辨率 `BufferedImage`。
 5. 引擎已启动时执行 `pnpm perf:smoke`；脚本默认模拟 100 项队列，先用双并发预览，再提交
-   一个批量 `render-jobs` 并轮询至终态。性能 smoke 只使用专属临时目录，完成后自动清理。
+   一个批量 `render-jobs` 并轮询至终态，同时记录 RSS 基线、峰值和导出完成后空闲窗口的
+   增长（默认阈值可通过 `--max-idle-growth-mb` 调整）。性能 smoke 只使用专属临时目录，
+   完成后自动清理。
 
 **可验证终点**：两端测试覆盖成功和失败路径；导出任务在面板切换后仍能显示进度，删除/撤销/恢复
 选择具有确定性；100 项 smoke 不超过声明的预览并发，导出逐项完成且无完整分辨率缓存残留。

@@ -72,6 +72,26 @@ final class RenderJobAsyncControllerTest extends AbstractControllerTest {
     }
 
     @Test
+    void shouldRejectDuplicateOutputPathsBeforeAcceptingBatch() throws Exception {
+        String imagePath = writeTempImage();
+        String outputPath = tempDir.resolve("duplicate-output.png").toString();
+        String body = objectMapper.writeValueAsString(Map.of(
+                "items", List.of(
+                        snapshot(imagePath, outputPath),
+                        snapshot(imagePath, outputPath)
+                )
+        ));
+
+        mockMvc.perform(post("/api/render-jobs")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("items[1] outputPath conflicts with another item"));
+
+        assertThat(Files.exists(java.nio.file.Path.of(outputPath))).isFalse();
+    }
+
+    @Test
     void shouldReturnNotFoundWhenCancellingAnUnknownJob() throws Exception {
         mockMvc.perform(delete("/api/render-jobs/no-such-job"))
                 .andExpect(status().isNotFound())

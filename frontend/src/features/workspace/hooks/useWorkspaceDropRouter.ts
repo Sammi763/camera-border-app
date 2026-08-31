@@ -30,8 +30,10 @@ export const useWorkspaceDropRouter = ({ onImagePaths }: UseWorkspaceDropRouterA
       event.stopPropagation()
       const files = Array.from(event.dataTransfer?.files ?? [])
       if (files.length === 0) return
-      const template = files.length === 1 ? files[0] : undefined
-      if (template !== undefined && isTemplateJson(template)) {
+      // 混合拖入时模板优先：一次 drop 只消费一个路由，避免 JSON 被误当成图片路径，
+      // 也避免模板覆盖层与图片队列同时响应同一个用户动作。
+      const template = files.find(isTemplateJson)
+      if (template !== undefined) {
         setDroppedTemplateFile(template)
         return
       }

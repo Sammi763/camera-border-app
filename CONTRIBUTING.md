@@ -87,7 +87,7 @@ cd electron && pnpm dev:managed   # Electron 自行启动 jar + 加载 frontend/
 | `pnpm --filter electron typecheck` | Electron 类型检查 |
 | `pnpm --filter electron test` | Electron 全量测试（Vitest） |
 | `pnpm test:scripts` | 脚本级测试：Windows 图标生成、打包产物校验、Electron 开发运行时准备、Java Runtime 解压布局（`scripts/*.test.*`） |
-| `pnpm perf:smoke` | 性能 smoke：连接已启动的本地 Java 引擎，模拟 100 项队列、双并发预览和连续异步导出；产物写入并清理专属临时目录 |
+| `pnpm perf:smoke` | 性能 smoke：连接已启动的本地 Java 引擎，模拟 100 项队列、双并发预览和连续异步导出，并记录 RSS 基线/峰值/空闲增长；产物写入并清理专属临时目录 |
 | `cd electron && pnpm dev:managed` | Electron 托管模式 |
 | `pnpm typecheck` | 根目录快捷：electron + frontend 类型检查 |
 | `pnpm build:frontend` | 根目录快捷：构建 frontend |

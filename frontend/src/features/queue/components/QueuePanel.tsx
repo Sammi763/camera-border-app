@@ -1,6 +1,7 @@
-import { useCallback, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Panel } from "../../../components/layout/Panel"
 import { useThumbnails } from "../hooks/useThumbnails"
+import { selectVisibleThumbnailPaths } from "../hooks/visibleThumbnailPaths"
 import { toDirPath } from "../../../utils/fileName"
 import { isRawFile, getRawFormatName, getRawTier } from "../../metadata/constants/rawExtensions"
 import { isHeicFile } from "../../metadata/constants/imageFormats"
@@ -34,6 +35,7 @@ const QueueRow = ({
   return (
     <li
       className={rowClassName}
+      data-queue-item-id={item.id}
       role="button"
       tabIndex={0}
       onClick={() => onSelect(item.id)}
@@ -111,10 +113,46 @@ export const QueuePanel = ({ queue }: QueuePanelProps): JSX.Element => {
   const isEmpty = queue.items.length === 0
   const [folderHint, setFolderHint] = useState<string | null>(null)
   const [dragActive, setDragActive] = useState(false)
+  const queueListRef = useRef<HTMLUListElement>(null)
+  const [visibleItemIds, setVisibleItemIds] = useState<ReadonlySet<string>>(() => new Set())
+
+  // 缩略图只跟随滚动容器中的可见行，避免 100 张队列在导入瞬间全部解码。
+  useEffect(() => {
+    const list = queueListRef.current
+    if (list === null || typeof IntersectionObserver === "undefined") {
+      // Electron Chromium 一定提供 IntersectionObserver；不支持时宁可不读文件，
+      // 也不能退化成把整个队列一次性提交给缩略图调度器。
+      setVisibleItemIds(new Set())
+      return
+    }
+
+    setVisibleItemIds(new Set())
+    const observer = new IntersectionObserver((entries) => {
+      setVisibleItemIds((previous) => {
+        const next = new Set(previous)
+        let changed = false
+        for (const entry of entries) {
+          const itemId = (entry.target as HTMLElement).dataset["queueItemId"]
+          if (itemId === undefined) continue
+          const isVisible = entry.isIntersecting === true || entry.intersectionRatio > 0
+          if (isVisible && !next.has(itemId)) {
+            next.add(itemId)
+            changed = true
+          } else if (!isVisible && next.delete(itemId)) {
+            changed = true
+          }
+        }
+        return changed ? next : previous
+      })
+    }, { root: list, threshold: 0 })
+
+    list.querySelectorAll<HTMLElement>("[data-queue-item-id]").forEach((row) => observer.observe(row))
+    return () => observer.disconnect()
+  }, [queue.items])
 
   const filePaths = useMemo(
-    () => queue.items.filter((item) => item.missing !== true).map((item) => item.filePath),
-    [queue.items]
+    () => selectVisibleThumbnailPaths(queue.items, visibleItemIds),
+    [queue.items, visibleItemIds]
   )
 
   const thumbnails = useThumbnails(filePaths)
@@ -226,7 +264,7 @@ export const QueuePanel = ({ queue }: QueuePanelProps): JSX.Element => {
 
       {/* 队列列表 */}
       {!isEmpty && (
-        <ul className="queueList">
+        <ul ref={queueListRef} className="queueList">
           {queue.items.map((item) => (
             <QueueRow
               key={item.id}

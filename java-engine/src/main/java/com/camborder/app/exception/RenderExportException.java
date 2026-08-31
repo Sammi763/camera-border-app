@@ -6,6 +6,7 @@ import org.springframework.http.HttpStatus;
  * 导出失败异常。
  * 表示导出目标不可用（outputPath 为空、父目录不可写、写入失败等），
  * 属于请求不合法，映射为 400，不向响应暴露异常堆栈或本机敏感路径。
+ * 已存在目标和源图/批内目标冲突使用独立的 409 异常，不归入本类型。
  */
 public final class RenderExportException extends ApiException {
 

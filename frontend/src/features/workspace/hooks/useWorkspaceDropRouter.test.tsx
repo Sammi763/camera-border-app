@@ -27,4 +27,17 @@ describe("useWorkspaceDropRouter", () => {
     expect(result.current.droppedTemplateFile).toBe(template)
     expect(onImagePaths).not.toHaveBeenCalled()
   })
+
+  it("混合 JSON 与图片 drop 时模板优先，JSON 不进入图片队列", () => {
+    const onImagePaths = vi.fn()
+    const { result } = renderHook(() => useWorkspaceDropRouter({ onImagePaths }))
+    const template = new File(["{}"], "look.json", { type: "application/json" })
+    const image = new File(["photo"], "photo.jpg", { type: "image/jpeg" }) as File & { path?: string }
+    Object.defineProperty(image, "path", { value: "/photos/photo.jpg" })
+
+    act(() => dispatchDrop([template, image]))
+
+    expect(result.current.droppedTemplateFile).toBe(template)
+    expect(onImagePaths).not.toHaveBeenCalled()
+  })
 })
