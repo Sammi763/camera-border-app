@@ -33,7 +33,7 @@ const scopeLabel = (scope: OperationScope): string => {
 /**
  * 从自由文本创建摄影预设的迁移入口。
  *
- * 这是原快速工作台的能力迁移到「管理拍摄信息预设」抽屉后的表单；
+ * 这是文字录入能力迁移到「管理拍摄信息预设」抽屉后的表单；
  * 资产去重、保存与作用范围应用仍由 WorkspacePage 统一协调。
  */
 export const PresetTextComposer = ({ operationScope, onCreate }: PresetTextComposerProps): JSX.Element => {
@@ -75,7 +75,7 @@ export const PresetTextComposer = ({ operationScope, onCreate }: PresetTextCompo
       <section className="presetTextComposer" aria-label="从文字创建摄影预设">
         <div className="presetTextComposerHeader">
           <div>
-            <h3 className="presetTextComposerTitle">快速录入预设</h3>
+            <h3 className="presetTextComposerTitle">文字录入预设</h3>
             <p className="presetTextComposerHint">直接填写相机、镜头或胶片，保存后应用到{scopeLabel(operationScope)}。</p>
           </div>
           <button type="button" className="ghostButton" onClick={() => setOpen(true)}>开始录入</button>
@@ -88,7 +88,7 @@ export const PresetTextComposer = ({ operationScope, onCreate }: PresetTextCompo
     <section className="presetTextComposer" aria-label="从文字创建摄影预设">
       <div className="presetTextComposerHeader">
         <div>
-          <h3 className="presetTextComposerTitle">快速录入预设</h3>
+          <h3 className="presetTextComposerTitle">文字录入预设</h3>
           <p className="presetTextComposerHint">保存并应用到{scopeLabel(operationScope)}。</p>
         </div>
         <button type="button" className="ghostButton" onClick={reset}>收起</button>

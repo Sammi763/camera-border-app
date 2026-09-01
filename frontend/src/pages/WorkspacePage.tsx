@@ -64,10 +64,10 @@ type WorkspacePageProps = {
 }
 
 // ---- 可调分栏常量 ---------------------------------------------------------
-const LEFT_DEFAULT = 280
+const LEFT_DEFAULT = 260
 const LEFT_MIN = 220
 const LEFT_MAX = 400
-const RIGHT_DEFAULT = 420
+const RIGHT_DEFAULT = 400
 const RIGHT_MIN = 360
 const RIGHT_MAX = 560
 /** 右栏折叠后的竖条宽度。 */

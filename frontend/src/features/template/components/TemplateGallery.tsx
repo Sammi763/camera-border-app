@@ -1,4 +1,4 @@
-import { BUILT_IN_TEMPLATES, PHOTO_INFO_CARD_TEMPLATE_IDS, QUICK_GALLERY_TEMPLATE_IDS } from "../presets/builtInTemplates"
+import { BUILT_IN_TEMPLATES, FEATURED_GALLERY_TEMPLATE_IDS, PHOTO_INFO_CARD_TEMPLATE_IDS } from "../presets/builtInTemplates"
 import type { BuiltInTemplate } from "../presets/builtInTemplates"
 import { TemplateThumbnail } from "./TemplateThumbnail"
 import { LiveTemplateThumbnail } from "./LiveTemplateThumbnail"
@@ -32,7 +32,7 @@ const findTemplate = (id: string): BuiltInTemplate | undefined => BUILT_IN_TEMPL
 
 /** 精选项排在前面，其余内置版式继续在同一画廊中可用，不再维护第二个入口。 */
 const GALLERY_TEMPLATE_IDS: readonly string[] = [
-  ...new Set([...QUICK_GALLERY_TEMPLATE_IDS, ...BUILT_IN_TEMPLATES.map((template) => template.id)])
+  ...new Set([...FEATURED_GALLERY_TEMPLATE_IDS, ...BUILT_IN_TEMPLATES.map((template) => template.id)])
 ].filter((id) => id === PHOTO_INFO_CARD_TEMPLATE_IDS.centerWhite || !isInfoCardVariant(id))
 
 const mergedSettingsFor = (currentSettings: RenderSettings, template: BuiltInTemplate): RenderSettings => ({

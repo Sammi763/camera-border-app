@@ -52,6 +52,12 @@
   --space-10: 40px;
   --space-12: 48px;
   --space-16: 64px;
+  /* 字号分层：正文/控件不低于 13px；更小字号只用于元数据、徽标和微型标记。 */
+  --font-size-body: 0.8125rem;
+  --font-size-caption: 0.75rem;
+  --font-size-meta: 0.6875rem;
+  --font-size-badge: 0.625rem;
+  --font-size-micro: 0.5625rem;
   --font-serif: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
   --font-mono: "SFMono-Regular", "JetBrains Mono", Consolas, monospace;
   font-family: var(--font-serif);
@@ -82,6 +88,7 @@ body {
   flex-direction: column;
   height: 100dvh;
   background: var(--surface-primary);
+  color: var(--text-primary);
 }
 
 /* ---- 顶部栏 ----------------------------------------------------------- */
@@ -135,6 +142,7 @@ body {
   position: relative;
   display: flex;
   flex: 1 1 auto;
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
@@ -157,6 +165,7 @@ body {
   flex-direction: column;
   flex: 1 1 0;
   min-width: 0;
+  min-inline-size: 0;
   min-height: 0;
   overflow: hidden;
 }
@@ -287,7 +296,8 @@ body {
 
 .panelBody {
   padding: var(--space-3) var(--space-4);
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   flex: 1 1 auto;
   min-height: 0;
 }
@@ -686,9 +696,8 @@ body {
 }
 
 .queueActions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--space-2);
   padding: var(--space-2) var(--space-4);
   border-top: 1px solid var(--border-subtle);
@@ -696,6 +705,8 @@ body {
 }
 
 .queueCount {
+  grid-column: 1 / -1;
+  min-width: 0;
   font-family: var(--font-mono);
   font-size: 0.6875rem;
   color: var(--text-tertiary);
@@ -1444,7 +1455,7 @@ body {
   font-family: var(--font-mono);
 }
 
-.variableQuickTemplates {
+.variableCommonTemplates {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-1);
@@ -2281,6 +2292,7 @@ body {
 .workspaceShell[data-theme="dark"],
 .workspaceShell[data-theme="system"] {
   color-scheme: dark;
+  color: var(--text-primary);
   --surface-primary: var(--studio-bg);
   --surface-secondary: var(--studio-surface);
   --surface-elevated: var(--studio-elevated);
@@ -2288,17 +2300,21 @@ body {
   --text-primary: var(--studio-text);
   --text-secondary: var(--studio-text-secondary);
   --text-tertiary: var(--studio-text-tertiary);
+  --text-muted: var(--studio-text-tertiary);
   --border-default: var(--studio-border);
   --border-subtle: var(--studio-border-subtle);
   --accent-primary: var(--studio-accent);
   --accent-hover: var(--studio-accent-hover);
+  --accent-primary-hover: var(--studio-accent-hover);
   --status-success: var(--studio-success);
   --status-warning: var(--studio-warning);
   --status-error: var(--studio-error);
+  --error-primary: var(--studio-error);
 }
 
 .workspaceShell[data-theme="warm"] {
   color-scheme: light;
+  color: var(--text-primary);
   --surface-primary: #f1eee8;
   --surface-secondary: #e5e0d8;
   --surface-elevated: #fbfaf7;
@@ -2308,9 +2324,9 @@ body {
   --text-tertiary: #858078;
   --border-default: #cfc9bf;
   --border-subtle: #ded9d0;
-  --accent-primary: #765735;
-  --accent-hover: #926b43;
-  --accent-primary-hover: #926b43;
+  --accent-primary: #5a3f24;
+  --accent-hover: #704e2d;
+  --accent-primary-hover: #704e2d;
   --accent-warm: #99651e;
   --studio-on-accent: #fffaf2;
   --status-success: #39704e;
@@ -2319,11 +2335,13 @@ body {
   --error-primary: #a54840;
   --bg-elevated: var(--surface-elevated);
   --bg-tertiary: var(--surface-secondary);
+  --text-muted: var(--text-tertiary);
 }
 
 @media (prefers-color-scheme: light) {
   .workspaceShell[data-theme="system"] {
     color-scheme: light;
+    color: var(--text-primary);
     --surface-primary: #f1eee8;
     --surface-secondary: #e5e0d8;
     --surface-elevated: #fbfaf7;
@@ -2333,9 +2351,9 @@ body {
     --text-tertiary: #858078;
     --border-default: #cfc9bf;
     --border-subtle: #ded9d0;
-    --accent-primary: #765735;
-    --accent-hover: #926b43;
-    --accent-primary-hover: #926b43;
+    --accent-primary: #5a3f24;
+    --accent-hover: #704e2d;
+    --accent-primary-hover: #704e2d;
     --accent-warm: #99651e;
     --studio-on-accent: #fffaf2;
     --status-success: #39704e;
@@ -2344,6 +2362,7 @@ body {
     --error-primary: #a54840;
     --bg-elevated: var(--surface-elevated);
     --bg-tertiary: var(--surface-secondary);
+    --text-muted: var(--text-tertiary);
   }
 }
 
@@ -2557,7 +2576,7 @@ body {
   background: transparent;
   color: var(--text-tertiary);
   font: inherit;
-  font-size: 0.75rem;
+  font-size: var(--font-size-body);
   cursor: pointer;
 }
 
@@ -2575,7 +2594,8 @@ body {
 .workspaceTabPanel {
   flex: 1 1 auto;
   min-height: 0;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding: var(--space-3);
   outline: none;
 }
@@ -2626,7 +2646,7 @@ body {
 .workspaceOutputSummary dt,
 .workspaceOutputSummary dd {
   margin: 0;
-  font-size: 0.75rem;
+  font-size: var(--font-size-body);
 }
 
 .workspaceOutputSummary dt {
@@ -2673,7 +2693,7 @@ body {
   background: transparent;
   color: var(--text-tertiary);
   font: inherit;
-  font-size: 0.6875rem;
+  font-size: var(--font-size-body);
   cursor: pointer;
 }
 
@@ -2697,7 +2717,7 @@ body {
   flex: 1 1 240px;
   min-width: 160px;
   color: var(--text-tertiary);
-  font-size: 0.6875rem;
+  font-size: var(--font-size-body);
   line-height: 1.4;
 }
 
@@ -3084,6 +3104,86 @@ body {
 
 .engineDiagnosticsList dd {
   color: var(--text-primary);
+}
+
+/*
+ * 字号审计结果：以下内容承载正文、标题、状态或可操作控件，统一使用约 13px；
+ * 元数据和徽标仍可使用 --font-size-meta/--font-size-badge/--font-size-micro，
+ * 但不能用小字号解决三栏布局溢出。
+ */
+.topbarActionButton,
+.topbarThemeControl,
+.topbarThemeControl select,
+.panelLabel,
+.panelHint,
+.inspectorReopen,
+.inspectorCollapseButton,
+.inspectorSectionHeader,
+.queueImportButtonFallback,
+.queueFolderHint,
+.panelHintBrowser,
+.queueName,
+.previewEmptyHint,
+.previewAreaInsufficient,
+.previewExportStatus,
+.previewExportHint,
+.previewExportWarnings,
+.previewViewportBtn,
+.settingLabel,
+.settingFieldLabel,
+.settingsCapabilityHint,
+.settingHint,
+.panelErrorText,
+.templateItem,
+.templateName,
+.templateActions .ghostButton,
+.templatePresetCategory .ghostButton,
+.templatePresetName,
+.templatePresetMeta .ghostButton,
+.templateDropError,
+.assetItem,
+.assetItemLabel,
+.assetItemActions .ghostButton,
+.assetTab,
+.assetStockChip,
+.identitySummaryText,
+.textLayerCardSummary,
+.textLayerCardToggle,
+.engineStatusBarHint,
+.engineStatusBarReason,
+.previewBatchFailures,
+.previewBatchSummaries,
+.workspaceWelcomeDropHint,
+.workspaceWelcomeValueBody,
+.workspaceOutputSummary dt,
+.workspaceOutputSummary dd,
+.exportScopeButton,
+.exportDockStatus,
+.workspacePreviewBackgroundButton,
+.templateGalleryName,
+.templateGalleryDesc,
+.templateGalleryHint,
+.templateGalleryApplyButton,
+.templateGalleryVariantButton,
+.templateGalleryVariantLabel,
+.photoInfoSummaryHeading,
+.modalDrawerClose,
+.presetTextComposerHint,
+.presetErrorItem,
+.presetUsageHint,
+.assetDeleteHint,
+.statusbar,
+.templatePresetDesc,
+.variableChip,
+.engineDiagnosticsList dt,
+.engineDiagnosticsList dd {
+  font-size: var(--font-size-body);
+}
+
+.queueActions > .ghostButton {
+  min-width: 0;
+  padding-inline: var(--space-1);
+  white-space: nowrap;
 }
 
 @media (max-width: 1100px) {

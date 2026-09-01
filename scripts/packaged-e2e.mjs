@@ -25,6 +25,20 @@ const EXPECTED_CONTENT_SECURITY_POLICY = [
   "frame-src 'none'"
 ].join("; ")
 
+/** 健康闸门只接受页面自身 app:// 请求得到的明确 HTTP 200。 */
+export const isHealthyHttpStatus = (status) => Number.isInteger(status) && status === 200
+
+/** 打包验收的布局硬闸门，避免用截图主观判断掩盖可操作区域溢出。 */
+export const responsiveLayoutPasses = (metrics) =>
+  metrics?.preview?.width >= 520
+  && metrics?.preview?.height >= 480
+  && metrics?.horizontalOverflow?.document === false
+  && metrics?.horizontalOverflow?.workspace === false
+  && metrics?.horizontalOverflow?.queue === false
+  && metrics?.queueActionsComplete === true
+  && ["black", "gray", "white"].includes(metrics?.previewBackground)
+  && metrics?.primaryButtonCount === 1
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /** 只有实际可绘制图片区内的非边框像素超过阈值，才算照片内容可见。 */
@@ -412,6 +426,23 @@ const evaluate = async (client, expression) => {
   return result.result?.value
 }
 
+/** 通过页面相对路径读取 app://app/api/health，拒绝 UI 文案或 Node 进程指标替代健康判断。 */
+const readAppHealthStatus = async (client) => await evaluate(
+  client,
+  "fetch('/api/health', { cache: 'no-store' }).then((response) => response.status).catch(() => 0)"
+)
+
+/** 响应式截图必须建立在引擎已恢复且当前照片仍可导出的真实工作台状态上。 */
+const readExportReadiness = async (client) => await evaluate(client, `(() => {
+  const button = document.querySelector('.exportDockButton.primaryButton')
+  return {
+    disabled: button?.matches(':disabled') ?? null,
+    title: button?.getAttribute('title') ?? null,
+    label: button?.textContent?.trim() ?? null,
+    status: document.querySelector('.exportDockStatus')?.textContent?.trim() ?? null
+  }
+})()`)
+
 const clickButton = async (client, expression, description) => {
   const clicked = await evaluate(client, expression)
   assert.equal(clicked, true, `未找到${description}`)
@@ -428,6 +459,15 @@ const setFormControlValue = async (client, selector, value, eventName) => await 
   element.dispatchEvent(new Event(${JSON.stringify(eventName)}, { bubbles: true }));
   return element.value === ${JSON.stringify(value)};
 })()`)
+
+/** 向真实 Renderer 分发快捷键；Escape 走 document 以覆盖 ModalDrawer 的焦点锁定监听。 */
+const dispatchRendererKey = async (client, key, modifiers = {}) => await evaluate(client, `${key === "Escape" ? "document" : "window"}.dispatchEvent(new KeyboardEvent('keydown', {
+  key: ${JSON.stringify(key)},
+  bubbles: true,
+  metaKey: ${modifiers.metaKey === true},
+  ctrlKey: ${modifiers.ctrlKey === true},
+  shiftKey: ${modifiers.shiftKey === true}
+}))`)
 
 /** 保存真实 Renderer 截图；路径会写入 E2E 日志，供失败和交接复核。 */
 const captureRendererScreenshot = async (client, artifactRoot, label) => {
@@ -566,6 +606,132 @@ const readQueueViewport = async (client) => await evaluate(client, `(() => {
   };
 })()`)
 
+/** 读取真实打包窗口的布局、溢出和队列底部操作区，供固定尺寸验收使用。 */
+const readWorkspaceResponsiveMetrics = async (client) => await evaluate(client, `(() => {
+  const rect = (selector) => {
+    const element = document.querySelector(selector)
+    if (element === null) return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 }
+    const value = element.getBoundingClientRect()
+    return {
+      left: value.left,
+      top: value.top,
+      right: value.right,
+      bottom: value.bottom,
+      width: value.width,
+      height: value.height
+    }
+  }
+  const overflowsHorizontally = (selector) => {
+    const element = document.querySelector(selector)
+    return element === null || element.scrollWidth > element.clientWidth + 1
+  }
+  const queueActions = document.querySelector('.queueActions')
+  const queueRect = queueActions?.getBoundingClientRect()
+  const queueActionButtons = queueActions === null || queueRect === undefined
+    ? []
+    : [...queueActions.querySelectorAll('button')].map((button) => {
+        const buttonRect = button.getBoundingClientRect()
+        const style = getComputedStyle(button)
+        return {
+          label: button.textContent?.trim() ?? '',
+          visible: button.getClientRects().length > 0
+            && style.display !== 'none'
+            && style.visibility !== 'hidden',
+          within: buttonRect.left >= queueRect.left - 1
+            && buttonRect.right <= queueRect.right + 1
+            && buttonRect.top >= queueRect.top - 1
+            && buttonRect.bottom <= queueRect.bottom + 1
+        }
+      })
+  const primaryButtons = [...document.querySelectorAll('.primaryButton')].filter((button) => {
+    const style = getComputedStyle(button)
+    return button.getClientRects().length > 0
+      && style.display !== 'none'
+      && style.visibility !== 'hidden'
+  })
+  const preview = document.querySelector('.previewCanvasWrapper')
+  const previewClass = preview?.className ?? ''
+  const previewBackground = previewClass.match(/previewBackground(Black|Gray|White)/)?.[1]?.toLowerCase() ?? ''
+  return {
+    window: { width: window.outerWidth, height: window.outerHeight },
+    preview: rect('.previewCanvasWrapper'),
+    horizontalOverflow: {
+      document: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1
+        || document.body.scrollWidth > document.body.clientWidth + 1,
+      workspace: overflowsHorizontally('.workspace'),
+      queue: overflowsHorizontally('.workspaceLeft')
+        || overflowsHorizontally('.queuePanel')
+        || overflowsHorizontally('.queueList')
+    },
+    queueActionsComplete: queueActionButtons.length > 0
+      && queueActionButtons.every((button) => button.visible && button.within),
+    queueActionButtons,
+    previewBackground,
+    primaryButtonCount: primaryButtons.length
+  }
+})()`)
+
+/** 读取实际主题文字/控件对比度；预览背景单独读取，确保主题不会污染照片预览。 */
+const readThemeContrastMetrics = async (client) => await evaluate(client, `(() => {
+  const parseColor = (value) => {
+    const match = value.match(/^rgba?\\(([^)]+)\\)$/)
+    if (match === null) return null
+    const channels = match[1].split(',').slice(0, 3).map((part) => Number(part.trim()))
+    return channels.length === 3 && channels.every((channel) => Number.isFinite(channel)) ? channels : null
+  }
+  const luminance = (value) => {
+    const channels = parseColor(value)
+    if (channels === null) return null
+    const linear = channels.map((channel) => {
+      const normalized = channel / 255
+      return normalized <= 0.03928 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4
+    })
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+  }
+  const contrast = (foreground, background) => {
+    const foregroundLuminance = luminance(foreground)
+    const backgroundLuminance = luminance(background)
+    if (foregroundLuminance === null || backgroundLuminance === null) return null
+    const lighter = Math.max(foregroundLuminance, backgroundLuminance)
+    const darker = Math.min(foregroundLuminance, backgroundLuminance)
+    return (lighter + 0.05) / (darker + 0.05)
+  }
+  const style = (selector) => {
+    const element = document.querySelector(selector)
+    if (element === null) return null
+    const computed = getComputedStyle(element)
+    return {
+      color: computed.color,
+      background: computed.backgroundColor,
+      accent: computed.getPropertyValue('--accent-primary').trim(),
+      onAccent: computed.getPropertyValue('--studio-on-accent').trim()
+    }
+  }
+  const shell = style('.workspaceShell')
+  const inspector = style('.workspaceRight')
+  const title = style('.workspaceInspectorTitle')
+  const button = style('.exportDockButton')
+  const input = style('.settingTextInput')
+  const dock = style('.workspaceExportDock')
+  const preview = style('.previewCanvasWrapper')
+  return {
+    colors: { shell, inspector, title, button, input, dock, preview },
+    states: {
+      exportButtonDisabled: document.querySelector('.exportDockButton')?.matches(':disabled') ?? false,
+      exportButtonOpacity: document.querySelector('.exportDockButton') === null
+        ? null
+        : getComputedStyle(document.querySelector('.exportDockButton')).opacity
+    },
+    contrast: {
+      shell: shell === null ? null : contrast(shell.color, shell.background),
+      title: title === null || inspector === null ? null : contrast(title.color, inspector.background),
+      button: button === null ? null : contrast(button.color, button.background),
+      input: input === null ? null : contrast(input.color, input.background),
+      dock: dock === null ? null : contrast(dock.color, dock.background)
+    }
+  }
+})()`)
+
 const parseRequestBody = (request) => {
   if (typeof request?.postData !== "string") return null
   try {
@@ -646,6 +812,15 @@ const restoreWindowBounds = async (client, bounds) => {
   )
 }
 
+const resizeWindowToBounds = async (client, width, height) => {
+  await evaluate(client, `window.resizeTo(${width}, ${height})`)
+  return await waitFor(
+    `${width}×${height} 窗口`,
+    () => readRendererWindowBounds(client),
+    (bounds) => bounds?.width === width && bounds?.height === height
+  )
+}
+
 const waitForDevTools = async (port, child, logs) => await waitFor(
   "Electron 远程调试端点",
   async () => await fetchJson(`http://127.0.0.1:${port}/json/list`),
@@ -669,7 +844,12 @@ const run = async () => {
   const sourceShaBefore = sha256File(sample)
 
   const temporaryRoot = mkdtempSync(path.join(tmpdir(), "camera-border-packaged-e2e-"))
-  const artifactRoot = mkdtempSync(path.join(tmpdir(), "camera-border-packaged-e2e-artifacts-"))
+  const configuredArtifactRoot = process.env["CAMBORDER_E2E_ARTIFACT_DIR"]
+  const artifactRoot = configuredArtifactRoot === undefined
+    ? mkdtempSync(path.join(tmpdir(), "camera-border-packaged-e2e-artifacts-"))
+    : path.resolve(configuredArtifactRoot)
+  mkdirSync(artifactRoot, { recursive: true })
+  const ownsArtifactRoot = configuredArtifactRoot === undefined
   const output = path.resolve(process.env["CAMBORDER_E2E_OUTPUT"] ?? path.join(temporaryRoot, "packaged-e2e-output.png"))
   // 该文件故意不是可解码图片，用于真实验证逐项失败和「重试失败项」路径；不属于产品样片。
   const retryFailureSample = path.join(temporaryRoot, "retry-failure.jpg")
@@ -805,7 +985,7 @@ const run = async () => {
 
     // 通过页面自身的相对请求触发一次可观测的 app:// 健康检查。
     await evaluate(client, "fetch('/api/health').then((response) => response.status)")
-    await waitFor("JavaBridge 健康状态", () => evaluate(client, "document.querySelector('.topbarBadge')?.textContent ?? ''"), (text) => text.includes("正常"))
+    await waitFor("JavaBridge 健康端点 HTTP 200", () => readAppHealthStatus(client), isHealthyHttpStatus)
 
     await clickButton(client, `(() => { const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === '选择照片'); if (button === undefined) return false; button.click(); return true })()`, "选择照片按钮")
     await waitFor(
@@ -845,10 +1025,10 @@ const run = async () => {
     await waitFor(
       "导入后自动应用摄影信息卡",
       () => evaluate(client, `(() => {
-        const card = [...document.querySelectorAll('.quickTemplateCard')].find((item) =>
-          item.querySelector('.quickTemplateName')?.textContent?.trim() === '摄影信息卡'
+        const card = [...document.querySelectorAll('.templateGalleryCard')].find((item) =>
+          item.querySelector('.templateGalleryName')?.textContent?.trim() === '摄影信息卡'
         );
-        return card?.querySelector('.quickTemplateApplyButton')?.textContent?.trim() ?? '';
+        return card?.querySelector('.templateGalleryApplyButton')?.textContent?.trim() ?? '';
       })()`),
       (label) => label === "已应用"
     )
@@ -859,26 +1039,84 @@ const run = async () => {
     )
     const defaultPreview = await waitForVisiblePreviewPhoto(client, artifactRoot, "默认摄影信息卡-引擎已同步")
 
-    const minimumWindow = await resizeToMinimumWindow(client)
-    report(`最小窗口：${minimumWindow.minimumBounds.width}×${minimumWindow.minimumBounds.height}`)
-    await sleep(250)
-    const minimumScreenshot = await captureRendererScreenshot(client, artifactRoot, "最小窗口-摄影信息卡")
-    const minimumPreview = await waitFor(
-      "最小窗口照片可见或预览区域不足提示",
-      () => readPreviewCanvasMetrics(client),
-      (metrics) => hasVisiblePhotoContent(metrics)
-        || typeof metrics.insufficientMessage === "string" && metrics.insufficientMessage.includes("预览区域不足")
-    )
-    const minimumPhotoVisible = hasVisiblePhotoContent(minimumPreview)
-    const minimumHasWarning = typeof minimumPreview.insufficientMessage === "string"
-      && minimumPreview.insufficientMessage.includes("预览区域不足")
+    const responsiveEvidence = {}
+    for (const nextTheme of ["dark", "warm"]) {
+      assert.equal(
+        await setFormControlValue(client, 'select[aria-label="界面主题"]', nextTheme, "change"),
+        true,
+        `无法切换到${nextTheme}主题`
+      )
+      await waitFor(
+        `${nextTheme}主题生效`,
+        () => evaluate(client, "document.querySelector('.workspaceShell')?.getAttribute('data-theme') ?? ''"),
+        (value) => value === nextTheme
+      )
+      for (const size of [{ width: 1200, height: 760 }, { width: 1400, height: 920 }]) {
+        await resizeWindowToBounds(client, size.width, size.height)
+        await waitFor(
+          `${nextTheme}主题导出状态可用`,
+          async () => ({ healthStatus: await readAppHealthStatus(client), readiness: await readExportReadiness(client) }),
+          (value) => isHealthyHttpStatus(value?.healthStatus) && value?.readiness?.disabled === false,
+          20_000
+        )
+        await waitFor(
+          `${nextTheme}主题视觉过渡完成`,
+          () => readThemeContrastMetrics(client),
+          (value) => typeof value?.contrast?.button === "number" && value.contrast.button >= 4.5
+        )
+        const metrics = await waitFor(
+          `${nextTheme} ${size.width}×${size.height} 响应式布局`,
+          () => readWorkspaceResponsiveMetrics(client),
+          responsiveLayoutPasses
+        )
+        const contrast = await readThemeContrastMetrics(client)
+        const contrastValues = Object.values(contrast.contrast).filter((value) => typeof value === "number")
+        assert.ok(contrastValues.length >= 4, `${nextTheme}主题没有取得完整文字对比度指标`)
+        assert.equal(
+          contrastValues.every((value) => value >= 4.5),
+          true,
+          `${nextTheme}主题存在低于 AA 的文字/控件对比度：${JSON.stringify(contrast)}`
+        )
+        const screenshotPath = await captureRendererScreenshot(
+          client,
+          artifactRoot,
+          `${size.width}x${size.height}-${nextTheme}`
+        )
+        const evidenceKey = `${size.width}x${size.height}-${nextTheme}`
+        responsiveEvidence[evidenceKey] = { metrics, contrast, screenshotPath }
+        report(`${evidenceKey}：预览=${metrics.preview.width}×${metrics.preview.height}；截图=${screenshotPath}；对比度=${JSON.stringify(contrast.contrast)}`)
+      }
+    }
     assert.equal(
-      minimumPreview.syncLabel.includes("引擎预览已同步") && !minimumPhotoVisible && !minimumHasWarning,
-      false,
-      `最小窗口不能出现“已同步”但纯边框画布；截图=${minimumScreenshot}；${formatPreviewCanvasMetrics(minimumPreview)}`
+      await setFormControlValue(client, 'select[aria-label="界面主题"]', "dark", "change"),
+      true,
+      "无法恢复深色影棚主题"
     )
-    report(`最小窗口预览：${formatPreviewCanvasMetrics(minimumPreview)}；截图=${minimumScreenshot}`)
-    await restoreWindowBounds(client, minimumWindow.initialBounds)
+    await waitFor(
+      "恢复深色影棚主题",
+      () => evaluate(client, "document.querySelector('.workspaceShell')?.getAttribute('data-theme') ?? ''"),
+      (value) => value === "dark"
+    )
+    await resizeWindowToBounds(client, 1400, 920)
+    for (const background of ["black", "gray", "white"]) {
+      await clickButton(client, `(() => {
+        const button = [...document.querySelectorAll('.workspacePreviewBackgroundButton')].find((item) => item.textContent?.trim() === ${JSON.stringify(background === "black" ? "中性黑" : background === "gray" ? "中性灰" : "中性白")});
+        if (button === undefined) return false;
+        button.click();
+        return true;
+      })()`, `${background}预览背景按钮`)
+      await waitFor(
+        `${background}预览背景生效`,
+        () => readWorkspaceResponsiveMetrics(client),
+        (metrics) => metrics.previewBackground === background
+      )
+    }
+    await clickButton(client, `(() => {
+      const button = [...document.querySelectorAll('.workspacePreviewBackgroundButton')].find((item) => item.textContent?.trim() === '中性灰');
+      if (button === undefined) return false;
+      button.click();
+      return true;
+    })()`, "恢复中性灰预览背景按钮")
 
     const validPreviewUrl = requests.find((url) => url.startsWith("app://app/previews/"))
     assert.notEqual(validPreviewUrl, undefined, "没有记录有效 app:// 预览路由")
@@ -899,19 +1137,19 @@ const run = async () => {
 
     const previewPostsBeforeTemplate = requests.filter((url) => url === "app://app/api/preview").length
     await clickButton(client, `(() => {
-      const card = [...document.querySelectorAll('.quickTemplateCard')].find((item) =>
-        item.querySelector('.quickTemplateName')?.textContent?.trim() === '全画幅叠字'
+      const card = [...document.querySelectorAll('.templateGalleryCard')].find((item) =>
+        item.querySelector('.templateGalleryName')?.textContent?.trim() === '全画幅叠字'
       );
-      const button = card?.querySelector('button.quickTemplateApplyButton');
-      if (button === null || button === undefined || button.textContent?.trim() !== '使用') return false;
+      const button = card?.querySelector('button.templateGalleryApplyButton');
+      if (button === null || button === undefined || button.textContent?.trim() !== '应用') return false;
       button.click();
       return true;
     })()`, "零边框模板使用按钮")
     await waitFor("零边框模板应用完成", () => evaluate(client, `(() => {
-      const card = [...document.querySelectorAll('.quickTemplateCard')].find((item) =>
-        item.querySelector('.quickTemplateName')?.textContent?.trim() === '全画幅叠字'
+      const card = [...document.querySelectorAll('.templateGalleryCard')].find((item) =>
+        item.querySelector('.templateGalleryName')?.textContent?.trim() === '全画幅叠字'
       );
-      return card?.querySelector('.quickTemplateApplyButton')?.textContent?.trim() ?? '';
+      return card?.querySelector('.templateGalleryApplyButton')?.textContent?.trim() ?? '';
     })()`), (label) => label === "已应用")
     await waitFor(
       "零边框模板应用后的新引擎预览请求",
@@ -936,62 +1174,270 @@ const run = async () => {
     }
     const zeroBorderPreview = await waitForVisiblePreviewPhoto(client, artifactRoot, "零边框模板-引擎已同步")
 
-    // 真实逐项失败/重试闸门：首轮导入一个不可解码 JPEG，首轮失败后替换为固定有效样片，
-    // 再通过真实 UI 点击「重试失败项」，确保重试请求经过 app:// 代理和托管 JavaBridge。
+    // 真实工作台流程：页签、摄影信息覆盖、资料库、预设管理/应用、用户版式保存，
+    // 均经当前 UI 完成；这些动作不会直接调用 Java API。
     await clickButton(client, `(() => {
-      const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === '创建摄影预设');
+      const tab = [...document.querySelectorAll('[role="tab"]')].find((item) => item.textContent?.trim() === '摄影信息');
+      if (tab === undefined) return false;
+      tab.click();
+      return true;
+    })()`, "摄影信息页签")
+    await waitFor(
+      "摄影信息页签内容",
+      () => evaluate(client, "document.querySelectorAll('[role=tabpanel] .photoIdentityPanelInner').length"),
+      (count) => count === 1
+    )
+    await clickButton(client, `(() => {
+      const summary = document.querySelector('.identitySummary');
+      if (summary === null) return false;
+      summary.click();
+      return true;
+    })()`, "摄影信息覆盖展开")
+    await waitFor("摄影信息编辑区", () => evaluate(client, "Boolean(document.querySelector('.identityEditor'))"), (visible) => visible === true)
+    assert.equal(
+      await setFormControlValue(client, '.identityEditor input[placeholder="例如：Leica M6"]', "E2E Camera", "input"),
+      true,
+      "无法修改当前图片摄影信息"
+    )
+    await waitFor(
+      "摄影信息覆盖已保存",
+      () => evaluate(client, "document.querySelector('.identityEditor input[placeholder=\"例如：Leica M6\"]')?.value ?? ''"),
+      (value) => value === "E2E Camera"
+    )
+
+    const assetLibraryOpener = `(() => {
+      const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === '打开资料库');
+      if (button === undefined) return false;
+      button.focus();
+      button.click();
+      return true;
+    })()`
+    await clickButton(client, assetLibraryOpener, "资料库入口")
+    await waitFor("资料库抽屉", () => evaluate(client, "document.querySelector('[role=dialog] .assetPanelInner') !== null"), (visible) => visible === true)
+    await clickButton(client, `(() => {
+      const button = [...document.querySelectorAll('[role=dialog] button')].find((item) => item.textContent?.trim() === '新增相机');
       if (button === undefined) return false;
       button.click();
       return true;
-    })()`, "创建摄影预设按钮")
-    await waitFor(
-      "摄影预设创建表单",
-      () => evaluate(client, "Boolean(document.querySelector('.quickPresetCreateForm'))"),
-      (visible) => visible === true
+    })()`, "新增相机按钮")
+    await waitFor("相机资产编辑器", () => evaluate(client, "Boolean(document.querySelector('[role=dialog] .assetEditor'))"), (visible) => visible === true)
+    assert.equal(
+      await setFormControlValue(client, '[role=dialog] .assetEditor input[placeholder="例如：Leica"]', "E2E", "input"),
+      true,
+      "无法填写相机资产品牌"
     )
     assert.equal(
-      await setFormControlValue(client, '.quickPresetCreateForm input[placeholder="例如：135 Portra 日常"]', "打包 E2E 预设", "input"),
+      await setFormControlValue(client, '[role=dialog] .assetEditor input[placeholder="例如：M6"]', "Camera Asset", "input"),
+      true,
+      "无法填写相机资产型号"
+    )
+    await clickButton(client, `(() => {
+      const button = [...document.querySelectorAll('[role=dialog] .assetEditorActions button')].find((item) => item.textContent?.trim() === '保存');
+      if (button === undefined) return false;
+      button.click();
+      return true;
+    })()`, "保存相机资产按钮")
+    await waitFor(
+      "相机资产保存完成",
+      () => evaluate(client, "document.querySelector('[role=dialog] .assetItem')?.textContent ?? ''"),
+      (text) => text.includes("E2E Camera Asset")
+    )
+    await dispatchRendererKey(client, "Escape")
+    await waitFor("资料库抽屉关闭", () => evaluate(client, "document.querySelector('[role=dialog]') === null"), (closed) => closed === true)
+    assert.equal(
+      await evaluate(client, "document.activeElement?.textContent?.trim() ?? ''"),
+      "打开资料库",
+      "资料库抽屉关闭后没有恢复入口焦点"
+    )
+
+    const presetLibraryOpener = `(() => {
+      const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === '管理拍摄信息预设');
+      if (button === undefined) return false;
+      button.focus();
+      button.click();
+      return true;
+    })()`
+    await clickButton(client, presetLibraryOpener, "拍摄信息预设入口")
+    await waitFor("拍摄信息预设抽屉", () => evaluate(client, "document.querySelector('[role=dialog] .presetTextComposer') !== null"), (visible) => visible === true)
+    await clickButton(client, `(() => {
+      const button = [...document.querySelectorAll('[role=dialog] button')].find((item) => item.textContent?.trim() === '开始录入');
+      if (button === undefined) return false;
+      button.click();
+      return true;
+    })()`, "文字录入预设按钮")
+    await waitFor("文字录入预设表单", () => evaluate(client, "Boolean(document.querySelector('[role=dialog] .presetTextComposerForm'))"), (visible) => visible === true)
+    assert.equal(
+      await setFormControlValue(client, '[role=dialog] .presetTextComposerForm input[placeholder="例如：135 Portra 日常"]', "打包 E2E 预设", "input"),
       true,
       "无法填写打包 E2E 预设名称"
     )
     assert.equal(
-      await setFormControlValue(client, '.quickPresetCreateForm select', "6x10", "change"),
+      await setFormControlValue(client, '[role=dialog] .presetTextComposerForm select', "6x10", "change"),
       true,
       "无法设置打包 E2E 拍摄画幅"
     )
     assert.equal(
-      await setFormControlValue(client, '.quickPresetCreateForm input[placeholder="例如：Leica M6"]', "打包 E2E 相机", "input"),
+      await setFormControlValue(client, '[role=dialog] .presetTextComposerForm input[placeholder="例如：Leica M6"]', "E2E Preset Camera", "input"),
       true,
       "无法填写打包 E2E 相机"
     )
     await clickButton(client, `(() => {
-      const button = [...document.querySelectorAll('.quickPresetCreateForm button')].find((item) => item.textContent?.trim() === '保存并应用');
+      const button = [...document.querySelectorAll('[role=dialog] .presetTextComposerForm button')].find((item) => item.textContent?.trim() === '保存并应用');
       if (button === undefined) return false;
       button.click();
       return true;
     })()`, "保存摄影预设按钮")
     await waitFor(
-      "全部图片作用域控件",
-      () => evaluate(client, "document.querySelectorAll('.quickScopeSelector button').length"),
+      "摄影预设作用域控件",
+      () => evaluate(client, "document.querySelectorAll('[role=dialog] .presetScopeSelector button').length"),
       (count) => count === 3
     )
     await clickButton(client, `(() => {
-      const button = [...document.querySelectorAll('.quickScopeSelector button')].find((item) => item.textContent?.trim() === '全部图片');
+      const button = [...document.querySelectorAll('[role=dialog] .presetScopeSelector button')].find((item) => item.textContent?.trim() === '全部图片');
       if (button === undefined) return false;
       button.click();
       return true;
     })()`, "全部图片作用域按钮")
     await waitFor(
+      "新摄影预设进入列表",
+      () => evaluate(client, "document.querySelector('[role=dialog] .presetItem')?.textContent ?? ''"),
+      (text) => text.includes("打包 E2E 预设")
+    )
+    assert.equal(
+      await setFormControlValue(client, '[role=dialog] select[aria-label="选择预设"]', await evaluate(client, "document.querySelector('[role=dialog] select[aria-label=\"选择预设\"] option:not([disabled])')?.value ?? ''"), "change"),
+      true,
+      "无法选择已保存摄影预设"
+    )
+    await clickButton(client, `(() => {
+      const button = [...document.querySelectorAll('[role=dialog] button')].find((item) => item.textContent?.trim() === '应用全部');
+      if (button === undefined || button.disabled) return false;
+      button.click();
+      return true;
+    })()`, "应用摄影预设到全部图片按钮")
+    await waitFor(
+      "摄影预设应用到全部图片",
+      () => evaluate(client, "document.querySelectorAll('.queueItem .queuePresetIndicator').length"),
+      (count) => count === 2
+    )
+    await dispatchRendererKey(client, "Escape")
+    await waitFor("摄影预设抽屉关闭", () => evaluate(client, "document.querySelector('[role=dialog]') === null"), (closed) => closed === true)
+    assert.equal(
+      await evaluate(client, "document.activeElement?.textContent?.trim() ?? ''"),
+      "管理拍摄信息预设",
+      "预设抽屉关闭后没有恢复入口焦点"
+    )
+
+    await clickButton(client, `(() => {
+      const tab = [...document.querySelectorAll('[role="tab"]')].find((item) => item.textContent?.trim() === '样式');
+      if (tab === undefined) return false;
+      tab.click();
+      return true;
+    })()`, "样式页签")
+    await clickButton(client, `(() => {
+      const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === '管理用户版式');
+      if (button === undefined) return false;
+      button.focus();
+      button.click();
+      return true;
+    })()`, "用户版式管理入口")
+    await waitFor("用户版式抽屉", () => evaluate(client, "document.querySelector('[role=dialog] .templateNameInput') !== null"), (visible) => visible === true)
+    assert.equal(
+      await setFormControlValue(client, '[role=dialog] .templateNameInput', "打包 E2E 版式", "input"),
+      true,
+      "无法填写用户版式名称"
+    )
+    await clickButton(client, `(() => {
+      const button = [...document.querySelectorAll('[role=dialog] .templateNameRow button')].find((item) => item.textContent?.trim() === '保存');
+      if (button === undefined || button.disabled) return false;
+      button.click();
+      return true;
+    })()`, "保存用户版式按钮")
+    await waitFor(
+      "用户版式保存完成",
+      () => evaluate(client, "document.querySelector('[role=dialog] .templateItem')?.textContent ?? ''"),
+      (text) => text.includes("打包 E2E 版式")
+    )
+    await dispatchRendererKey(client, "Escape")
+    await waitFor("用户版式抽屉关闭", () => evaluate(client, "document.querySelector('[role=dialog]') === null"), (closed) => closed === true)
+
+    await clickButton(client, `(() => {
+      const tab = [...document.querySelectorAll('[role="tab"]')].find((item) => item.textContent?.trim() === '样式');
+      if (tab === undefined) return false;
+      tab.click();
+      return true;
+    })()`, "样式页签")
+    await clickButton(client, `(() => {
+      const button = document.querySelector('button[aria-label="折叠工作台面板"]');
+      if (button === null) return false;
+      button.click();
+      return true;
+    })()`, "折叠右侧面板按钮")
+    await waitFor("右侧面板折叠", () => evaluate(client, "document.querySelector('.collapsedRight') !== null"), (collapsed) => collapsed === true)
+    await clickButton(client, `(() => {
+      const button = document.querySelector('button[aria-label="展开检查器"]');
+      if (button === null) return false;
+      button.click();
+      return true;
+    })()`, "展开右侧面板按钮")
+    await waitFor("右侧面板恢复", () => evaluate(client, "document.querySelector('.workspaceInspector') !== null"), (visible) => visible === true)
+
+    const activePathBeforeKeyboard = await evaluate(client, "document.querySelector('.queueItem.isActive .queueSub')?.getAttribute('title') ?? ''")
+    await dispatchRendererKey(client, "ArrowDown")
+    await waitFor(
+      "方向键切换队列当前项",
+      () => evaluate(client, "document.querySelector('.queueItem.isActive .queueSub')?.getAttribute('title') ?? ''"),
+      (value) => value.length > 0 && value !== activePathBeforeKeyboard
+    )
+    await dispatchRendererKey(client, "ArrowUp")
+    await waitFor(
+      "方向键切回原当前项",
+      () => evaluate(client, "document.querySelector('.queueItem.isActive .queueSub')?.getAttribute('title') ?? ''"),
+      (value) => value === activePathBeforeKeyboard
+    )
+    await dispatchRendererKey(client, " ")
+    await waitFor(
+      "空格勾选当前项但不切换预览",
+      () => evaluate(client, `({
+        activePath: document.querySelector('.queueItem.isActive .queueSub')?.getAttribute('title') ?? '',
+        checked: (document.querySelector('.queueItem.isActive .queueItemCheck') instanceof HTMLInputElement)
+          ? document.querySelector('.queueItem.isActive .queueItemCheck').checked
+          : false
+      })`),
+      (value) => value.activePath === activePathBeforeKeyboard && value.checked === true
+    )
+    await dispatchRendererKey(client, "f")
+    await waitFor("F 键适应预览", () => evaluate(client, "document.querySelector('.previewZoomLabel')?.textContent?.trim() ?? ''"), (value) => value === "适应")
+    await dispatchRendererKey(client, "1")
+    await waitFor("1 键显示 100%", () => evaluate(client, "document.querySelector('.previewZoomLabel')?.textContent?.trim() ?? ''"), (value) => value === "100%")
+
+    const itemCountBeforeDeleteUndo = await evaluate(client, "document.querySelectorAll('.queueItem').length")
+    await dispatchRendererKey(client, "Delete")
+    await waitFor("Delete 键删除当前图片", () => evaluate(client, "document.querySelectorAll('.queueItem').length"), (count) => count === itemCountBeforeDeleteUndo - 1)
+    await dispatchRendererKey(client, "z", { metaKey: true })
+    await waitFor("Cmd/Ctrl+Z 恢复删除", () => evaluate(client, "document.querySelectorAll('.queueItem').length"), (count) => count === itemCountBeforeDeleteUndo)
+    await clickButton(client, `(() => {
+      const button = [...document.querySelectorAll('.queueActions button')].find((item) => item.textContent?.trim() === '清空');
+      if (button === undefined) return false;
+      button.click();
+      return true;
+    })()`, "清空队列按钮")
+    await waitFor("清空队列", () => evaluate(client, "document.querySelectorAll('.queueItem').length"), (count) => count === 0)
+    await dispatchRendererKey(client, "z", { metaKey: true })
+    await waitFor("撤销清空队列", () => evaluate(client, "document.querySelectorAll('.queueItem').length"), (count) => count === itemCountBeforeDeleteUndo)
+
+    // 真实逐项失败/重试闸门：首轮导入一个不可解码 JPEG，首轮失败后替换为固定有效样片，
+    // 再通过真实 UI 点击「重试失败项」，确保重试请求经过 app:// 代理和托管 JavaBridge。
+    await waitFor(
       "批量导出全部图片按钮",
-      () => evaluate(client, "(() => { const button = [...document.querySelectorAll('button.previewExportButton')].find((item) => item.textContent?.includes('批量导出 2 张')); return button !== undefined && !button.disabled })()"),
+      () => evaluate(client, "(() => { const button = [...document.querySelectorAll('button.exportDockButton')].find((item) => item.textContent?.includes('批量导出 2 张')); return button !== undefined && !button.disabled })()"),
       (available) => available === true
     )
-    await clickButton(client, `(() => { const button = [...document.querySelectorAll('button.previewExportButton')].find((item) => item.textContent?.includes('批量导出 2 张')); if (button === undefined || button.disabled) return false; button.click(); return true })()`, "批量导出全部图片按钮")
+    await clickButton(client, `(() => { const button = [...document.querySelectorAll('button.exportDockButton')].find((item) => item.textContent?.includes('批量导出 2 张')); if (button === undefined || button.disabled) return false; button.click(); return true })()`, "批量导出全部图片按钮")
     let batchFirstRun
     try {
       batchFirstRun = await waitFor(
         "批量导出出现一个真实失败项",
-        () => evaluate(client, "document.querySelector('.previewExportStatus')?.textContent ?? ''"),
+        () => evaluate(client, "document.querySelector('.exportDockStatus')?.textContent ?? ''"),
         (text) => text.includes("批量导出完成") && text.includes("成功 1") && text.includes("失败 1"),
         120_000
       )
@@ -1026,7 +1472,7 @@ const run = async () => {
     await clickButton(client, `(() => { const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === '重试失败项'); if (button === undefined) return false; button.click(); return true })()`, "重试失败项按钮")
     const batchRetryResult = await waitFor(
       "重试失败项完成",
-      () => evaluate(client, "document.querySelector('.previewExportStatus')?.textContent ?? ''"),
+      () => evaluate(client, "document.querySelector('.exportDockStatus')?.textContent ?? ''"),
       (text) => text.includes("批量导出完成") && text.includes("成功 2") && text.includes("失败 0"),
       120_000
     )
@@ -1042,10 +1488,10 @@ const run = async () => {
 
     await waitFor(
       "单图导出按钮可用",
-      () => evaluate(client, "(() => { const button = [...document.querySelectorAll('button.previewExportButton')].find((item) => item.textContent?.includes('导出原图')); return button !== undefined && !button.disabled })()"),
+      () => evaluate(client, "(() => { const button = [...document.querySelectorAll('button.exportDockButton')].find((item) => item.textContent?.includes('导出原图')); return button !== undefined && !button.disabled })()"),
       (available) => available === true
     )
-    await clickButton(client, `(() => { const button = [...document.querySelectorAll('button.previewExportButton')].find((item) => item.textContent?.includes('导出原图')); if (button === undefined || button.disabled) return false; button.click(); return true })()`, "导出原图按钮")
+    await clickButton(client, `(() => { const button = [...document.querySelectorAll('button.exportDockButton')].find((item) => item.textContent?.includes('导出原图')); if (button === undefined || button.disabled) return false; button.click(); return true })()`, "导出原图按钮")
     await waitFor("导出文件写盘", () => existsSync(output), (exists) => exists === true)
     const exportFileSize = await waitFor(
       "导出文件写入完成",
@@ -1222,21 +1668,21 @@ const run = async () => {
     await waitFor(
       "100 项批量导出按钮",
       () => evaluate(client, `(() => {
-        const button = [...document.querySelectorAll('button.previewExportButton')].find((item) => item.textContent?.includes('批量导出 ${UI_PERFORMANCE_QUEUE_COUNT} 张'));
+        const button = [...document.querySelectorAll('button.exportDockButton')].find((item) => item.textContent?.includes('批量导出 ${UI_PERFORMANCE_QUEUE_COUNT} 张'));
         return button !== undefined && !button.disabled;
       })()`),
       (available) => available === true,
       120_000
     )
     await clickButton(client, `(() => {
-      const button = [...document.querySelectorAll('button.previewExportButton')].find((item) => item.textContent?.includes('批量导出 ${UI_PERFORMANCE_QUEUE_COUNT} 张'));
+      const button = [...document.querySelectorAll('button.exportDockButton')].find((item) => item.textContent?.includes('批量导出 ${UI_PERFORMANCE_QUEUE_COUNT} 张'));
       if (button === undefined || button.disabled) return false;
       button.click();
       return true;
     })()`, "100 项批量导出按钮")
     const uiPerformanceExportResult = await waitFor(
       "100 项真实 UI 批量导出完成",
-      () => evaluate(client, "document.querySelector('.previewExportStatus')?.textContent ?? ''"),
+      () => evaluate(client, "document.querySelector('.exportDockStatus')?.textContent ?? ''"),
       (text) => text.includes("批量导出完成")
         && text.includes(`共 ${UI_PERFORMANCE_QUEUE_COUNT} 张`)
         && text.includes(`成功 ${UI_PERFORMANCE_QUEUE_COUNT}`)
@@ -1262,26 +1708,26 @@ const run = async () => {
       unlinkSync(path.join(retryOutputDirectory, name))
     }
     await clickButton(client, `(() => {
-      const button = [...document.querySelectorAll('button.previewExportButton')].find((item) => item.textContent?.includes('批量导出 ${UI_PERFORMANCE_QUEUE_COUNT} 张'));
+      const button = [...document.querySelectorAll('button.exportDockButton')].find((item) => item.textContent?.includes('批量导出 ${UI_PERFORMANCE_QUEUE_COUNT} 张'));
       if (button === undefined || button.disabled) return false;
       button.click();
       return true;
     })()`, "100 项取消测试批量导出按钮")
     await waitFor(
       "100 项批量导出进入运行态",
-      () => evaluate(client, "[...document.querySelectorAll('button.previewExportButton')].some((item) => item.textContent?.includes('批量导出中'))"),
+      () => evaluate(client, "[...document.querySelectorAll('button.exportDockButton')].some((item) => item.textContent?.includes('批量导出中'))"),
       (running) => running === true,
       120_000
     )
     await clickButton(client, `(() => {
-      const button = [...document.querySelectorAll('button.previewExportButton')].find((item) => item.textContent?.trim() === '取消导出');
+      const button = [...document.querySelectorAll('button.exportDockButton')].find((item) => item.textContent?.trim() === '取消导出');
       if (button === undefined) return false;
       button.click();
       return true;
     })()`, "100 项批量导出取消按钮")
     const uiPerformanceCancellationResult = await waitFor(
       "100 项批量导出取消完成",
-      () => evaluate(client, "document.querySelector('.previewExportStatus')?.textContent ?? ''"),
+      () => evaluate(client, "document.querySelector('.exportDockStatus')?.textContent ?? ''"),
       (text) => text.includes("批量导出已取消") && text.includes(`共 ${UI_PERFORMANCE_QUEUE_COUNT} 张`),
       120_000
     )
@@ -1340,8 +1786,8 @@ const run = async () => {
     knownJavaPids.add(secondJavaPid)
     await waitFor(
       "重试后引擎正常",
-      () => evaluate(client, "document.querySelector('.topbarBadge')?.textContent ?? ''"),
-      (text) => text.includes("正常"),
+      () => readAppHealthStatus(client),
+      isHealthyHttpStatus,
       20_000
     )
     await waitFor(
@@ -1367,6 +1813,7 @@ const run = async () => {
     console.log(`[packaged-e2e] 真实失败项重试：首轮=${batchFirstRun}；重试后=${batchRetryResult}；输出=${retryExportOutput}；尺寸=${retryExportDimensions.width}×${retryExportDimensions.height}`)
     console.log(`[packaged-e2e] 真实取消运行：${uiPerformanceCancellationResult}`)
     console.log(`[packaged-e2e] 100 项 UI 性能证据：${JSON.stringify(uiPerformanceEvidence)}`)
+    console.log(`[packaged-e2e] 四尺寸主题响应式证据：${JSON.stringify(responsiveEvidence)}`)
     console.log(`[packaged-e2e] CSP：已收到并拦截外网 fetch；Network 未记录 https://example.invalid/camborder-csp-probe`)
     console.log(`[packaged-e2e] 网络断言：${requests.length} 个请求全部为 app://app/、data: 或 blob:；有效预览路由 200，裸/畸形路由失败`)
 
@@ -1406,7 +1853,9 @@ const run = async () => {
     }
     if (process.env["CAMBORDER_E2E_KEEP_TEMP"] !== "1") {
       rmSync(temporaryRoot, { recursive: true, force: true })
-      rmSync(artifactRoot, { recursive: true, force: true })
+      if (ownsArtifactRoot) {
+        rmSync(artifactRoot, { recursive: true, force: true })
+      }
     }
   }
 }

@@ -42,13 +42,13 @@ export type BuiltInTemplate = {
     readonly textColor: string
     readonly bottomRatio: number
   }
-  /** 模板使用的信息字段（快速模式模板卡片展示用，如 ["相机", "镜头", "胶片"]）。 */
+  /** 模板使用的信息字段（统一版式画廊展示用，如 ["相机", "镜头", "胶片"]）。 */
   readonly fields?: readonly string[]
 }
 
 /**
  * 摄影信息卡四个预设布局变体的模板 id。
- * 白/黑边框 × 底部居中/左下布局，快速模式「摄影信息卡」卡片用这组 id 做变体切换。
+ * 白/黑边框 × 底部居中/左下布局，统一工作台「摄影信息卡」用这组 id 做变体切换。
  */
 export const PHOTO_INFO_CARD_TEMPLATE_IDS = {
   /** 白边 · 底部居中（默认）。 */
@@ -62,10 +62,10 @@ export const PHOTO_INFO_CARD_TEMPLATE_IDS = {
 } as const
 
 /**
- * 快速出图模式首屏精选模板（6-8 个）。
+ * 统一工作台首屏精选模板（6-8 个）。
  * 顺序即展示顺序；摄影信息卡排第一，是导入照片后的默认模板。
  */
-export const QUICK_GALLERY_TEMPLATE_IDS: readonly string[] = [
+export const FEATURED_GALLERY_TEMPLATE_IDS: readonly string[] = [
   PHOTO_INFO_CARD_TEMPLATE_IDS.centerWhite,
   "classic-white",
   "minimal-black",
@@ -131,7 +131,7 @@ const disabledLayer3 = (id: string = "layer-3"): TextLayerSettings => ({
  */
 // CORE_TEMPLATES 为既有模板；BUILT_IN_TEMPLATES 在文件末尾合并风格模板。
 const CORE_TEMPLATES: readonly BuiltInTemplate[] = [
-  // ── 摄影信息卡（快速出图默认模板） ──────────────────────
+  // ── 摄影信息卡（统一工作台默认模板） ──────────────────────
   {
     id: "photo-info-card",
     name: "摄影信息卡",
@@ -213,7 +213,7 @@ const CORE_TEMPLATES: readonly BuiltInTemplate[] = [
     thumb: { borderColor: "#111111", photoColor: "#4a4540", textColor: "#eaeaea", bottomRatio: 0.4 },
   },
 
-  // ── 精选补充模板（快速模式首屏 8 个之一） ────────────────
+  // ── 精选补充模板（统一工作台首屏画廊项目） ────────────────
   {
     id: "medium-format-margin",
     name: "中画幅留白",

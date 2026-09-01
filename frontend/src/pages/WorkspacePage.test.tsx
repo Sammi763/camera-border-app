@@ -326,7 +326,7 @@ describe("WorkspacePage 统一工作台（首屏与默认模板）", () => {
     expect(screen.getByRole("tab", { name: "摄影信息" })).toBeTruthy()
     expect(screen.getByRole("tab", { name: "输出" })).toBeTruthy()
     expect(screen.getByRole("group", { name: "导出" })).toBeTruthy()
-    expect(screen.queryByRole("button", { name: "高级编辑" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "管理用户版式" })).toBeTruthy()
 
     const themeSelect = screen.getByRole("combobox", { name: "界面主题" })
     expect((themeSelect as HTMLSelectElement).value).toBe("dark")

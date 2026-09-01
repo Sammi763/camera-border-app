@@ -1,7 +1,7 @@
 /**
- * 快速流程「创建摄影预设」辅助：把自由文本录入转换成可保存的资产 + 预设。
+ * 兼容工具「创建摄影预设」辅助：把自由文本录入转换成可保存的资产 + 预设。
  *
- * 胶片用户在快速模式直接录入相机/镜头/胶片文本，无需先进资产库：
+ * 用户可以直接录入相机/镜头/胶片文本，无需先进资产库：
  * - 已存在同名资产（品牌+型号一致）时复用其 id，不产生重复资产；
  * - 不存在则生成新资产（品牌取首个词，其余为型号）；
  * - 最后返回一个引用这些资产的摄影预设。
@@ -12,7 +12,7 @@
 import type { CameraAsset, FilmAsset, LensAsset, PhotoAssetStore, ShootingPreset } from "../../metadata/types"
 import { createEmptyPreset } from "../../metadata/types"
 
-/** 快速创建预设的表单草稿。 */
+/** 文字创建预设的表单草稿。 */
 export type PresetDraft = {
   readonly name: string
   readonly category: string
@@ -85,7 +85,7 @@ export const buildPresetFromText = (
         brand,
         model,
         alias: draft.camera.trim(),
-        notes: "由快速流程创建"
+        notes: "由文字录入创建"
       }
       newCameras.push(created)
       cameraAssetId = created.id
@@ -106,7 +106,7 @@ export const buildPresetFromText = (
         focalLength: "",
         maxAperture: "",
         mount: "",
-        notes: "由快速流程创建"
+        notes: "由文字录入创建"
       }
       newLenses.push(created)
       lensAssetId = created.id
@@ -128,7 +128,7 @@ export const buildPresetFromText = (
         type: "",
         colorProfile: "",
         discontinued: false,
-        notes: "由快速流程创建"
+        notes: "由文字录入创建"
       }
       newFilms.push(created)
       filmAssetId = created.id
@@ -145,7 +145,7 @@ export const buildPresetFromText = (
     lensAssetId,
     filmAssetId,
     defaultLocation: draft.location.trim().length > 0 ? draft.location.trim() : null,
-    notes: "由快速流程创建"
+    notes: "由文字录入创建"
   }
 
   return { preset, newCameras, newLenses, newFilms }

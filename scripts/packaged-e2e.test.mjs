@@ -8,8 +8,10 @@ import {
   collectProtocolDiagnostics,
   findPackagedExecutable,
   hasVisiblePhotoContent,
+  isHealthyHttpStatus,
   PHOTO_CONTENT_PIXEL_THRESHOLD,
-  readImageDimensions
+  readImageDimensions,
+  responsiveLayoutPasses
 } from "./packaged-e2e.mjs"
 
 const makeExecutable = (filePath) => {
@@ -99,6 +101,31 @@ test("协议诊断只检查实际日志正文，不把 CDP 请求编号误判为
 
   assert.equal(diagnostics.includes("40309.6"), false)
   assert.equal(diagnostics.includes("服务返回 403"), true)
+})
+
+test("打包健康闸门只接受 app:// 健康端点的 HTTP 200", () => {
+  assert.equal(isHealthyHttpStatus(200), true)
+  assert.equal(isHealthyHttpStatus(204), false)
+  assert.equal(isHealthyHttpStatus(503), false)
+  assert.equal(isHealthyHttpStatus("200"), false)
+})
+
+test("响应式闸门拒绝预览不足、水平溢出或操作区被裁切", () => {
+  const passingMetrics = {
+    preview: { width: 520, height: 480 },
+    horizontalOverflow: { document: false, workspace: false, queue: false },
+    queueActionsComplete: true,
+    previewBackground: "gray",
+    primaryButtonCount: 1
+  }
+  assert.equal(responsiveLayoutPasses(passingMetrics), true)
+  assert.equal(responsiveLayoutPasses({ ...passingMetrics, preview: { width: 519, height: 480 } }), false)
+  assert.equal(responsiveLayoutPasses({
+    ...passingMetrics,
+    horizontalOverflow: { ...passingMetrics.horizontalOverflow, queue: true }
+  }), false)
+  assert.equal(responsiveLayoutPasses({ ...passingMetrics, queueActionsComplete: false }), false)
+  assert.equal(responsiveLayoutPasses({ ...passingMetrics, primaryButtonCount: 2 }), false)
 })
 
 test("导出证据能读取 PNG、JPEG 和 TIFF 的像素尺寸", () => {

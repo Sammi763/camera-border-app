@@ -24,7 +24,7 @@ const VARIABLES = [
 ] as const
 
 /** 快捷模板。 */
-const QUICK_TEMPLATES = [
+const COMMON_TEMPLATES = [
   { label: "经典参数", template: "{Camera} · {Lens} · {Film}" },
   { label: "胶片信息", template: "{CaptureFormat} · {Film} · {Location}" },
   { label: "逐行排列", template: "{Camera}\n{Lens}\n{Film}" }
@@ -61,8 +61,8 @@ export const VariableHelpPanel = ({
         ))}
       </div>
 
-      <div className="variableQuickTemplates">
-        {QUICK_TEMPLATES.map((t) => (
+      <div className="variableCommonTemplates">
+        {COMMON_TEMPLATES.map((t) => (
           <button
             key={t.label}
             type="button"

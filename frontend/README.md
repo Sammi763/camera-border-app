@@ -15,7 +15,7 @@ frontend/src/
     settings/    渲染设置（buildRecipe 装配 RenderRecipe、输出尺寸预设、品牌识别、文字层）
     template/    模板系统（统一工作台样式页签中的版式画廊、内置风格模板、模板 JSON 编解码、CSS 示意缩略图 TemplateThumbnail、当前照片实时缩略图 LiveTemplateThumbnail）
     metadata/    摄影信息（EXIF 索引、相机/镜头/胶片资产库、摄影预设 ShootingPreset、画幅目录、变量解析 resolveTextVariables、来源标识 resolveIdentityFieldSources、变量面板与信息摘要）
-    quick/       兼容工具（确定性模板推荐 recommendTemplate、文本预设构建 buildPresetFromText；不再包含工作台入口）
+    quick/       无界面兼容工具（确定性模板推荐 recommendTemplate、文本预设构建 buildPresetFromText；不包含工作台入口）
     engineHealth/ 引擎异常横幅与诊断抽屉（EngineStatusBar + useEngineDiagnostics，托管模式专用）
   components/  可复用基础 UI（Panel、InspectorPanel、TopBar、NumberInput…）
   services/    engine/（Java HTTP 客户端）+ desktop/（window.desktop 桥接、HEIC 转换）
@@ -30,7 +30,7 @@ frontend/src/
 - **工作台主题与预览背景**：默认深色影棚主题，可切换暖灰浅色或跟随系统；预览背景可选中性黑、灰、白，均为界面状态，不进入导出配方。
 - **工作台快捷键**：上下方向键切换队列，空格勾选，Delete 删除，`F` 适应，`1` 显示 100%，`Ctrl/Cmd+Z` 与 `Ctrl/Cmd+Shift+Z` 撤销/重做，`E` 或 `Ctrl/Cmd+Enter` 导出。输入控件和管理抽屉内不拦截这些快捷键；抽屉支持焦点锁定、Escape 关闭并恢复打开按钮焦点。
 - **队列与工作会话**：`activeItemId`（当前预览图，点击切换）与 `checkedItemIds`（复选框批量选中）相互独立；根级唯一 `operationScope` 为 `active / checked / all`，供预设和批量导出共同使用。队列支持单图删除、删除已选、清空及撤销/重做；每图文字/身份/预设覆盖同样进入历史。会话只持久化结构化路径与覆盖，恢复时经受限 IPC 检查丢失文件，不持久化预览二进制数据。
-- **模板推荐**：`quick/utils/recommendTemplate.ts` 按确定性规则给出「建议模板」标记，只提示不修改用户设置；推荐标记在样式页签的统一版式画廊内展示。
+- **模板推荐**：兼容工具 `quick/utils/recommendTemplate.ts` 按确定性规则给出「建议模板」标记，只提示不修改用户设置；推荐标记在样式页签的统一版式画廊内展示。
 - **实时缩略图**：模板卡片优先用 `LiveTemplateThumbnail` 以当前照片经同一 `drawPreviewToCanvas` 渲染（缩略图=预览=导出同一配置）；点击模板后中间预览立即更新。
 - **边框风格**：`RenderSettings.borderStyle` → recipe.borderStyle；Canvas `drawBorderStyle` 与引擎 `BorderStyleRenderer` 同一几何规格（8 种风格，未知 id 回退）。
 - **RAW 来源状态**：预览元信息栏只允许显示「内嵌 JPEG 预览」或「无可读取预览，导入失败」；导出摘要只能说明内嵌 JPEG 来源或明确失败，不显示其他 RAW 解码状态。
@@ -68,4 +68,4 @@ frontend/src/
 
 - 引擎未启动/失败时仅 Canvas 即时预览，无引擎级保真预览。
 - HEIC/HEIF 当前开发实现依赖桌面 macOS `sips`；这不是最终平台限制。Windows x64 的最终 HEIC/HEIF 支持状态为 `NOT_RUN`，须完成 [最终契约](../docs/prd.md) §0 和 [样片矩阵](../docs/test-samples.md) 后才能宣称支持。
-- 内置模板为「settingsPatch 合并」模型（不覆盖用户已调参数），复杂版式（图层/自由拖拽）属后续阶段（见 [docs/prd.md](../docs/prd.md) §3.9 与 [docs/tasks.md](../docs/tasks.md) P1）。
+- 内置模板为「settingsPatch 合并」模型（不覆盖用户已调参数），复杂版式（图层/自由拖拽）不属于本阶段验收范围（见 [docs/prd.md](../docs/prd.md) §3.9 与 [docs/tasks.md](../docs/tasks.md) P1）。

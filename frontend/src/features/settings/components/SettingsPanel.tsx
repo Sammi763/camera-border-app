@@ -142,10 +142,10 @@ export const SettingsPanel = ({
   // textOverride 非空时表示当前图片有独立文字覆盖（仅覆盖第 0 层 content）。
   const firstLayer = settings.textLayers[0] ?? null
   const isTextOverridden = textOverride !== null
-  const quickTextValue = textOverride ?? firstLayer?.content ?? ""
+  const textLayerValue = textOverride ?? firstLayer?.content ?? ""
 
-  /** 更新快捷文字内容：同步到 textLayers[0].content 或 textOverride。 */
-  const handleQuickTextChange = useCallback((value: string): void => {
+  /** 更新文字图层内容：同步到 textLayers[0].content 或 textOverride。 */
+  const handleTextLayerChange = useCallback((value: string): void => {
     if (isTextOverridden) {
       setTextOverride(value.length > 0 ? value : null)
     } else if (firstLayer !== null) {
@@ -153,41 +153,41 @@ export const SettingsPanel = ({
     }
   }, [isTextOverridden, firstLayer, setTextOverride, updateTextLayer])
 
-  /** 变量插入回调：与 handleQuickTextChange 一致。 */
-  const handleQuickTextVariableInsert = useCallback((text: string): void => {
-    handleQuickTextChange(text)
-  }, [handleQuickTextChange])
+  /** 变量插入回调：与 handleTextLayerChange 一致。 */
+  const handleTextLayerVariableInsert = useCallback((text: string): void => {
+    handleTextLayerChange(text)
+  }, [handleTextLayerChange])
 
-  /** 更新快捷文字字号：同步到 textLayers[0]。 */
-  const handleQuickFontSizeCommit = useCallback((value: number): void => {
+  /** 更新文字图层字号：同步到 textLayers[0]。 */
+  const handleTextLayerFontSizeCommit = useCallback((value: number): void => {
     if (firstLayer !== null) {
       updateTextLayer(firstLayer.id, { fontSize: value })
     }
   }, [firstLayer, updateTextLayer])
 
-  /** 更新快捷文字颜色：同步到 textLayers[0]。 */
-  const handleQuickColorChange = useCallback((value: string): void => {
+  /** 更新文字图层颜色：同步到 textLayers[0]。 */
+  const handleTextLayerColorChange = useCallback((value: string): void => {
     if (firstLayer !== null) {
       updateTextLayer(firstLayer.id, { color: value })
     }
   }, [firstLayer, updateTextLayer])
 
-  /** 更新快捷文字字体：同步到 textLayers[0]。 */
-  const handleQuickFontFamilyChange = useCallback((value: string): void => {
+  /** 更新文字图层字体：同步到 textLayers[0]。 */
+  const handleTextLayerFontFamilyChange = useCallback((value: string): void => {
     if (firstLayer !== null) {
       updateTextLayer(firstLayer.id, { fontFamily: value })
     }
   }, [firstLayer, updateTextLayer])
 
-  /** 更新快捷文字位置：同步到 textLayers[0]。 */
-  const handleQuickPlacementChange = useCallback((value: string): void => {
+  /** 更新文字图层位置：同步到 textLayers[0]。 */
+  const handleTextLayerPlacementChange = useCallback((value: string): void => {
     if (firstLayer !== null) {
       updateTextLayer(firstLayer.id, { placement: value })
     }
   }, [firstLayer, updateTextLayer])
 
-  /** 更新快捷文字放置区域：同步到 textLayers[0]。 */
-  const handleQuickTextAreaChange = useCallback((value: "image" | "border"): void => {
+  /** 更新文字图层放置区域：同步到 textLayers[0]。 */
+  const handleTextLayerTextAreaChange = useCallback((value: "image" | "border"): void => {
     if (firstLayer !== null) {
       updateTextLayer(firstLayer.id, { textArea: value })
     }
@@ -439,7 +439,7 @@ export const SettingsPanel = ({
                 <select
                   className="settingSelect"
                   value={firstLayer.textArea}
-                  onChange={(e) => handleQuickTextAreaChange(e.target.value as "image" | "border")}
+                  onChange={(e) => handleTextLayerTextAreaChange(e.target.value as "image" | "border")}
                 >
                   <option value="image">图片上</option>
                   <option value="border">边框上</option>
@@ -453,7 +453,7 @@ export const SettingsPanel = ({
                 <select
                   className="settingSelect"
                   value={firstLayer.placement}
-                  onChange={(e) => handleQuickPlacementChange(e.target.value)}
+                  onChange={(e) => handleTextLayerPlacementChange(e.target.value)}
                 >
                   <option value="top-center">顶部居中</option>
                   <option value="center">居中</option>
@@ -469,8 +469,8 @@ export const SettingsPanel = ({
                   type="text"
                   className="settingTextInput"
                   placeholder="留空则不绘制该图层"
-                  value={quickTextValue}
-                  onChange={(e) => handleQuickTextChange(e.target.value)}
+                  value={textLayerValue}
+                  onChange={(e) => handleTextLayerChange(e.target.value)}
                 />
               </label>
               {isTextOverridden && (
@@ -492,7 +492,7 @@ export const SettingsPanel = ({
                   value={firstLayer.fontSize}
                   min={8}
                   max={200}
-                  onCommit={handleQuickFontSizeCommit}
+                  onCommit={handleTextLayerFontSizeCommit}
                 />
               </label>
             </div>
@@ -504,7 +504,7 @@ export const SettingsPanel = ({
                   type="color"
                   className="settingColorInput"
                   value={firstLayer.color}
-                  onChange={(e) => handleQuickColorChange(e.target.value)}
+                  onChange={(e) => handleTextLayerColorChange(e.target.value)}
                 />
               </label>
             </div>
@@ -515,7 +515,7 @@ export const SettingsPanel = ({
                 <select
                   className="settingSelect"
                   value={firstLayer.fontFamily}
-                  onChange={(e) => handleQuickFontFamilyChange(e.target.value)}
+                  onChange={(e) => handleTextLayerFontFamilyChange(e.target.value)}
                 >
                   <optgroup label="内置字体">
                     {fonts.filter((f) => f.source === "builtin").map((opt) => (
@@ -563,8 +563,8 @@ export const SettingsPanel = ({
 
             {/* 变量插入 */}
             <VariableHelpPanel
-              currentText={quickTextValue}
-              onTextChange={handleQuickTextVariableInsert}
+              currentText={textLayerValue}
+              onTextChange={handleTextLayerVariableInsert}
             />
           </>
         )}

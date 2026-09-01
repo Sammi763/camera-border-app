@@ -5,7 +5,7 @@ import type { PhotoAssetStore } from "../../metadata/types"
 
 const emptyStore = (): PhotoAssetStore => createEmptyAssetStore()
 
-describe("buildPresetFromText（快速流程创建预设）", () => {
+describe("buildPresetFromText（文字录入创建预设）", () => {
   it("完整录入：生成相机/镜头/胶片资产并引用", () => {
     const result = buildPresetFromText({
       name: "135 日常",
