@@ -180,9 +180,9 @@ export type RenderJobItemStatus = {
   readonly outputPath?: string
   readonly actualFormat?: string
   readonly error?: string
-  readonly metadataPreservation?: FeatureResult
-  readonly colorProfilePreservation?: FeatureResult
-  readonly highBitDepth?: FeatureResult
+  readonly metadataPreservation?: FeatureResult | null
+  readonly colorProfilePreservation?: FeatureResult | null
+  readonly highBitDepth?: FeatureResult | null
   readonly sourceDecode?: SourceDecode | null
 }
 

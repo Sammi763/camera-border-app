@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { useExportController } from "./useExportController"
+import { buildExportSummary, useExportController } from "./useExportController"
 import type { PreviewState } from "../types"
 import type { QueueItem } from "../../queue/types"
 import type { RenderSettings } from "../../settings/types"
@@ -66,6 +66,15 @@ afterEach(() => {
 })
 
 describe("useExportController", () => {
+  it("批量失败项的可选专业结果为 null 时仍能归并终态", () => {
+    expect(buildExportSummary({
+      metadataPreservation: null,
+      colorProfilePreservation: null,
+      highBitDepth: null,
+      sourceDecode: null
+    })).toEqual([])
+  })
+
   it("在选择目录和读取 EXIF 期间冻结图片范围、RenderRecipe 和 ExportSettings", async () => {
     let releaseExif!: () => void
     const prepareExifForExport = vi.fn(() => new Promise<void>((resolve) => { releaseExif = resolve }))

@@ -128,8 +128,8 @@ const buildUniqueExportPath = (dirPath: string, baseName: string, ext: string, u
 const extensionFor = (format: RenderSettings["exportFormat"]): string =>
   format === "jpeg" ? "jpg" : format === "tiff" ? "tif" : "png"
 
-const featureResultLabel = (result: FeatureResult | undefined): string | null => {
-  if (result === undefined || result.status === "NOT_REQUESTED") {
+const featureResultLabel = (result: FeatureResult | null | undefined): string | null => {
+  if (result === null || result === undefined || result.status === "NOT_REQUESTED") {
     return null
   }
   if (result.status === "APPLIED") return result.message ?? "已应用"

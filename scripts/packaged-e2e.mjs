@@ -416,6 +416,18 @@ const clickButton = async (client, expression, description) => {
   assert.equal(clicked, true, `未找到${description}`)
 }
 
+/** 通过原生 value setter 驱动 React 受控表单，避免测试只修改 DOM 而未更新应用状态。 */
+const setFormControlValue = async (client, selector, value, eventName) => await evaluate(client, `(() => {
+  const element = document.querySelector(${JSON.stringify(selector)});
+  if (!(element instanceof HTMLInputElement) && !(element instanceof HTMLSelectElement)) return false;
+  const prototype = element instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+  if (setter === undefined) return false;
+  setter.call(element, ${JSON.stringify(value)});
+  element.dispatchEvent(new Event(${JSON.stringify(eventName)}, { bubbles: true }));
+  return element.value === ${JSON.stringify(value)};
+})()`)
+
 /** 保存真实 Renderer 截图；路径会写入 E2E 日志，供失败和交接复核。 */
 const captureRendererScreenshot = async (client, artifactRoot, label) => {
   const screenshotPath = path.join(artifactRoot, `${label}.png`)
@@ -608,6 +620,13 @@ const run = async () => {
   const temporaryRoot = mkdtempSync(path.join(tmpdir(), "camera-border-packaged-e2e-"))
   const artifactRoot = mkdtempSync(path.join(tmpdir(), "camera-border-packaged-e2e-artifacts-"))
   const output = path.resolve(process.env["CAMBORDER_E2E_OUTPUT"] ?? path.join(temporaryRoot, "packaged-e2e-output.png"))
+  // 该文件故意不是可解码图片，用于真实验证逐项失败和「重试失败项」路径；不属于产品样片。
+  const retryFailureSample = path.join(temporaryRoot, "retry-failure.jpg")
+  writeFileSync(retryFailureSample, Buffer.from("not-a-decodable-jpeg"))
+  const retryOutputDirectory = mkdtempSync(path.join(temporaryRoot, "retry-output-"))
+  const retryOutputCandidates = ["png", "jpg", "tif"].map((extension) =>
+    path.join(retryOutputDirectory, `retry-failure-border.${extension}`)
+  )
   const userData = path.join(temporaryRoot, "user-data")
   rmSync(output, { force: true })
 
@@ -628,7 +647,9 @@ const run = async () => {
       ...cleanEnv,
       CAMBORDER_E2E: "1",
       CAMBORDER_E2E_SAMPLE: sample,
+      CAMBORDER_E2E_RETRY_SAMPLE: retryFailureSample,
       CAMBORDER_E2E_OUTPUT: output,
+      CAMBORDER_E2E_OUTPUT_DIR: retryOutputDirectory,
       CAMBORDER_ENGINE_PORT: String(enginePort)
     },
     stdio: ["ignore", "pipe", "pipe"]
@@ -721,7 +742,11 @@ const run = async () => {
     await waitFor("JavaBridge 健康状态", () => evaluate(client, "document.querySelector('.topbarBadge')?.textContent ?? ''"), (text) => text.includes("正常"))
 
     await clickButton(client, `(() => { const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === '选择照片'); if (button === undefined) return false; button.click(); return true })()`, "选择照片按钮")
-    await waitFor("固定样片进入队列", () => evaluate(client, "document.querySelector('.queueItem')?.textContent ?? ''"), (text) => text.includes(path.basename(sample)))
+    await waitFor(
+      "固定样片进入队列",
+      () => evaluate(client, "[...document.querySelectorAll('.queueItem')].map((item) => item.textContent ?? '').join('\\n')"),
+      (text) => text.includes(path.basename(sample)) && text.includes(path.basename(retryFailureSample))
+    )
     await waitFor("引擎预览画布", () => evaluate(client, "Boolean(document.querySelector('canvas.previewCanvas'))"), (visible) => visible === true)
 
     const thumbnail = await waitFor(
@@ -845,6 +870,110 @@ const run = async () => {
     }
     const zeroBorderPreview = await waitForVisiblePreviewPhoto(client, artifactRoot, "零边框模板-引擎已同步")
 
+    // 真实逐项失败/重试闸门：首轮导入一个不可解码 JPEG，首轮失败后替换为固定有效样片，
+    // 再通过真实 UI 点击「重试失败项」，确保重试请求经过 app:// 代理和托管 JavaBridge。
+    await clickButton(client, `(() => {
+      const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === '创建摄影预设');
+      if (button === undefined) return false;
+      button.click();
+      return true;
+    })()`, "创建摄影预设按钮")
+    await waitFor(
+      "摄影预设创建表单",
+      () => evaluate(client, "Boolean(document.querySelector('.quickPresetCreateForm'))"),
+      (visible) => visible === true
+    )
+    assert.equal(
+      await setFormControlValue(client, '.quickPresetCreateForm input[placeholder="例如：135 Portra 日常"]', "打包 E2E 预设", "input"),
+      true,
+      "无法填写打包 E2E 预设名称"
+    )
+    assert.equal(
+      await setFormControlValue(client, '.quickPresetCreateForm select', "6x10", "change"),
+      true,
+      "无法设置打包 E2E 拍摄画幅"
+    )
+    assert.equal(
+      await setFormControlValue(client, '.quickPresetCreateForm input[placeholder="例如：Leica M6"]', "打包 E2E 相机", "input"),
+      true,
+      "无法填写打包 E2E 相机"
+    )
+    await clickButton(client, `(() => {
+      const button = [...document.querySelectorAll('.quickPresetCreateForm button')].find((item) => item.textContent?.trim() === '保存并应用');
+      if (button === undefined) return false;
+      button.click();
+      return true;
+    })()`, "保存摄影预设按钮")
+    await waitFor(
+      "全部图片作用域控件",
+      () => evaluate(client, "document.querySelectorAll('.quickScopeSelector button').length"),
+      (count) => count === 3
+    )
+    await clickButton(client, `(() => {
+      const button = [...document.querySelectorAll('.quickScopeSelector button')].find((item) => item.textContent?.trim() === '全部图片');
+      if (button === undefined) return false;
+      button.click();
+      return true;
+    })()`, "全部图片作用域按钮")
+    await waitFor(
+      "批量导出全部图片按钮",
+      () => evaluate(client, "(() => { const button = [...document.querySelectorAll('button.previewExportButton')].find((item) => item.textContent?.includes('批量导出 2 张')); return button !== undefined && !button.disabled })()"),
+      (available) => available === true
+    )
+    await clickButton(client, `(() => { const button = [...document.querySelectorAll('button.previewExportButton')].find((item) => item.textContent?.includes('批量导出 2 张')); if (button === undefined || button.disabled) return false; button.click(); return true })()`, "批量导出全部图片按钮")
+    let batchFirstRun
+    try {
+      batchFirstRun = await waitFor(
+        "批量导出出现一个真实失败项",
+        () => evaluate(client, "document.querySelector('.previewExportStatus')?.textContent ?? ''"),
+        (text) => text.includes("批量导出完成") && text.includes("成功 1") && text.includes("失败 1"),
+        120_000
+      )
+    } catch (error) {
+      const renderJobResponses = responseDetails.filter((response) => response.url.includes("/api/render-jobs"))
+      const responseBodies = await Promise.all(renderJobResponses.slice(-8).map(async (response) => {
+        try {
+          const body = await client.call("Network.getResponseBody", { requestId: response.id })
+          return { ...response, body: typeof body.body === "string" ? body.body.slice(0, 4000) : "" }
+        } catch (bodyError) {
+          return { ...response, bodyError: bodyError instanceof Error ? bodyError.message : String(bodyError) }
+        }
+      }))
+      throw new Error(
+        `${error instanceof Error ? error.message : String(error)}；render-jobs 网络诊断：${JSON.stringify({
+          requests: requestDetails.filter((request) => request.url.includes("/api/render-jobs")).slice(-8),
+          responses: responseBodies
+        })}`
+      )
+    }
+    assert.equal(
+      retryOutputCandidates.some((candidate) => existsSync(candidate)),
+      false,
+      "首轮失败项不应留下导出文件"
+    )
+    copyFileSync(sample, retryFailureSample)
+    await waitFor(
+      "重试失败项按钮",
+      () => evaluate(client, "[...document.querySelectorAll('button')].filter((item) => item.textContent?.trim() === '重试失败项').length"),
+      (count) => count === 1
+    )
+    await clickButton(client, `(() => { const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === '重试失败项'); if (button === undefined) return false; button.click(); return true })()`, "重试失败项按钮")
+    const batchRetryResult = await waitFor(
+      "重试失败项完成",
+      () => evaluate(client, "document.querySelector('.previewExportStatus')?.textContent ?? ''"),
+      (text) => text.includes("批量导出完成") && text.includes("成功 2") && text.includes("失败 0"),
+      120_000
+    )
+    const retryExportOutput = await waitFor(
+      "重试失败项导出文件",
+      () => retryOutputCandidates.find((candidate) => existsSync(candidate)),
+      (candidate) => typeof candidate === "string",
+      120_000
+    )
+    const retryExportData = readFileSync(retryExportOutput)
+    const retryExportDimensions = readImageDimensions(retryExportData)
+    assert.notEqual(retryExportDimensions, null, "重试失败项输出不是可识别的图片")
+
     await waitFor(
       "单图导出按钮可用",
       () => evaluate(client, "(() => { const button = [...document.querySelectorAll('button.previewExportButton')].find((item) => item.textContent?.includes('导出原图')); return button !== undefined && !button.disabled })()"),
@@ -938,6 +1067,7 @@ const run = async () => {
     console.log(`[packaged-e2e] 默认摄影信息卡 Canvas：${formatPreviewCanvasMetrics(defaultPreview.metrics)}`)
     console.log(`[packaged-e2e] 默认摄影信息卡同步截图：${defaultPreview.screenshotPath}`)
     console.log(`[packaged-e2e] 零边框模板 Canvas：${formatPreviewCanvasMetrics(zeroBorderPreview.metrics)}`)
+    console.log(`[packaged-e2e] 真实失败项重试：首轮=${batchFirstRun}；重试后=${batchRetryResult}；输出=${retryExportOutput}；尺寸=${retryExportDimensions.width}×${retryExportDimensions.height}`)
     console.log(`[packaged-e2e] CSP：已收到并拦截外网 fetch；Network 未记录 https://example.invalid/camborder-csp-probe`)
     console.log(`[packaged-e2e] 网络断言：${requests.length} 个请求全部为 app://app/、data: 或 blob:；有效预览路由 200，裸/畸形路由失败`)
 
