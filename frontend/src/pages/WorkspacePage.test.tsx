@@ -156,11 +156,8 @@ describe("WorkspacePage wiring（摄影预设 + EXIF 批量导出闭环）", () 
     const { renderJobs, metadataRequests, callLog } = setupWorkspace()
     render(<WorkspacePage runtime={runtime} />)
 
-    // 默认进入快速出图模式；预设创建与批量导出流程在「高级编辑」中完成
-    fireEvent.click(await screen.findByRole("button", { name: "高级编辑" }))
-
-    // 1) 导入两张图片（A 有 EXIF，B 无 EXIF）
-    fireEvent.click(await screen.findByRole("button", { name: "选择图片文件" }))
+    // 1) 从统一欢迎页导入两张图片（A 有 EXIF，B 无 EXIF）
+    fireEvent.click(await screen.findByRole("button", { name: "选择照片" }))
     await waitFor(() => {
       expect(screen.getByText("A.jpg")).toBeTruthy()
       expect(screen.getByText("B.jpg")).toBeTruthy()
@@ -173,8 +170,9 @@ describe("WorkspacePage wiring（摄影预设 + EXIF 批量导出闭环）", () 
       expect(within(formatSelect).getByRole("option", { name: "6×12" })).toBeTruthy()
     })
 
-    // 3) 打开「摄影预设」分组，新建 6x10 预设
-    fireEvent.click(screen.getByRole("button", { name: "摄影预设" }))
+    // 3) 打开摄影信息页签与预设管理抽屉，新建 6x10 预设
+    fireEvent.click(screen.getByRole("tab", { name: "摄影信息" }))
+    fireEvent.click(screen.getByRole("button", { name: "管理拍摄信息预设" }))
     fireEvent.click(await screen.findByRole("button", { name: "新建摄影预设" }))
     fireEvent.change(screen.getByPlaceholderText("例如：135 Portra 日常"), {
       target: { value: "超宽 6x10" }
@@ -230,15 +228,13 @@ describe("WorkspacePage wiring（摄影预设 + EXIF 批量导出闭环）", () 
     desktop.readRolls = vi.fn(async () => "[{ \"id\": \"old-roll\", \"name\": \"Old Roll\", \"camera\": \"Leica M6\" }]")
     render(<WorkspacePage runtime={runtime} />)
 
-    // 默认快速出图模式显示欢迎页；切到高级编辑后三栏工作台正常渲染
-    // （无 Roll 面板、无扫描仪/实验室/冲洗工艺入口，不崩溃）
-    fireEvent.click(await screen.findByRole("button", { name: "高级编辑" }))
-    expect(await screen.findByText("队列")).toBeTruthy()
+    // 统一工作台空态正常渲染；（无 Roll 面板、无扫描仪/实验室/冲洗工艺入口，不崩溃）
+    expect(await screen.findByText("把照片变成摄影作品卡")).toBeTruthy()
     expect(screen.queryByText(/Roll|扫描仪|实验室|冲洗工艺/)).toBeNull()
   })
 })
 
-describe("WorkspacePage 快速出图模式（首屏与默认模板）", () => {
+describe("WorkspacePage 统一工作台（首屏与默认模板）", () => {
   beforeEach(() => {
     localStorage.clear()
     sessionStorage.clear()
@@ -303,8 +299,8 @@ describe("WorkspacePage 快速出图模式（首屏与默认模板）", () => {
 
     // 手动应用「经典白边」
     const findClassicCard = (): HTMLElement =>
-      screen.getByText("经典白边").closest(".quickTemplateCard") as HTMLElement
-    fireEvent.click(within(findClassicCard()).getByRole("button", { name: "使用" }))
+      screen.getByText("经典白边").closest(".templateGalleryCard") as HTMLElement
+    fireEvent.click(within(findClassicCard()).getByRole("button", { name: "应用" }))
     expect(within(findClassicCard()).getByRole("button", { name: "已应用" })).toBeTruthy()
 
     // 清空并重新导入：仍保持经典白边，不自动覆盖回摄影信息卡
@@ -314,5 +310,33 @@ describe("WorkspacePage 快速出图模式（首屏与默认模板）", () => {
       expect(screen.getByText("A.jpg")).toBeTruthy()
     })
     expect(within(findClassicCard()).getByRole("button", { name: "已应用" })).toBeTruthy()
+  })
+
+  it("有照片后固定显示三页签、底部导出 Dock，并把管理入口放进抽屉", async () => {
+    setupWorkspace()
+    const { container } = render(<WorkspacePage runtime={runtime} />)
+
+    fireEvent.click(await screen.findByRole("button", { name: "选择照片" }))
+    await waitFor(() => {
+      expect(screen.getByText("A.jpg")).toBeTruthy()
+    })
+
+    expect(screen.getAllByRole("tab")).toHaveLength(3)
+    expect(screen.getByRole("tab", { name: "样式" })).toBeTruthy()
+    expect(screen.getByRole("tab", { name: "摄影信息" })).toBeTruthy()
+    expect(screen.getByRole("tab", { name: "输出" })).toBeTruthy()
+    expect(screen.getByRole("group", { name: "导出" })).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "高级编辑" })).toBeNull()
+
+    const themeSelect = screen.getByRole("combobox", { name: "界面主题" })
+    expect((themeSelect as HTMLSelectElement).value).toBe("dark")
+    fireEvent.change(themeSelect, { target: { value: "warm" } })
+    expect(container.querySelector(".workspaceShell")?.getAttribute("data-theme")).toBe("warm")
+
+    fireEvent.click(screen.getByRole("tab", { name: "摄影信息" }))
+    fireEvent.click(screen.getByRole("button", { name: "打开资料库" }))
+    expect(screen.getByRole("dialog", { name: "资料库" })).toBeTruthy()
+    fireEvent.keyDown(screen.getByRole("dialog", { name: "资料库" }), { key: "Escape" })
+    expect(screen.queryByRole("dialog", { name: "资料库" })).toBeNull()
   })
 })

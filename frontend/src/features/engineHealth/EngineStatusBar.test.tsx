@@ -187,4 +187,24 @@ describe("EngineStatusBar（顶部非阻塞状态条）", () => {
     })
     expect(screen.getByText(/加入白名单/)).toBeTruthy()
   })
+
+  it("错误横幅只通过一个诊断抽屉展开详细进程信息", async () => {
+    setDesktop({
+      getEngineDiagnostics: vi.fn(async () => ({
+        code: "start-failed",
+        message: "引擎启动失败",
+        logPath: null,
+        processAlive: false
+      })),
+      retryEngineStart: vi.fn(async () => true)
+    })
+    render(<EngineStatusBar health={errorState} />)
+
+    expect(screen.getAllByRole("alert")).toHaveLength(1)
+    fireEvent.click(screen.getByRole("button", { name: "查看诊断" }))
+    expect(screen.getByRole("dialog", { name: "引擎诊断" })).toBeTruthy()
+    await waitFor(() => expect(screen.getByText("未运行")).toBeTruthy())
+    fireEvent.keyDown(screen.getByRole("dialog", { name: "引擎诊断" }), { key: "Escape" })
+    expect(screen.queryByRole("dialog", { name: "引擎诊断" })).toBeNull()
+  })
 })

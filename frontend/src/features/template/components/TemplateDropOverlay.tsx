@@ -6,6 +6,7 @@
  */
 
 import { useEffect, useState } from "react"
+import { ModalDrawer } from "../../../components/layout/ModalDrawer"
 import { decodeTemplateJson } from "../utils/templateJsonCodec"
 import type { Template } from "../types"
 import type { RenderSettings } from "../../settings/types"
@@ -64,27 +65,31 @@ export const TemplateDropOverlay = ({
     onDismiss()
   }
 
+  const title = state.kind === "detected" ? "检测到模板" : "模板导入失败"
+
   return (
-    <div className="templateDropOverlay">
-      <div className="templateDropCard">
-        {state.kind === "detected" ? (
-          <>
-            <span className="templateDropTitle">检测到模板</span>
-            <span className="templateDropName">{state.template.name}</span>
-            <div className="templateDropActions">
-              <button type="button" className="ghostButton" onClick={() => { onApply(state.template.settings); dismiss() }}>应用到当前设置</button>
-              <button type="button" className="ghostButton" onClick={() => { onSave(state.template); dismiss() }}>保存到模板库</button>
-              <button type="button" className="ghostButton" onClick={dismiss}>取消</button>
-            </div>
-          </>
-        ) : (
-          <>
-            <span className="templateDropTitle">模板导入失败</span>
-            <span className="templateDropError">{state.message}</span>
-            <div className="templateDropActions"><button type="button" className="ghostButton" onClick={dismiss}>关闭</button></div>
-          </>
-        )}
+    <ModalDrawer open title={title} side="bottom" onClose={dismiss}>
+      <div className="templateDropOverlayContent">
+        <div className="templateDropCard">
+          {state.kind === "detected" ? (
+            <>
+              <span className="templateDropTitle">检测到模板</span>
+              <span className="templateDropName">{state.template.name}</span>
+              <div className="templateDropActions">
+                <button type="button" className="ghostButton" onClick={() => { onApply(state.template.settings); dismiss() }}>应用到当前设置</button>
+                <button type="button" className="ghostButton" onClick={() => { onSave(state.template); dismiss() }}>保存到模板库</button>
+                <button type="button" className="ghostButton" onClick={dismiss}>取消</button>
+              </div>
+            </>
+          ) : (
+            <>
+              <span className="templateDropTitle">模板导入失败</span>
+              <span className="templateDropError">{state.message}</span>
+              <div className="templateDropActions"><button type="button" className="ghostButton" onClick={dismiss}>关闭</button></div>
+            </>
+          )}
+        </div>
       </div>
-    </div>
+    </ModalDrawer>
   )
 }

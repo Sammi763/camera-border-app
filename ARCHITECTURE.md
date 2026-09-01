@@ -63,11 +63,11 @@ electron/src/
 ```text
 frontend/src/
   app/         入口（main.tsx、App.tsx）
-  pages/       工作台页面（WorkspacePage：快速出图 / 高级编辑两种模式的共享状态装配）
+  pages/       工作台页面（WorkspacePage：统一渐进式工作台的状态装配）
   features/    按业务分组的界面和状态逻辑：
                queue/（队列与批量选中）、preview/、settings/、template/、metadata/、
-               quick/（快速出图模式）、engineHealth/（引擎故障页面）
-  components/  可复用基础 UI
+               workspace/（欢迎页与拖放路由）、quick/（兼容工具）、engineHealth/（引擎故障提示）
+  components/  可复用基础 UI（页签、焦点受限抽屉、顶部栏）
   services/    engine/（Java HTTP 客户端）、desktop/（桌面桥接、HEIC 转换）
   types/       共享类型
   utils/       工具

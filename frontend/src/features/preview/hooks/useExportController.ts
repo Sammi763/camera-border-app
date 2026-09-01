@@ -1,7 +1,7 @@
 /**
  * 根级导出控制器。
  *
- * 导出状态不能放在 PreviewPanel：快速/高级面板切换会卸载面板，而任务仍在引擎中执行。
+ * 导出状态不能放在 PreviewPanel：工作台页签切换会卸载部分内容，而任务仍在引擎中执行。
  * 因此本 Hook 由 WorkspacePage 持有，只向面板暴露状态和命令；提交前会冻结目标图片、
  * RenderRecipe 与 ExportSettings，保证排队任务不受之后编辑影响。
  */

@@ -16,6 +16,7 @@
  */
 
 import { useCallback, useState } from "react"
+import { ModalDrawer } from "../../components/layout/ModalDrawer"
 import type { EngineHealthState } from "../preview/hooks/useEngineHealth"
 import { useEngineDiagnostics } from "./useEngineDiagnostics"
 
@@ -32,6 +33,7 @@ export const EngineStatusBar = ({ health }: EngineStatusBarProps): JSX.Element |
 
   /** 打开日志文件本身（主进程校验路径必须位于 userData/logs 下）。 */
   const [openingLog, setOpeningLog] = useState(false)
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false)
   const handleOpenLog = useCallback((): void => {
     const openLogFile = window.desktop?.openLogFile
     const logPath = diagState.diagnostics?.logPath ?? null
@@ -83,43 +85,73 @@ export const EngineStatusBar = ({ health }: EngineStatusBarProps): JSX.Element |
   const reason = diagState.diagnostics?.message ?? health.message
 
   return (
-    <div
-      className="engineStatusBar engineStatusBarUnavailable"
-      role="alert"
-      aria-live="assertive"
-    >
-      <span className="engineStatusBarDot" aria-hidden="true" />
-      <div className="engineStatusBarTextGroup">
-        <span className="engineStatusBarText">引擎暂不可用，当前使用本地预览</span>
-        <span className="engineStatusBarHint">恢复引擎后可进行高保真导出</span>
-        {reason.length > 0 && (
-          <span className="engineStatusBarReason">{reason}</span>
+    <>
+      <div
+        className="engineStatusBar engineStatusBarUnavailable"
+        role="alert"
+        aria-live="assertive"
+      >
+        <span className="engineStatusBarDot" aria-hidden="true" />
+        <div className="engineStatusBarTextGroup">
+          <span className="engineStatusBarText">引擎暂不可用，当前使用本地预览</span>
+          <span className="engineStatusBarHint">恢复引擎后可进行高保真导出</span>
+          {reason.length > 0 && (
+            <span className="engineStatusBarReason">{reason}</span>
+          )}
+        </div>
+        {window.desktop !== undefined && (
+          <div className="engineStatusBarActions">
+            {canRetry && (
+              <button
+                type="button"
+                className="ghostButton engineStatusBarBtn"
+                disabled={diagState.retrying}
+                onClick={handleRetry}
+              >
+                {diagState.retrying ? "重试中…" : "重试"}
+              </button>
+            )}
+            {canOpenLog && (
+              <button
+                type="button"
+                className="ghostButton engineStatusBarBtn"
+                disabled={openingLog}
+                onClick={handleOpenLog}
+              >
+                {openingLog ? "打开中…" : "查看日志"}
+              </button>
+            )}
+            <button
+              type="button"
+              className="ghostButton engineStatusBarBtn"
+              onClick={() => setDiagnosticsOpen(true)}
+            >
+              查看诊断
+            </button>
+          </div>
         )}
       </div>
-      {(canRetry || canOpenLog) && (
-        <div className="engineStatusBarActions">
-          {canRetry && (
-            <button
-              type="button"
-              className="ghostButton engineStatusBarBtn"
-              disabled={diagState.retrying}
-              onClick={handleRetry}
-            >
-              {diagState.retrying ? "重试中…" : "重试"}
-            </button>
+      <ModalDrawer open={diagnosticsOpen} title="引擎诊断" onClose={() => setDiagnosticsOpen(false)}>
+        <div className="engineDiagnosticsDrawer">
+          {diagState.loading && <p className="settingsCapabilityHint">正在读取诊断信息…</p>}
+          {diagState.lastError !== null && <p className="panelErrorText">{diagState.lastError}</p>}
+          {diagState.diagnostics !== null ? (
+            <dl className="engineDiagnosticsList">
+              <div><dt>分类</dt><dd>{diagState.diagnostics.code}</dd></div>
+              <div><dt>进程</dt><dd>{diagState.diagnostics.processAlive ? "仍在运行" : "未运行"}</dd></div>
+              <div><dt>说明</dt><dd>{diagState.diagnostics.message}</dd></div>
+              {diagState.diagnostics.logPath !== null && <div><dt>日志</dt><dd>{diagState.diagnostics.logPath}</dd></div>}
+            </dl>
+          ) : (
+            !diagState.loading && <p className="settingsCapabilityHint">暂未取得诊断信息。</p>
           )}
           {canOpenLog && (
-            <button
-              type="button"
-              className="ghostButton engineStatusBarBtn"
-              disabled={openingLog}
-              onClick={handleOpenLog}
-            >
+            <button type="button" className="ghostButton" disabled={openingLog} onClick={handleOpenLog}>
               {openingLog ? "打开中…" : "查看日志"}
             </button>
           )}
         </div>
-      )}
-    </div>
+      </ModalDrawer>
+    </>
   )
 }

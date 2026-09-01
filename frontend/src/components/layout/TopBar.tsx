@@ -1,59 +1,47 @@
 import type { DesktopRuntime } from "../../types/runtime"
-import type { EngineHealthState } from "../../features/preview/hooks/useEngineHealth"
 
-/** 工作台模式：快速出图 / 高级编辑。 */
-export type WorkspaceMode = "quick" | "advanced"
+/** 工作台主题：深色影棚、暖灰浅色或跟随系统。 */
+export type StudioTheme = "dark" | "warm" | "system"
 
 type TopBarProps = {
   readonly runtime: DesktopRuntime
-  readonly health: EngineHealthState
-  readonly mode: WorkspaceMode
-  readonly onModeChange: (mode: WorkspaceMode) => void
+  readonly hasPhotos: boolean
+  readonly theme: StudioTheme
+  readonly onThemeChange: (theme: StudioTheme) => void
+  readonly onPickFiles: () => void
+  readonly onPickFolder: () => void
 }
 
-/** 引擎状态映射为中文。将 "ok" 等英文状态值转换为用户可读的中文。 */
-const badgeLabel = (health: EngineHealthState): string => {
-  switch (health.kind) {
-    case "idle":
-      return "引擎待机"
-    case "loading":
-      return "引擎连接中"
-    case "ready": {
-      const raw = health.health.status
-      const mapped = raw === "ok" ? "正常" : raw
-      return `引擎 ${mapped}`
-    }
-    case "error":
-      return "引擎离线"
-  }
-}
-
-export const TopBar = ({ runtime, health, mode, onModeChange }: TopBarProps): JSX.Element => {
+export const TopBar = ({
+  runtime,
+  hasPhotos,
+  theme,
+  onThemeChange,
+  onPickFiles,
+  onPickFolder
+}: TopBarProps): JSX.Element => {
   return (
     <header className="topbar">
       <div className="topbarTitle">
         <span className="topbarMark" aria-hidden="true" />
         <span className="topbarName">{runtime.appName}</span>
       </div>
-      <div className="topbarModeSwitch" role="group" aria-label="工作台模式">
-        <button
-          type="button"
-          className={`topbarModeBtn${mode === "quick" ? " topbarModeActive" : ""}`}
-          onClick={() => onModeChange("quick")}
-          title="快速出图：导入照片 → 选模板 → 导出"
-        >
-          快速出图
-        </button>
-        <button
-          type="button"
-          className={`topbarModeBtn${mode === "advanced" ? " topbarModeActive" : ""}`}
-          onClick={() => onModeChange("advanced")}
-          title="高级编辑：边框、渐变、字体、图层、模板管理"
-        >
-          高级编辑
-        </button>
+      <div className="topbarActions">
+        {hasPhotos && (
+          <div className="topbarImportActions" role="group" aria-label="导入照片">
+            <button type="button" className="topbarActionButton" onClick={onPickFiles}>选择照片</button>
+            <button type="button" className="topbarActionButton" onClick={onPickFolder}>选择文件夹</button>
+          </div>
+        )}
+        <label className="topbarThemeControl">
+          <span>主题</span>
+          <select aria-label="界面主题" value={theme} onChange={(event) => onThemeChange(event.target.value as StudioTheme)}>
+            <option value="dark">深色影棚</option>
+            <option value="warm">暖灰浅色</option>
+            <option value="system">跟随系统</option>
+          </select>
+        </label>
       </div>
-      <span className="topbarBadge">{badgeLabel(health)}</span>
     </header>
   )
 }

@@ -23,6 +23,10 @@ type SettingsPanelProps = {
   readonly setTextOverride: (text: string | null) => void
   /** 当前图片识别到的品牌文字（如 "NIKON"），null 表示未识别。 */
   readonly detectedBrandLabel?: string | null
+  /** 是否渲染样式控制组；输出页签复用本组件时关闭。 */
+  readonly showStyleSettings?: boolean
+  /** 是否渲染输出控制组；样式页签复用本组件时关闭。 */
+  readonly showOutputSettings?: boolean
 }
 
 /** 内置画幅选项（后端不可用时的回退；含 6x10 与 6x12）。 */
@@ -67,7 +71,9 @@ export const SettingsPanel = ({
   selectedFilePath,
   textOverride,
   setTextOverride,
-  detectedBrandLabel
+  detectedBrandLabel,
+  showStyleSettings = true,
+  showOutputSettings = true
 }: SettingsPanelProps): JSX.Element => {
   const { settings, update, updateNumber, updateTextLayer, resetTextLayers, replaceTextLayers, canUndo, canRedo, undo, redo } = controller
   const { fonts } = useSystemFonts()
@@ -189,15 +195,17 @@ export const SettingsPanel = ({
 
   return (
     <div className="settingsPanelInner">
-      <div className="presetActions" aria-label="渲染设置历史">
-        <button type="button" className="ghostButton" disabled={!canUndo} onClick={undo}>撤销设置</button>
-        <button type="button" className="ghostButton" disabled={!canRedo} onClick={redo}>重做设置</button>
-      </div>
-      {!hasSelectedImage && (
-        <p className="settingsCapabilityHint">
-          请先加载并选择一张图片，设置将自动生效。
-        </p>
-      )}
+      {showStyleSettings && (
+        <>
+          <div className="presetActions" aria-label="渲染设置历史">
+            <button type="button" className="ghostButton" disabled={!canUndo} onClick={undo}>撤销设置</button>
+            <button type="button" className="ghostButton" disabled={!canRedo} onClick={redo}>重做设置</button>
+          </div>
+          {!hasSelectedImage && (
+            <p className="settingsCapabilityHint">
+              请先加载并选择一张图片，设置将自动生效。
+            </p>
+          )}
 
       {/* 画幅 */}
       <fieldset className="settingGroup">
@@ -698,9 +706,13 @@ export const SettingsPanel = ({
           <span>自动裁剪</span>
         </label>
       </fieldset>
+        </>
+      )}
 
-      {/* 导出格式 */}
-      <fieldset className="settingGroup">
+      {showOutputSettings && (
+        <>
+          {/* 导出格式 */}
+          <fieldset className="settingGroup">
         <legend className="settingLabel">导出格式</legend>
 
         <div className="settingRow">
@@ -732,10 +744,10 @@ export const SettingsPanel = ({
             </label>
           </div>
         )}
-      </fieldset>
+          </fieldset>
 
-      {/* 输出尺寸 */}
-      <fieldset className="settingGroup">
+          {/* 输出尺寸 */}
+          <fieldset className="settingGroup">
         <legend className="settingLabel">输出尺寸</legend>
         <p className="settingHint" style={{ marginBottom: "var(--space-2)" }}>
           默认按原图尺寸导出，不缩放。选择预设时按长边等比缩小，适合社交平台分享。
@@ -770,10 +782,10 @@ export const SettingsPanel = ({
             </label>
           </div>
         )}
-      </fieldset>
+          </fieldset>
 
-      {/* 专业导出 */}
-      <fieldset className="settingGroup">
+          {/* 专业导出 */}
+          <fieldset className="settingGroup">
         <legend className="settingLabel">专业导出（实验性）</legend>
         <p className="settingHint" style={{ marginBottom: "var(--space-2)" }}>
           以下能力当前版本尚未实现，开启后导出结果中将标记为"已跳过"。
@@ -820,7 +832,9 @@ export const SettingsPanel = ({
         {settings.preferHighBitDepth && (
           <p className="settingHint">当前版本暂不支持高位深输出，导出时将标记为"已跳过"，使用 8bit。</p>
         )}
-      </fieldset>
+          </fieldset>
+        </>
+      )}
     </div>
   )
 }

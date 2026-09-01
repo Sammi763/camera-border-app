@@ -4,6 +4,7 @@ import { calculatePreviewImageLayout, drawPreviewToCanvas } from "../canvas/canv
 import { usePreviewViewport } from "../hooks/usePreviewViewport"
 import { buildResolvedRenderSettings } from "../../settings/utils/buildTexts"
 import { sourceDecodeLabel } from "../hooks/useExportController"
+import { ExportDock } from "./ExportDock"
 import type { ExportController } from "../hooks/useExportController"
 import type { RenderSettings } from "../../settings/types"
 import type { EngineSyncStatus, PreviewState } from "../types"
@@ -18,7 +19,7 @@ type PreviewPanelProps = {
   readonly hasSelectedImage: boolean
   /** 批量导出按钮文案；空字符串表示当前范围没有可批量导出的图片。 */
   readonly batchExportLabel: string
-  /** 根级控制器持有任务状态，快速/高级面板切换不会中断导出。 */
+  /** 根级控制器持有任务状态，工作台页签切换不会中断导出。 */
   readonly exportController: ExportController
   /** 当前选中图片识别到的品牌文字。 */
   readonly resolvedBrand?: string | null
@@ -30,7 +31,20 @@ type PreviewPanelProps = {
   readonly engineAvailable?: boolean
   /** 引擎不可用时的说明。 */
   readonly engineUnavailableReason?: string | null
+  /** 由统一工作台快捷键发出的视口命令。 */
+  readonly viewportCommand?: PreviewViewportCommand | null
+  /** 预览工作区背景，不参与 RenderRecipe。 */
+  readonly previewBackground?: PreviewBackground
+  /** 实际工作台把导出控件放入底部 Dock；单独使用 PreviewPanel 时默认保留。 */
+  readonly showExportControls?: boolean
 }
+
+export type PreviewViewportCommand = {
+  readonly type: "fit" | "actual"
+  readonly sequence: number
+}
+
+export type PreviewBackground = "black" | "gray" | "white"
 
 /** 引擎同步状态对应的中文文案。 */
 const engineSyncLabel = (status: EngineSyncStatus): string => {
@@ -125,10 +139,14 @@ const writeCanvasPreviewDiagnostics = (
 /** Canvas 即时预览组件。 */
 const CanvasPreview = ({
   state,
-  settings
+  settings,
+  viewportCommand,
+  previewBackground = "gray"
 }: {
   readonly state: Extract<PreviewState, { kind: "active" }>
   readonly settings: RenderSettings
+  readonly viewportCommand?: PreviewViewportCommand | null
+  readonly previewBackground?: PreviewBackground
 }): JSX.Element => {
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -141,6 +159,14 @@ const CanvasPreview = ({
   imageRef.current = state.currentImage
 
   const viewport = usePreviewViewport(state.filePath)
+
+  useEffect(() => {
+    if (viewportCommand?.type === "fit") {
+      viewport.resetToFit()
+    } else if (viewportCommand?.type === "actual") {
+      viewport.resetToActual()
+    }
+  }, [viewport.resetToActual, viewport.resetToFit, viewportCommand?.sequence, viewportCommand?.type])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -254,7 +280,7 @@ const CanvasPreview = ({
     <div className="previewCanvasContainer">
       <div
         ref={containerRef}
-        className="previewCanvasWrapper"
+        className={`previewCanvasWrapper previewBackground${previewBackground.charAt(0).toUpperCase()}${previewBackground.slice(1)}`}
         style={{ overflow: "hidden", position: "relative", cursor: viewport.isDragging ? "grabbing" : "grab" }}
         onWheel={viewport.handleWheel}
         onMouseDown={handleMouseDown}
@@ -271,7 +297,7 @@ const CanvasPreview = ({
         {isPreviewAreaInsufficient && (
           <div className="previewAreaInsufficient" role="status">
             <strong>预览区域不足</strong>
-            <span>请扩大窗口或收起模板画廊后再查看照片。</span>
+            <span>请扩大窗口或调整右侧面板后再查看照片。</span>
           </div>
         )}
       </div>
@@ -301,120 +327,40 @@ export const PreviewPanel = ({
   resolvedTextOverride,
   resolvedTextLayers,
   engineAvailable = true,
-  engineUnavailableReason = null
+  engineUnavailableReason = null,
+  viewportCommand = null,
+  previewBackground = "gray",
+  showExportControls = true
 }: PreviewPanelProps): JSX.Element => {
   const resolvedSettings = buildResolvedRenderSettings(settings, resolvedTextOverride, resolvedTextLayers, resolvedBrand)
-  const {
-    single: exportJob,
-    batch: batchExport,
-    isExporting,
-    isBatchExporting,
-    startSingleExport,
-    startBatchExport,
-    retryFailed,
-    cancelActiveExport,
-    openExportDirectory
-  } = exportController
-  const canExport = state.kind === "active" && state.currentImage !== null
-  const hasBatchItems = batchExportLabel.length > 0
-  const exportDisabledReason = engineAvailable ? null : (engineUnavailableReason ?? "Java 引擎不可用，恢复后高保真导出自动恢复")
-  const batchIsTerminal = batchExport.kind === "completed" || batchExport.kind === "cancelled"
 
   return (
     <Panel label="预览" title="预览区域" className="previewPanel">
-      <div className="previewFrame">
+      <div className={`previewFrame previewBackground${previewBackground.charAt(0).toUpperCase()}${previewBackground.slice(1)}`}>
         {state.kind === "idle" && <IdleView />}
         {state.kind === "active" && state.currentImage === null && <LoadingView filePath={state.filePath} />}
-        {state.kind === "active" && state.currentImage !== null && <CanvasPreview state={state} settings={resolvedSettings} />}
-      </div>
-      <div className="previewExportBar">
-        <button
-          type="button"
-          className="ghostButton previewExportButton"
-          disabled={!canExport || isExporting || isBatchExporting || !engineAvailable}
-          title={exportDisabledReason ?? undefined}
-          onClick={() => void startSingleExport()}
-        >
-          {exportJob.kind === "preparing" ? "准备中…" : isExporting ? "渲染中…" : "导出原图"}
-        </button>
-        {hasBatchItems && (
-          <button
-            type="button"
-            className="ghostButton previewExportButton"
-            disabled={isBatchExporting || isExporting || !engineAvailable}
-            title={exportDisabledReason ?? undefined}
-            onClick={() => void startBatchExport()}
-          >
-            {batchExport.kind === "preparing" ? "读取 EXIF…" : isBatchExporting && batchExport.kind === "running"
-              ? `批量导出中 ${batchExport.current}/${batchExport.total}…`
-              : batchExportLabel}
-          </button>
+        {state.kind === "active" && state.currentImage !== null && (
+          <CanvasPreview
+            state={state}
+            settings={resolvedSettings}
+            viewportCommand={viewportCommand}
+            previewBackground={previewBackground}
+          />
         )}
-        {(isExporting || isBatchExporting) && (
-          <button type="button" className="ghostButton previewExportButton" onClick={() => void cancelActiveExport()}>
-            取消导出
-          </button>
-        )}
-
-        <span className="previewExportStatus" aria-live="polite">
-          {!hasSelectedImage && "请先选择一张图片"}
-          {(exportJob.kind === "preparing" || exportJob.kind === "submitting") && (
-            <span className="previewExportPhase" role="progressbar" aria-label="单图导出进度" aria-valuetext={exportJob.kind === "preparing" ? "正在读取 EXIF…" : "正在渲染…"}>
-              <span className="previewExportProgressTrack" aria-hidden="true"><span className="previewExportProgressFill previewExportProgressFillIndeterminate" /></span>
-              <span role="status" aria-label="单图导出进度">{exportJob.kind === "preparing" ? "正在读取 EXIF…" : "正在渲染…"}</span>
-            </span>
-          )}
-          {hasSelectedImage && exportJob.kind === "idle" && batchExport.kind === "idle" && !engineAvailable && (
-            <span className="previewExportHint">引擎不可用，导出已禁用。可继续本地预览与模板编辑。</span>
-          )}
-          {hasSelectedImage && exportJob.kind === "idle" && batchExport.kind === "idle" && engineAvailable && (
-            window.desktop === undefined ? "浏览器降级模式：导出能力受限，建议启动桌面应用。" : "导出使用原图尺寸，由引擎渲染。"
-          )}
-          {exportJob.kind === "completed" && (
-            <span className="previewExportSuccess">导出完成（{exportJob.actualFormat.toUpperCase()}）：{exportJob.outputPath}
-              {exportJob.summary.length > 0 && <span className="previewExportWarnings">　⚠ {exportJob.summary.join("；")}</span>}
-            </span>
-          )}
-          {exportJob.kind === "cancelled" && <span className="previewExportError">{exportJob.message}</span>}
-          {exportJob.kind === "error" && <span className="previewExportError">{exportJob.message}</span>}
-          {batchExport.kind === "running" && (
-            <span className="previewBatchProgress" role="progressbar" aria-label="批量导出进度" aria-valuemin={0} aria-valuemax={batchExport.total} aria-valuenow={batchExport.current} aria-valuetext={`已完成 ${batchExport.current}/${batchExport.total}，成功 ${batchExport.success} 张，失败 ${batchExport.failed} 张`} aria-live="polite">
-              <span className="previewBatchProgressTrack" aria-hidden="true"><span className="previewBatchProgressFill" style={{ width: `${batchExport.total > 0 ? (batchExport.current / batchExport.total) * 100 : 0}%` }} /></span>
-              <span className="previewBatchProgressLabel">进度 {batchExport.current}/{batchExport.total}　成功 {batchExport.success}　失败 {batchExport.failed}</span>
-            </span>
-          )}
-          {batchExport.kind === "preparing" && "正在读取 EXIF…"}
-          {batchIsTerminal && (
-            <>
-              <span className={batchExport.failed > 0 ? "previewExportError" : "previewExportSuccess"}>
-                {batchExport.kind === "cancelled" ? "批量导出已取消" : "批量导出完成"}：共 {batchExport.total} 张，成功 {batchExport.success}，失败 {batchExport.failed}
-                {batchExport.kind === "cancelled" ? `，未执行 ${batchExport.cancelled}` : ""}
-              </span>
-              {batchExport.results.some((result) => !result.success) && (
-                <span className="previewBatchFailures">
-                  <span className="previewBatchFailureTitle">失败文件：</span>
-                  {batchExport.results.filter((result) => !result.success).map((result, index) => (
-                    <span key={`${result.fileName}-${index}`}>{index > 0 && "；"}{result.fileName}{result.error === null ? "" : `（${result.error}）`}</span>
-                  ))}
-                </span>
-              )}
-              {batchExport.results.some((result) => result.summary.length > 0) && (
-                <span className="previewBatchSummaries">
-                  <span className="previewBatchSummaryTitle">导出摘要：</span>
-                  {batchExport.results.filter((result) => result.summary.length > 0).map((result, index) => (
-                    <span key={`${result.fileName}-summary`}>{index > 0 && "；"}{result.fileName}：{result.summary.join("；")}</span>
-                  ))}
-                </span>
-              )}
-              <span className="previewBatchActions">
-                {window.desktop?.openDirectory !== undefined && <button type="button" className="ghostButton previewBatchActionBtn" onClick={() => openExportDirectory(batchExport.dirPath)}>打开目录</button>}
-                {batchExport.results.some((result) => !result.success) && <button type="button" className="ghostButton previewBatchActionBtn" onClick={() => void retryFailed()}>重试失败项</button>}
-              </span>
-            </>
-          )}
-          {batchExport.kind === "error" && <span className="previewExportError">{batchExport.message}</span>}
-        </span>
       </div>
+      {showExportControls && (
+        <div className="previewExportBar">
+          <ExportDock
+            state={state}
+            hasSelectedImage={hasSelectedImage}
+            batchExportLabel={batchExportLabel}
+            exportController={exportController}
+            engineAvailable={engineAvailable}
+            engineUnavailableReason={engineUnavailableReason}
+            compact
+          />
+        </div>
+      )}
     </Panel>
   )
 }
