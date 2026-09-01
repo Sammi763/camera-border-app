@@ -24,6 +24,7 @@ const IMAGE_FILTERS = [
 type PackagedE2ePathKey =
   | "CAMBORDER_E2E_SAMPLE"
   | "CAMBORDER_E2E_RETRY_SAMPLE"
+  | "CAMBORDER_E2E_QUEUE_DIR"
   | "CAMBORDER_E2E_OUTPUT"
   | "CAMBORDER_E2E_OUTPUT_DIR"
 
@@ -260,6 +261,14 @@ export const registerFileDialogIpc = (): void => {
   ipcMain.handle(
     IPC_CHANNELS.SELECT_IMAGE_FOLDER,
     async (): Promise<ImageSourceResult | null> => {
+      // 仅供已打包 E2E 注入 100 项真实图片目录；普通开发和用户流程仍使用原生对话框。
+      const e2eQueueDirectory = getPackagedE2ePath("CAMBORDER_E2E_QUEUE_DIR")
+      if (e2eQueueDirectory !== null) {
+        return {
+          kind: "directory",
+          paths: await scanDirectoryImages(e2eQueueDirectory)
+        }
+      }
       const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
 
       if (parent === undefined) {

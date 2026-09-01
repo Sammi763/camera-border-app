@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { requestPreview } from "../../../services/engine/previewApi"
 import {
   createPreviewCacheKey,
   hashRenderRecipe,
+  releasePreviewUrl,
   thumbnailUrlCache
 } from "../../../services/engine/previewCache"
 import { getImageFileVersions } from "../../../services/desktop/imageFileVersion"
@@ -59,7 +60,7 @@ export const buildThumbnailRequest = (filePath: string, maxWidth: number, maxHei
   maxHeight
 })
 
-/** 将引擎 PNG 物化为 data URL，避免 PreviewStore 淘汰后 img.src 指向失效资源。 */
+/** 浏览器不支持 object URL 时的测试/降级转换；Chromium 路径优先使用可释放的 blob URL。 */
 const blobToDataUrl = async (blob: Blob): Promise<string> =>
   await new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -93,6 +94,14 @@ const fetchThumbnail = async (
         const contentType = imageResponse.headers.get("content-type")?.toLowerCase() ?? ""
         if (imageResponse.ok && contentType.startsWith("image/")) {
           const blob = await imageResponse.blob()
+          if (typeof URL.createObjectURL === "function") {
+            const objectUrl = URL.createObjectURL(blob)
+            if (signal.aborted) {
+              releasePreviewUrl(objectUrl)
+              return null
+            }
+            return { url: objectUrl, byteSize: Math.max(1, blob.size) }
+          }
           return { url: await blobToDataUrl(blob), byteSize: Math.max(1, blob.size) }
         }
       }
@@ -146,25 +155,37 @@ const cachedThumbnailMap = (
 
 export const useThumbnails = (filePaths: readonly string[]): Map<string, string> => {
   const pathSignature = useMemo(() => [...filePaths].join("\u0000"), [filePaths])
-  const [versions, setVersions] = useState<ReadonlyMap<string, ImageFileVersion | null> | null>(null)
+  const [versions, setVersions] = useState<ReadonlyMap<string, ImageFileVersion | null>>(new Map())
   const [thumbnails, setThumbnails] = useState<Map<string, string>>(new Map())
+  const ownedThumbnailKeys = useRef<Map<string, string>>(new Map())
 
   // 读取受限 mtime；桥不存在时服务返回等长 null，仍可安全使用 unknown-mtime 缓存键。
   useEffect(() => {
     let active = true
-    setVersions(null)
     void getImageFileVersions(filePaths).then((results) => {
       if (!active) return
-      const next = new Map<string, ImageFileVersion | null>()
-      filePaths.forEach((filePath, index) => next.set(filePath, results[index] ?? null))
-      setVersions(next)
+      setVersions((previous) => {
+        const next = new Map(previous)
+        filePaths.forEach((filePath, index) => next.set(filePath, results[index] ?? null))
+        return next
+      })
     })
     return () => { active = false }
   }, [filePaths, pathSignature])
 
+  const versionsReady = filePaths.every((filePath) => versions.has(filePath))
+
   useEffect(() => {
-    if (versions === null) {
-      setThumbnails(new Map())
+    const currentPaths = new Set(filePaths)
+    for (const [filePath, cacheKey] of ownedThumbnailKeys.current) {
+      if (!currentPaths.has(filePath)) {
+        thumbnailUrlCache.delete(cacheKey)
+        ownedThumbnailKeys.current.delete(filePath)
+      }
+    }
+
+    if (!versionsReady) {
+      setThumbnails(cachedThumbnailMap(filePaths, versions))
       return
     }
 
@@ -173,6 +194,16 @@ export const useThumbnails = (filePaths: readonly string[]): Map<string, string>
     let nextIndex = 0
     const controllers = new Set<AbortController>()
     const uniquePaths = [...new Set(filePaths)]
+    const currentThumbnailKeys = new Map<string, string>()
+    for (const filePath of uniquePaths) {
+      const cacheKey = thumbnailKey(filePath, versionForPath(versions, filePath))
+      const previousKey = ownedThumbnailKeys.current.get(filePath)
+      if (previousKey !== undefined && previousKey !== cacheKey) {
+        thumbnailUrlCache.delete(previousKey)
+      }
+      currentThumbnailKeys.set(filePath, cacheKey)
+    }
+    ownedThumbnailKeys.current = currentThumbnailKeys
     const uncached = uniquePaths.filter((filePath) =>
       thumbnailUrlCache.get(thumbnailKey(filePath, versionForPath(versions, filePath))) === null)
 
@@ -195,7 +226,12 @@ export const useThumbnails = (filePaths: readonly string[]): Map<string, string>
 
         void fetchThumbnail(filePath, THUMB_MAX, THUMB_MAX, controller.signal)
           .then((payload) => {
-            if (!active || payload === null) return
+            if (payload === null) return
+            if (!active) {
+              // 请求完成与范围卸载竞态下，缓存没有接管该 object URL，必须在这里释放。
+              releasePreviewUrl(payload.url)
+              return
+            }
             thumbnailUrlCache.set(
               thumbnailKey(filePath, versionForPath(versions, filePath)),
               payload.url,
@@ -219,7 +255,15 @@ export const useThumbnails = (filePaths: readonly string[]): Map<string, string>
       active = false
       for (const controller of controllers) controller.abort()
     }
-  }, [filePaths, pathSignature, versions])
+  }, [filePaths, pathSignature, versions, versionsReady])
+
+  useEffect(() => () => {
+    // 组件卸载时释放当前可见范围持有的 URL；范围切换只释放移出范围的项目。
+    for (const cacheKey of ownedThumbnailKeys.current.values()) {
+      thumbnailUrlCache.delete(cacheKey)
+    }
+    ownedThumbnailKeys.current.clear()
+  }, [])
 
   return thumbnails
 }

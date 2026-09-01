@@ -61,6 +61,16 @@ public final class RenderJobRecord {
         return cancellationRequested;
     }
 
+    /** 任务所有项都已结束；queued/running 任务不能被存储淘汰。 */
+    public synchronized boolean isTerminal() {
+        for (RenderJobItemStatusResponse item : items) {
+            if ("queued".equals(item.getStatus()) || "running".equals(item.getStatus())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     public synchronized void completeItem(final int index,
                                    final ImageEncoder.ExportResult exportResult,
                                    final SourceDecode sourceDecode) {

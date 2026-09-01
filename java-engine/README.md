@@ -71,8 +71,12 @@ archive-label-box）。几何规格的唯一权威定义在 `util/BorderStyleRen
 
 ## 存储语义
 
-- `RenderJobStore`：内存任务状态表，进程重启即丢失；`PreviewStore`：按 LRU 条目数和 PNG
-  字节数同时受限的内存预览表，绝不缓存完整分辨率 `BufferedImage`（[ADR-0006](../docs/adr/0006-three-process-memory-stores.md)）。
+- `RenderJobStore`：内存任务状态表，默认最多保留 256 条终态任务，终态首次被观察到后保留
+  30 分钟；每次存取/登记时执行清理，queued/running 任务不会被淘汰。达到容量或 TTL 后，
+  `GET /api/render-jobs/{jobId}` 按未知任务返回 HTTP 404。引擎进程重启仍会丢失全部内存状态，
+  但重启不是释放任务记录的唯一策略；可通过 `app.render-jobs.max-terminal-jobs` 和
+  `app.render-jobs.terminal-ttl-seconds` 调整。`PreviewStore`：按 LRU 条目数和 PNG 字节数
+  同时受限的内存预览表，绝不缓存完整分辨率 `BufferedImage`（[ADR-0006](../docs/adr/0006-three-process-memory-stores.md)）。
 - 无数据库；用户数据（模板、相机/镜头/胶片资产、摄影预设）由 Electron 主进程持久化，引擎不持有；旧 Roll 数据迁移由 Electron/前端处理。
 
 ## 验证

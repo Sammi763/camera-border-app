@@ -35,7 +35,10 @@ PNG 8-bit；高保真归档允许 TIFF 或按源位深输出 PNG 8/16-bit。输�
    `build/icon.icns` / Windows `build/icon.ico` 对应的正式图标。
 3. 上述命令中的 `pnpm e2e:packaged` 启动实际打包应用，通过 CDP 驱动真实页面，使用固定样片
    完成「导入 → 默认自动应用摄影信息卡 → Canvas 照片像素可见性 → 应用零边框版式 → 导出」并校验导出文件；
-   最小窗口下必须仍有照片内容，或明确显示「预览区域不足」，不得显示已同步的纯边框画布。
+   随后通过 preload 的文件夹入口导入 100 项约 20MP 路径，记录首屏/滚动可见项目与实际缩略图请求，
+   验证缩略图 `blob:` URL 在清空卸载时释放，并完成 100 项全尺寸导出和取消运行。最小窗口下必须仍有照片内容，
+   或明确显示「预览区域不足」，不得显示已同步的纯边框画布。E2E 的临时 userData、导出文件和截图
+   默认在退出时清理；仅设置 `CAMBORDER_E2E_KEEP_TEMP=1` 才保留调试证据。
 4. 检查 E2E 记录的请求全部为 `app://app/api/**` 或 `app://app/previews/**`；不得出现
    Vite URL、JavaBridge 绝对 URL 或系统 Java 进程。
 5. 引擎尚未 ready 时，页面应收到结构化 `503 ENGINE_STARTING` 并显示启动中；进程失败时
@@ -220,10 +223,11 @@ grep -rn '](\.' README.md AGENTS.md CONTRIBUTING.md ARCHITECTURE.md DESIGN.md do
    解码请求带目标尺寸；缓存键必须
    包含路径、目标尺寸、mtime、源字节数和配方哈希，并由字节上限控制，淘汰时释放 `blob:` URL。
    不缓存完整分辨率 `BufferedImage`。
-5. 引擎已启动时执行 `pnpm perf:smoke`；脚本默认模拟 100 项队列，先用双并发预览，再提交
-   一个批量 `render-jobs` 并轮询至终态，同时记录 RSS 基线、峰值和导出完成后空闲窗口的
-   增长（默认阈值可通过 `--max-idle-growth-mb` 调整）。性能 smoke 只使用专属临时目录，
-   完成后自动清理。
+5. 引擎已启动时执行 `pnpm perf:smoke`；脚本必须从监听 8099 端口反查并校验 Java 引擎 PID，
+   禁止用 Node RSS 替代。默认连续执行两轮、每轮 100 项约 20MP 图片队列，先用双并发预览，
+   再提交批量 `render-jobs` 并轮询至终态，记录 `engineRssBaseline`、`engineRssPeak`、
+   `engineRssIdle`、`engineIdleGrowth` 及两轮空闲值；默认按启动基线 +600MB 判定。PID
+   不存在、进程无法确认或采集失败必须非零退出。性能 smoke 只使用专属临时目录，完成后自动清理。
 
 **可验证终点**：两端测试覆盖成功和失败路径；导出任务在面板切换后仍能显示进度，删除/撤销/恢复
 选择具有确定性；100 项 smoke 不超过声明的预览并发，导出逐项完成且无完整分辨率缓存残留。

@@ -164,6 +164,12 @@ BUILDER_ARGS=(
   --publish never
   "-c.directories.output=$OUTPUT_DIR"
 )
+# 受限 macOS 构建环境可能没有 DiskManagement 设备，无法创建 DMG；仍需把真实 .app
+# 打包出来供当前平台 E2E 使用。正常 macOS 保持正式 DMG 目标，只有该环境探针失败时降级目录目标。
+if [ "$OS_TAG" = "macos" ] && ! diskutil info / >/dev/null 2>&1; then
+  echo "[package] 当前环境不可用 DiskManagement，跳过 DMG 容器，仅输出可运行 .app（不影响应用本体验证）"
+  BUILDER_ARGS+=(--config.mac.target=dir)
+fi
 if [ "${#SIGN_FLAGS[@]}" -gt 0 ]; then
   BUILDER_ARGS+=("${SIGN_FLAGS[@]}")
 fi

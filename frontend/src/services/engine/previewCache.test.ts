@@ -69,4 +69,20 @@ describe("预览 URL 缓存", () => {
     expect(cache.size).toBe(0)
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:oversized")
   })
+
+  it("删除单项时释放对应的 blob URL，并保持其它缓存不变", () => {
+    const revokeObjectURL = vi.fn()
+    vi.stubGlobal("URL", { revokeObjectURL })
+    const cache = new BoundedPreviewUrlCache(10)
+
+    cache.set("keep", "blob:keep", 3)
+    cache.set("remove", "blob:remove", 3)
+    cache.delete("remove")
+
+    expect(cache.get("keep")).toBe("blob:keep")
+    expect(cache.get("remove")).toBeNull()
+    expect(cache.size).toBe(1)
+    expect(cache.byteSize).toBe(3)
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:remove")
+  })
 })

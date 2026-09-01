@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { createHash } from "node:crypto"
 import { createServer } from "node:net"
-import { accessSync, constants, copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { accessSync, constants, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { tmpdir } from "node:os"
 import { fileURLToPath } from "node:url"
@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url"
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const DEFAULT_SAMPLE = path.join(ROOT, "photos", "78330006.jpg")
 const DEFAULT_TIMEOUT_MS = 45_000
+const UI_PERFORMANCE_QUEUE_COUNT = 100
 export const PHOTO_CONTENT_PIXEL_THRESHOLD = 1000
 const EXPECTED_CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
@@ -541,6 +542,56 @@ const formatPreviewCanvasMetrics = (metrics) => {
   ].join("；")
 }
 
+/** 读取真实滚动容器的可见队列行，用于证明可视范围外没有提前请求缩略图。 */
+const readQueueViewport = async (client) => await evaluate(client, `(() => {
+  const list = document.querySelector('.queueList');
+  if (list === null) return { total: 0, visibleIds: [], visiblePaths: [], scrollTop: 0, clientHeight: 0, scrollHeight: 0 };
+  const listRect = list.getBoundingClientRect();
+  const visible = [...list.querySelectorAll('[data-queue-item-id]')]
+    .filter((row) => {
+      const rect = row.getBoundingClientRect();
+      return rect.bottom > listRect.top && rect.top < listRect.bottom && rect.right > listRect.left && rect.left < listRect.right;
+    })
+    .map((row) => ({
+      id: row.dataset.queueItemId ?? '',
+      path: row.querySelector('.queueSub')?.getAttribute('title') ?? ''
+    }));
+  return {
+    total: list.querySelectorAll('[data-queue-item-id]').length,
+    visibleIds: visible.map((item) => item.id),
+    visiblePaths: visible.map((item) => item.path),
+    scrollTop: list.scrollTop,
+    clientHeight: list.clientHeight,
+    scrollHeight: list.scrollHeight
+  };
+})()`)
+
+const parseRequestBody = (request) => {
+  if (typeof request?.postData !== "string") return null
+  try {
+    return JSON.parse(request.postData)
+  } catch {
+    return null
+  }
+}
+
+/** 只识别队列固定 120px、零边框 recipe 的缩略图请求。 */
+const isThumbnailRequest = (request) => {
+  const body = parseRequestBody(request)
+  return request?.url === "app://app/api/preview"
+    && request?.method === "POST"
+    && body?.maxWidth === 120
+    && body?.maxHeight === 120
+    && body?.recipe?.border?.top === 0
+    && body?.recipe?.border?.bottom === 0
+    && body?.recipe?.border?.left === 0
+    && body?.recipe?.border?.right === 0
+    && Array.isArray(body?.recipe?.texts)
+    && body.recipe.texts.length === 0
+}
+
+const thumbnailPathFromRequest = (request) => parseRequestBody(request)?.recipe?.imagePath ?? null
+
 const waitForVisiblePreviewPhoto = async (client, artifactRoot, label) => {
   const screenshotPath = await captureRendererScreenshot(client, artifactRoot, label)
   try {
@@ -627,6 +678,20 @@ const run = async () => {
   const retryOutputCandidates = ["png", "jpg", "tif"].map((extension) =>
     path.join(retryOutputDirectory, `retry-failure-border.${extension}`)
   )
+  const uiPerformanceSampleDirectory = path.join(temporaryRoot, "ui-performance-samples")
+  mkdirSync(uiPerformanceSampleDirectory, { recursive: true })
+  const uiPerformanceSamplePaths = Array.from({ length: UI_PERFORMANCE_QUEUE_COUNT }, (_, index) => {
+    const filePath = path.join(uiPerformanceSampleDirectory, `queue-${String(index + 1).padStart(3, "0")}.jpg`)
+    try {
+      // 同一张约 20MP 样片通过独立硬链接形成 100 个真实文件路径，避免 E2E 伪造请求或注入队列状态。
+      linkSync(sample, filePath)
+    } catch {
+      // 跨文件系统时硬链接不可用，退回到真实文件复制，仍由 preload 扫描目录并导入。
+      copyFileSync(sample, filePath)
+    }
+    return filePath
+  })
+  assert.equal(uiPerformanceSamplePaths.every((filePath) => existsSync(filePath)), true, "100 项 UI 性能样片准备失败")
   const userData = path.join(temporaryRoot, "user-data")
   rmSync(output, { force: true })
 
@@ -648,6 +713,7 @@ const run = async () => {
       CAMBORDER_E2E: "1",
       CAMBORDER_E2E_SAMPLE: sample,
       CAMBORDER_E2E_RETRY_SAMPLE: retryFailureSample,
+      CAMBORDER_E2E_QUEUE_DIR: uiPerformanceSampleDirectory,
       CAMBORDER_E2E_OUTPUT: output,
       CAMBORDER_E2E_OUTPUT_DIR: retryOutputDirectory,
       CAMBORDER_ENGINE_PORT: String(enginePort)
@@ -681,7 +747,7 @@ const run = async () => {
       const url = params.request?.url
       if (typeof url === "string") {
         requests.push(url)
-        requestDetails.push({ id: params.requestId, method: params.request?.method, url })
+        requestDetails.push({ id: params.requestId, method: params.request?.method, url, postData: params.request?.postData ?? null })
       }
     })
     client.on("Network.responseReceived", (params) => {
@@ -763,13 +829,13 @@ const run = async () => {
       })()`),
       (value) => value !== null
         && typeof value.src === "string"
-        && (value.src.startsWith("app://app/previews/") || value.src.startsWith("data:image/"))
+        && (value.src.startsWith("blob:") || value.src.startsWith("app://app/previews/") || value.src.startsWith("data:image/"))
         && value.complete === true
         && value.naturalWidth > 0
         && value.naturalHeight > 0
     )
     assert.equal(
-      thumbnail.src.startsWith("app://app/previews/") || thumbnail.src.startsWith("data:image/"),
+      thumbnail.src.startsWith("blob:") || thumbnail.src.startsWith("app://app/previews/") || thumbnail.src.startsWith("data:image/"),
       true,
       `缩略图不是允许的实际预览地址：${thumbnail.src}`
     )
@@ -1006,6 +1072,237 @@ const run = async () => {
     const sourceShaAfter = sha256File(sample)
     assert.equal(sourceShaAfter, sourceShaBefore, "导出前后源图 SHA-256 不一致")
 
+    // 真实 UI 性能闸门：通过 preload 的文件夹选择入口导入 100 个约 20MP 路径，
+    // 只观察 CDP 实际发出的 120px 缩略图请求，不向 Java API 直接注入队列。
+    const objectUrlProbeInstalled = await evaluate(client, `(() => {
+      const urlApi = window.URL;
+      if (typeof urlApi.revokeObjectURL !== 'function') return false;
+      const revoked = [];
+      const nativeRevoke = urlApi.revokeObjectURL.bind(urlApi);
+      urlApi.revokeObjectURL = (url) => {
+        revoked.push(url);
+        nativeRevoke(url);
+      };
+      window.__camborderE2eObjectUrlProbe = { revoked };
+      return true;
+    })()`)
+    assert.equal(objectUrlProbeInstalled, true, "无法安装打包 E2E object URL 释放探针")
+    await clickButton(client, `(() => {
+      const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === '清空');
+      if (button === undefined) return false;
+      button.click();
+      return true;
+    })()`, "清空队列按钮（缩略图卸载）")
+    await waitFor(
+      "队列缩略图范围卸载",
+      () => evaluate(client, "document.querySelectorAll('.queueItem').length"),
+      (count) => count === 0
+    )
+    const releasedThumbnailUrlCount = await waitFor(
+      "缩略图 object URL 释放",
+      () => evaluate(client, "window.__camborderE2eObjectUrlProbe?.revoked?.filter((url) => typeof url === 'string' && url.startsWith('blob:')).length ?? 0"),
+      (count) => count > 0
+    )
+
+    const uiPerformanceRequestStart = requestDetails.length
+    await clickButton(client, `(() => {
+      const button = [...document.querySelectorAll('button')].find((item) => ['选择图片文件夹', '选择文件夹'].includes(item.textContent?.trim()));
+      if (button === undefined) return false;
+      button.click();
+      return true;
+    })()`, "100 项图片文件夹入口（preload）")
+    const importedUiPerformanceQueue = await waitFor(
+      "100 项图片通过 preload 文件夹入口进入队列",
+      () => evaluate(client, `({
+        count: document.querySelectorAll('.queueItem').length,
+        label: document.querySelector('.queueCount')?.textContent?.trim() ?? ''
+      })`),
+      (value) => value.count === UI_PERFORMANCE_QUEUE_COUNT && value.label.includes(`${UI_PERFORMANCE_QUEUE_COUNT} 张图片`),
+      120_000
+    )
+    assert.equal(importedUiPerformanceQueue.count, UI_PERFORMANCE_QUEUE_COUNT)
+
+    const thumbnailRecordsForUiPerformance = () => requestDetails
+      .slice(uiPerformanceRequestStart)
+      .filter(isThumbnailRequest)
+    const initialUiPerformance = await waitFor(
+      "首屏可见项目的缩略图请求",
+      async () => {
+        const viewport = await readQueueViewport(client)
+        const thumbnailRecords = thumbnailRecordsForUiPerformance()
+        return { viewport, thumbnailRecords }
+      },
+      (value) => value.viewport.total === UI_PERFORMANCE_QUEUE_COUNT
+        && value.viewport.visibleIds.length > 0
+        && value.viewport.visibleIds.length < UI_PERFORMANCE_QUEUE_COUNT
+        && value.thumbnailRecords.length > 0,
+      120_000
+    )
+    await sleep(700)
+    const stableInitialUiPerformance = {
+      viewport: await readQueueViewport(client),
+      thumbnailRecords: thumbnailRecordsForUiPerformance()
+    }
+    const initialVisiblePaths = new Set(stableInitialUiPerformance.viewport.visiblePaths)
+    const initialThumbnailPaths = [...new Set(stableInitialUiPerformance.thumbnailRecords.map(thumbnailPathFromRequest))]
+      .filter((filePath) => typeof filePath === "string")
+    assert.ok(initialThumbnailPaths.length > 0, "首屏没有记录实际缩略图请求")
+    assert.equal(
+      initialThumbnailPaths.every((filePath) => initialVisiblePaths.has(filePath)),
+      true,
+      `初始视口外图片提前请求缩略图：${JSON.stringify({ initialThumbnailPaths, visiblePaths: [...initialVisiblePaths] })}`
+    )
+    assert.equal(stableInitialUiPerformance.viewport.visibleIds.length < UI_PERFORMANCE_QUEUE_COUNT, true, "100 项队列没有形成可滚动视口")
+
+    const beforeScrollThumbnailCount = stableInitialUiPerformance.thumbnailRecords.length
+    const previousVisibleIds = new Set(stableInitialUiPerformance.viewport.visibleIds)
+    await evaluate(client, `(() => {
+      const list = document.querySelector('.queueList');
+      if (list === null) return false;
+      const nextTop = Math.min(list.scrollHeight - list.clientHeight, list.scrollTop + Math.max(1, list.clientHeight * 0.8));
+      list.scrollTop = Math.max(0, nextTop);
+      list.dispatchEvent(new Event('scroll', { bubbles: true }));
+      return list.scrollTop > 0;
+    })()`)
+    const afterScrollUiPerformance = await waitFor(
+      "滚动后新可见项目的缩略图请求",
+      async () => {
+        const viewport = await readQueueViewport(client)
+        const thumbnailRecords = thumbnailRecordsForUiPerformance()
+        return {
+          viewport,
+          thumbnailRecords,
+          newThumbnailRecords: thumbnailRecords.slice(beforeScrollThumbnailCount)
+        }
+      },
+      (value) => value.viewport.visibleIds.some((id) => !previousVisibleIds.has(id))
+        && value.newThumbnailRecords.some((request) => {
+          const filePath = thumbnailPathFromRequest(request)
+          return typeof filePath === "string" && !initialVisiblePaths.has(filePath)
+        }),
+      120_000
+    )
+    const afterScrollVisiblePaths = new Set(afterScrollUiPerformance.viewport.visiblePaths)
+    const scrolledThumbnailPaths = [...new Set(afterScrollUiPerformance.newThumbnailRecords.map(thumbnailPathFromRequest))]
+      .filter((filePath) => typeof filePath === "string")
+    assert.ok(scrolledThumbnailPaths.length > 0, "滚动后没有记录新缩略图请求")
+    assert.equal(
+      scrolledThumbnailPaths.every((filePath) => afterScrollVisiblePaths.has(filePath)),
+      true,
+      `滚动后请求包含不可见图片：${JSON.stringify({ scrolledThumbnailPaths, visiblePaths: [...afterScrollVisiblePaths] })}`
+    )
+    assert.equal(
+      scrolledThumbnailPaths.some((filePath) => !initialVisiblePaths.has(filePath)),
+      true,
+      `滚动后没有请求首轮视口之外的新项目：${JSON.stringify({
+        initialVisiblePaths: [...initialVisiblePaths],
+        afterScrollVisiblePaths: [...afterScrollVisiblePaths],
+        newThumbnailPaths: scrolledThumbnailPaths
+      })}`
+    )
+
+    const newlyVisiblePath = afterScrollUiPerformance.viewport.visiblePaths.find((filePath) => !initialVisiblePaths.has(filePath))
+    assert.ok(newlyVisiblePath !== undefined, "滚动后未找到新的可见图片用于预览验证")
+    await clickButton(client, `(() => {
+      const row = [...document.querySelectorAll('.queueItem')].find((item) =>
+        item.querySelector('.queueSub')?.getAttribute('title') === ${JSON.stringify(newlyVisiblePath)}
+      );
+      if (row === undefined) return false;
+      row.click();
+      return true;
+    })()`, "滚动后的新可见图片")
+    const uiPerformancePreview = await waitForVisiblePreviewPhoto(client, artifactRoot, "100项滚动后预览")
+
+    await clickButton(client, `(() => {
+      const button = [...document.querySelectorAll('.queueActions button')].find((item) => item.textContent?.trim() === '全选');
+      if (button === undefined) return false;
+      button.click();
+      return true;
+    })()`, "100 项全选按钮")
+    await waitFor(
+      "100 项批量导出按钮",
+      () => evaluate(client, `(() => {
+        const button = [...document.querySelectorAll('button.previewExportButton')].find((item) => item.textContent?.includes('批量导出 ${UI_PERFORMANCE_QUEUE_COUNT} 张'));
+        return button !== undefined && !button.disabled;
+      })()`),
+      (available) => available === true,
+      120_000
+    )
+    await clickButton(client, `(() => {
+      const button = [...document.querySelectorAll('button.previewExportButton')].find((item) => item.textContent?.includes('批量导出 ${UI_PERFORMANCE_QUEUE_COUNT} 张'));
+      if (button === undefined || button.disabled) return false;
+      button.click();
+      return true;
+    })()`, "100 项批量导出按钮")
+    const uiPerformanceExportResult = await waitFor(
+      "100 项真实 UI 批量导出完成",
+      () => evaluate(client, "document.querySelector('.previewExportStatus')?.textContent ?? ''"),
+      (text) => text.includes("批量导出完成")
+        && text.includes(`共 ${UI_PERFORMANCE_QUEUE_COUNT} 张`)
+        && text.includes(`成功 ${UI_PERFORMANCE_QUEUE_COUNT}`)
+        && text.includes("失败 0"),
+      1_200_000
+    )
+    const uiPerformanceOutputPattern = /^queue-\d{3}-border(?:-\d+)?\.(?:png|jpg|tif)$/
+    const uiPerformanceOutputNames = await waitFor(
+      "100 项批量导出文件",
+      () => readdirSync(retryOutputDirectory).filter((name) => uiPerformanceOutputPattern.test(name)),
+      (names) => names.length === UI_PERFORMANCE_QUEUE_COUNT,
+      120_000
+    )
+    assert.equal(uiPerformanceOutputNames.length, UI_PERFORMANCE_QUEUE_COUNT)
+    for (const name of uiPerformanceOutputNames) {
+      assert.ok(statSync(path.join(retryOutputDirectory, name)).size > 0, `100 项导出文件为空：${name}`)
+    }
+    const uiPerformanceOutputData = readFileSync(path.join(retryOutputDirectory, uiPerformanceOutputNames[0]))
+    assert.notEqual(readImageDimensions(uiPerformanceOutputData), null, "100 项批量导出文件不是可识别图片")
+
+    // 复用真实 100 项队列再次提交并立即取消，保留可核验的取消日志；已完成文件只删除本次 E2E 临时产物。
+    for (const name of uiPerformanceOutputNames) {
+      unlinkSync(path.join(retryOutputDirectory, name))
+    }
+    await clickButton(client, `(() => {
+      const button = [...document.querySelectorAll('button.previewExportButton')].find((item) => item.textContent?.includes('批量导出 ${UI_PERFORMANCE_QUEUE_COUNT} 张'));
+      if (button === undefined || button.disabled) return false;
+      button.click();
+      return true;
+    })()`, "100 项取消测试批量导出按钮")
+    await waitFor(
+      "100 项批量导出进入运行态",
+      () => evaluate(client, "[...document.querySelectorAll('button.previewExportButton')].some((item) => item.textContent?.includes('批量导出中'))"),
+      (running) => running === true,
+      120_000
+    )
+    await clickButton(client, `(() => {
+      const button = [...document.querySelectorAll('button.previewExportButton')].find((item) => item.textContent?.trim() === '取消导出');
+      if (button === undefined) return false;
+      button.click();
+      return true;
+    })()`, "100 项批量导出取消按钮")
+    const uiPerformanceCancellationResult = await waitFor(
+      "100 项批量导出取消完成",
+      () => evaluate(client, "document.querySelector('.previewExportStatus')?.textContent ?? ''"),
+      (text) => text.includes("批量导出已取消") && text.includes(`共 ${UI_PERFORMANCE_QUEUE_COUNT} 张`),
+      120_000
+    )
+    const uiPerformanceThumbnailRecords = thumbnailRecordsForUiPerformance()
+    const uiPerformanceEvidence = {
+      importedItems: importedUiPerformanceQueue.count,
+      initialVisibleItems: stableInitialUiPerformance.viewport.visibleIds.length,
+      initialThumbnailRequests: stableInitialUiPerformance.thumbnailRecords.length,
+      initialThumbnailUniquePaths: initialThumbnailPaths.length,
+      afterScrollVisibleItems: afterScrollUiPerformance.viewport.visibleIds.length,
+      scrollThumbnailRequests: afterScrollUiPerformance.newThumbnailRecords.length,
+      scrollThumbnailUniquePaths: scrolledThumbnailPaths.length,
+      totalThumbnailRequests: uiPerformanceThumbnailRecords.length,
+      totalThumbnailUniquePaths: new Set(uiPerformanceThumbnailRecords.map(thumbnailPathFromRequest)).size,
+      releasedObjectUrlsAfterClear: releasedThumbnailUrlCount,
+      previewCanvas: formatPreviewCanvasMetrics(uiPerformancePreview.metrics),
+      exportFiles: uiPerformanceOutputNames.length,
+      exportResult: uiPerformanceExportResult,
+      cancellationResult: uiPerformanceCancellationResult
+    }
+
     assert.ok(requests.some((url) => url === "app://app/api/health"), "健康检查未经过 app:// 代理")
     assert.ok(requests.some((url) => url === "app://app/api/preview"), "预览请求未经过 app:// 代理")
     assert.ok(requests.some((url) => url.startsWith("app://app/previews/")), "预览缩略图未经过 app:// 代理")
@@ -1068,6 +1365,8 @@ const run = async () => {
     console.log(`[packaged-e2e] 默认摄影信息卡同步截图：${defaultPreview.screenshotPath}`)
     console.log(`[packaged-e2e] 零边框模板 Canvas：${formatPreviewCanvasMetrics(zeroBorderPreview.metrics)}`)
     console.log(`[packaged-e2e] 真实失败项重试：首轮=${batchFirstRun}；重试后=${batchRetryResult}；输出=${retryExportOutput}；尺寸=${retryExportDimensions.width}×${retryExportDimensions.height}`)
+    console.log(`[packaged-e2e] 真实取消运行：${uiPerformanceCancellationResult}`)
+    console.log(`[packaged-e2e] 100 项 UI 性能证据：${JSON.stringify(uiPerformanceEvidence)}`)
     console.log(`[packaged-e2e] CSP：已收到并拦截外网 fetch；Network 未记录 https://example.invalid/camborder-csp-probe`)
     console.log(`[packaged-e2e] 网络断言：${requests.length} 个请求全部为 app://app/、data: 或 blob:；有效预览路由 200，裸/畸形路由失败`)
 
@@ -1107,6 +1406,7 @@ const run = async () => {
     }
     if (process.env["CAMBORDER_E2E_KEEP_TEMP"] !== "1") {
       rmSync(temporaryRoot, { recursive: true, force: true })
+      rmSync(artifactRoot, { recursive: true, force: true })
     }
   }
 }

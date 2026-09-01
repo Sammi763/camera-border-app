@@ -43,6 +43,9 @@ electron/src/
 - `contextIsolation: true`、`nodeIntegration: false`
 - preload 仅暴露白名单 API（`window.desktop` 能力集合 + `window.desktopRuntime` 静态信息），渲染进程不直接访问文件系统
 - IPC handler 只读写受控路径（userData 下固定 JSON 文件、用户经系统对话框选择的路径）
+- 打包 E2E 可在同时满足 `CAMBORDER_E2E=1` 与 `app.isPackaged` 时通过
+  `CAMBORDER_E2E_QUEUE_DIR` 注入一个由脚本准备的图片目录，仅替代「选择图片文件夹」对话框；
+  该环境变量不在开发模式或普通用户流程生效。
 - 生产模式的引擎请求只经 `app://app/api/**` 与 `app://app/previews/**` 代理；代理路由和方法在
   `main/protocol.ts` 白名单中显式声明，仅允许 `GET` / `POST` / `DELETE`
 - 代理目标只取当前托管 `JavaBridge` 的地址，并且必须是 `http://127.0.0.1:<port>`；请求会拒绝其它
@@ -84,7 +87,7 @@ JavaBridge 的实际端口只存在于主进程，不通过 preload、IPC 或运
 
 ## 验证与已知限制
 
-- 验证：`pnpm typecheck`；冒烟走 `pnpm dev`（开发）或 `pnpm dev:managed`（托管）；打包与干净机器验收见 [docs/release-checklist.md](../docs/release-checklist.md)。当前 macOS 架构的阶段 1 实际应用验收命令为 `pnpm package && pnpm e2e:packaged`；这不宣称 macOS x64 或 Windows x64 已实测。
+- 验证：`pnpm typecheck`；冒烟走 `pnpm dev`（开发）或 `pnpm dev:managed`（托管）；打包与干净机器验收见 [docs/release-checklist.md](../docs/release-checklist.md)。当前 macOS 架构的阶段 1 实际应用验收命令为 `pnpm package && pnpm e2e:packaged`；打包 E2E 还会通过真实 preload 文件夹入口导入 100 项、审计首屏/滚动缩略图请求、预览、全尺寸导出与取消；这不宣称 macOS x64 或 Windows x64 已实测。
 - HEIC/HEIF 当前开发实现依赖 macOS `sips`，这是开发环境限制而非最终产品范围。Windows x64 的最终 HEIC/HEIF 状态为 `NOT_RUN`，必须通过 [docs/prd.md §0](../docs/prd.md) 和 [样片矩阵](../docs/test-samples.md) 后才能宣称支持。
 - JavaBridge 的监听地址 / 就绪超时配置在 `engine/engineConfig.ts`（默认只绑定 `127.0.0.1:8099`，20s）；地址仅供主进程端口探测和 `app://` 代理使用。
 - 打包模式**必须**使用随包 Java Runtime（`requireBundledRuntime`）：解析不到时进入 `runtime-missing` 诊断，不回退系统 Java；仅开发模式允许回退系统 PATH。最终用户不需要安装 Java、Node.js 或 Python，Electron 自带应用运行时。

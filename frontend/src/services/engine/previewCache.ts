@@ -71,7 +71,8 @@ export const estimatePreviewUrlBytes = (url: string): number => {
   return Math.max(1, new TextEncoder().encode(url).byteLength)
 }
 
-const releaseObjectUrl = (url: string): void => {
+/** 释放缓存之外仍由调用方持有的 blob URL。 */
+export const releasePreviewUrl = (url: string): void => {
   if (url.startsWith("blob:") && typeof URL.revokeObjectURL === "function") {
     URL.revokeObjectURL(url)
   }
@@ -108,12 +109,12 @@ export class BoundedPreviewUrlCache {
     if (previous !== undefined) {
       this.entries.delete(key)
       this.totalBytes -= previous.byteSize
-      if (previous.url !== url) releaseObjectUrl(previous.url)
+      if (previous.url !== url) releasePreviewUrl(previous.url)
     }
 
     // 单个响应超过预算时不保留，且释放该调用方刚创建的 object URL。
     if (safeByteSize > this.maxBytes) {
-      releaseObjectUrl(url)
+      releasePreviewUrl(url)
       return
     }
 
@@ -124,10 +125,19 @@ export class BoundedPreviewUrlCache {
 
   public clear(): void {
     for (const entry of this.entries.values()) {
-      releaseObjectUrl(entry.url)
+      releasePreviewUrl(entry.url)
     }
     this.entries.clear()
     this.totalBytes = 0
+  }
+
+  /** 删除单项并释放其 blob URL；队列可见范围卸载时使用。 */
+  public delete(key: string): void {
+    const entry = this.entries.get(key)
+    if (entry === undefined) return
+    this.entries.delete(key)
+    this.totalBytes -= entry.byteSize
+    releasePreviewUrl(entry.url)
   }
 
   public get size(): number {
@@ -145,7 +155,7 @@ export class BoundedPreviewUrlCache {
       const [key, entry] = oldest
       this.entries.delete(key)
       this.totalBytes -= entry.byteSize
-      releaseObjectUrl(entry.url)
+      releasePreviewUrl(entry.url)
     }
   }
 }

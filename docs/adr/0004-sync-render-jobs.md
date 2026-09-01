@@ -20,8 +20,13 @@
 - `DELETE /api/render-jobs/{jobId}` 只取消尚未执行的项，当前项自然收尾。
 - 引擎使用有界单线程导出执行器；完整分辨率和高位深任务默认并发为 1。
 - 前端由根级 `useExportController` 持有状态并轮询任务，面板切换不卸载任务状态。
+- `RenderJobStore` 默认最多保留 256 条终态任务；终态首次被观察到后保留 30 分钟。
+  清理只发生在存取/登记操作中，queued/running 任务不会被淘汰；容量淘汰或 TTL 过期后，
+  `GET /api/render-jobs/{jobId}` 按未知任务返回 HTTP 404。配置项为
+  `app.render-jobs.max-terminal-jobs` 与 `app.render-jobs.terminal-ttl-seconds`。
 
 ## 迁移后果
 
 - 客户端必须保存 `jobId` 并轮询终态，不能把 POST 响应当作最终导出结果。
-- 任务状态存于内存（`RenderJobStore`，`ConcurrentHashMap`），引擎重启即丢失——当前阶段可接受（见 [ADR-0006](0006-three-process-memory-stores.md)）。
+- 任务状态存于有界内存存储（`RenderJobStore`），引擎重启即丢失；容量与 TTL 淘汰保证长会话
+  不会只依赖重启释放终态记录（见 [ADR-0006](0006-three-process-memory-stores.md)）。

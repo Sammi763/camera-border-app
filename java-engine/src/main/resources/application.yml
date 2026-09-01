@@ -8,3 +8,7 @@ app:
   render-jobs:
     # 单线程确保全分辨率和 16-bit 导出默认并发为 1；队列满时返回 429，不阻塞 HTTP 线程。
     queue-capacity: 16
+    # 终态任务最多保留 256 条；queued/running 任务不计入淘汰候选。
+    max-terminal-jobs: 256
+    # 终态任务首次被存储观察到后最多保留 30 分钟；过期查询返回 HTTP 404。
+    terminal-ttl-seconds: 1800
