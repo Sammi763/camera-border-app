@@ -43,8 +43,6 @@ const settings = (borderTop: number): RenderSettings => ({
   textArea: "image",
   fontFamily: "sans-serif",
   textLayers: [],
-  autoCrop: false,
-  filmFormat: null,
   gradient: { enabled: false, type: "linear", angle: 0, stops: [] },
   borderStyle: null,
   exportFormat: "png",

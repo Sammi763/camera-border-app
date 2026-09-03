@@ -38,8 +38,6 @@ const makeSettings = (): RenderSettings => ({
   textLayers: [
     { id: "l1", enabled: true, content: "{Camera}", fontFamily: "sans-serif", fontSize: 20, color: "#222", placement: "bottom-center", textArea: "border", marginX: 0, marginY: 20, backgroundEnabled: false, backgroundColor: "#000", backgroundPaddingX: 6, backgroundPaddingY: 3, shadowEnabled: false, shadowColor: "#000", shadowBlur: 0, shadowOffsetX: 0, shadowOffsetY: 0, strokeEnabled: false, strokeColor: "#000", strokeWidth: 1 }
   ],
-  autoCrop: false,
-  filmFormat: null,
   gradient: { enabled: false, type: "linear", angle: 0, stops: [] },
   exportFormat: "jpeg",
   jpegQuality: 90,

@@ -26,7 +26,8 @@
       <artifactId>spring-boot-starter-web</artifactId>
     </dependency>
     <!-- EXIF 读取 + RAW 嵌入式预览提取（NEF/CR2/CR3/ARW/RAF/DNG/ORF/RW2/PEF）。
-         2.19.0 新增 CR3 支持；不引入 ICC/16-bit/TIFF 高位深能力。 -->
+         ICC/输出位深由当前 ImageEncoder 的格式化路径负责；TIFF 元数据写回能力
+         仍由导出结果明确报告是否降级，不在依赖注释中误称为已全部支持。 -->
     <dependency>
       <groupId>com.drewnoakes</groupId>
       <artifactId>metadata-extractor</artifactId>

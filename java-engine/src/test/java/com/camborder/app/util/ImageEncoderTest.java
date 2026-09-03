@@ -1,0 +1,136 @@
+package com.camborder.app.util;
+
+import com.camborder.app.dto.ExportSettings;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import javax.imageio.ImageIO;
+import java.awt.Color;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/** 验证 EXIF 与 ICC 开关彼此独立，避免只开启一项时误写另一类元数据。 */
+final class ImageEncoderTest {
+
+    @Test
+    void writesOnlyRequestedExifMetadata(@TempDir final Path tempDir) throws IOException {
+        Path source = writeJpegWithMetadata(tempDir.resolve("source.jpg"));
+        Path output = tempDir.resolve("metadata-only.jpg");
+        ExportSettings settings = exportSettings(output, true, false);
+
+        ImageEncoder.ExportResult result = new ImageEncoder().writeToFile(
+                sampleImage(), output.toString(), settings, source.toString());
+
+        assertThat(result.getMetadataPreservation().getStatus())
+                .isEqualTo(ImageEncoder.FeatureStatus.APPLIED);
+        assertThat(result.getColorProfilePreservation().getStatus())
+                .isEqualTo(ImageEncoder.FeatureStatus.NOT_REQUESTED);
+        byte[] encoded = Files.readAllBytes(output);
+        assertThat(hasJpegSegment(encoded, 0xe1, "Exif\0\0".getBytes(StandardCharsets.US_ASCII))).isTrue();
+        assertThat(hasJpegSegment(encoded, 0xe2, "ICC_PROFILE\0".getBytes(StandardCharsets.US_ASCII))).isFalse();
+    }
+
+    @Test
+    void writesOnlyRequestedIccProfile(@TempDir final Path tempDir) throws IOException {
+        Path source = writeJpegWithMetadata(tempDir.resolve("source.jpg"));
+        Path output = tempDir.resolve("profile-only.jpg");
+        ExportSettings settings = exportSettings(output, false, true);
+
+        ImageEncoder.ExportResult result = new ImageEncoder().writeToFile(
+                sampleImage(), output.toString(), settings, source.toString());
+
+        assertThat(result.getMetadataPreservation().getStatus())
+                .isEqualTo(ImageEncoder.FeatureStatus.NOT_REQUESTED);
+        assertThat(result.getColorProfilePreservation().getStatus())
+                .isEqualTo(ImageEncoder.FeatureStatus.APPLIED);
+        byte[] encoded = Files.readAllBytes(output);
+        assertThat(hasJpegSegment(encoded, 0xe1, "Exif\0\0".getBytes(StandardCharsets.US_ASCII))).isFalse();
+        assertThat(hasJpegSegment(encoded, 0xe2, "ICC_PROFILE\0".getBytes(StandardCharsets.US_ASCII))).isTrue();
+    }
+
+    private static ExportSettings exportSettings(final Path output,
+                                                 final boolean preserveMetadata,
+                                                 final boolean preserveColorProfile) {
+        ExportSettings settings = new ExportSettings(output.toString(), "jpeg", 95);
+        settings.setPreserveMetadata(preserveMetadata);
+        settings.setPreserveColorProfile(preserveColorProfile);
+        return settings;
+    }
+
+    private static BufferedImage sampleImage() {
+        BufferedImage image = new BufferedImage(16, 12, BufferedImage.TYPE_INT_RGB);
+        var graphics = image.createGraphics();
+        graphics.setColor(Color.WHITE);
+        graphics.fillRect(0, 0, image.getWidth(), image.getHeight());
+        graphics.dispose();
+        return image;
+    }
+
+    /** 创建带最小 EXIF/ICC APP 段的 JPEG，测试只关心编码器的块选择。 */
+    private static Path writeJpegWithMetadata(final Path path) throws IOException {
+        Path base = path.resolveSibling("base.jpg");
+        ImageIO.write(sampleImage(), "jpeg", base.toFile());
+        byte[] jpeg = Files.readAllBytes(base);
+        byte[] exif = concat("Exif\0\0".getBytes(StandardCharsets.US_ASCII), new byte[]{1, 2, 3});
+        byte[] icc = concat("ICC_PROFILE\0".getBytes(StandardCharsets.US_ASCII), new byte[]{1, 1, 4, 5, 6});
+        ByteArrayOutputStream output = new ByteArrayOutputStream(jpeg.length + exif.length + icc.length + 12);
+        output.write(jpeg, 0, 2);
+        writeJpegSegment(output, 0xe1, exif);
+        writeJpegSegment(output, 0xe2, icc);
+        output.write(jpeg, 2, jpeg.length - 2);
+        Files.write(path, output.toByteArray());
+        return path;
+    }
+
+    private static void writeJpegSegment(final ByteArrayOutputStream output,
+                                         final int marker, final byte[] payload) {
+        int length = payload.length + 2;
+        output.write(0xff);
+        output.write(marker);
+        output.write((length >>> 8) & 0xff);
+        output.write(length & 0xff);
+        output.write(payload, 0, payload.length);
+    }
+
+    private static boolean hasJpegSegment(final byte[] bytes, final int expectedMarker,
+                                          final byte[] expectedPrefix) {
+        int offset = 2;
+        while (offset + 4 <= bytes.length && (bytes[offset] & 0xff) == 0xff) {
+            while (offset < bytes.length && (bytes[offset] & 0xff) == 0xff) offset++;
+            if (offset >= bytes.length) return false;
+            int marker = bytes[offset++] & 0xff;
+            if (marker == 0xda || marker == 0xd9) return false;
+            if (marker == 0x01 || (marker >= 0xd0 && marker <= 0xd8)) continue;
+            if (offset + 2 > bytes.length) return false;
+            int length = ((bytes[offset] & 0xff) << 8) | (bytes[offset + 1] & 0xff);
+            if (length < 2 || offset + length > bytes.length) return false;
+            int payloadStart = offset + 2;
+            int payloadLength = length - 2;
+            if (marker == expectedMarker && payloadLength >= expectedPrefix.length) {
+                boolean matches = true;
+                for (int index = 0; index < expectedPrefix.length; index++) {
+                    if (bytes[payloadStart + index] != expectedPrefix[index]) {
+                        matches = false;
+                        break;
+                    }
+                }
+                if (matches) return true;
+            }
+            offset += length;
+        }
+        return false;
+    }
+
+    private static byte[] concat(final byte[] first, final byte[] second) {
+        byte[] result = new byte[first.length + second.length];
+        System.arraycopy(first, 0, result, 0, first.length);
+        System.arraycopy(second, 0, result, first.length, second.length);
+        return result;
+    }
+}

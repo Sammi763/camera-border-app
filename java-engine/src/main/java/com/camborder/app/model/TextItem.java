@@ -18,6 +18,10 @@ public final class TextItem {
     private String placement;
     private int marginX;
     private int marginY;
+    /** 多行文字行间额外间距（像素）。 */
+    private int lineSpacing;
+    /** 字符之间额外间距（像素）。 */
+    private int letterSpacing;
 
     // ---- 背景条 -----------------------------------------------------------
     private boolean backgroundEnabled;
@@ -107,6 +111,22 @@ public final class TextItem {
 
     public void setMarginY(final int marginY) {
         this.marginY = marginY;
+    }
+
+    public int getLineSpacing() {
+        return lineSpacing;
+    }
+
+    public void setLineSpacing(final int lineSpacing) {
+        this.lineSpacing = lineSpacing;
+    }
+
+    public int getLetterSpacing() {
+        return letterSpacing;
+    }
+
+    public void setLetterSpacing(final int letterSpacing) {
+        this.letterSpacing = letterSpacing;
     }
 
     public boolean isBackgroundEnabled() {

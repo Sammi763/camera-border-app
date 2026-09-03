@@ -20,8 +20,6 @@ const mockSettings: RenderSettings = {
   textArea: "border",
   fontFamily: "serif",
   textLayers: [],
-  autoCrop: false,
-  filmFormat: null,
   gradient: { enabled: false, type: "linear", angle: 0, stops: [{ offset: 0, color: "#000000" }, { offset: 1, color: "#ffffff" }] },
   exportFormat: "png",
   jpegQuality: 95,
@@ -66,6 +64,18 @@ describe("encodeTemplateJson", () => {
     expect(tpl["name"]).toBe("测试模板")
     expect(tpl["createdAt"]).toBe(1700000000000)
     expect((tpl["settings"] as Record<string, unknown>)["borderColor"]).toBe("#ffffff")
+  })
+
+  it("版式导出不携带输出预设或旧布局字段", () => {
+    const json = encodeTemplateJson(mockTemplate)
+    const settings = (JSON.parse(json) as { template: { settings: Record<string, unknown> } }).template.settings
+    expect(settings).not.toHaveProperty("exportFormat")
+    expect(settings).not.toHaveProperty("jpegQuality")
+    expect(settings).not.toHaveProperty("outputSizePreset")
+    expect(settings).not.toHaveProperty("customOutputLongEdge")
+    expect(settings).not.toHaveProperty("preserveMetadata")
+    expect(settings).not.toHaveProperty("filmFormat")
+    expect(settings).not.toHaveProperty("autoCrop")
   })
 })
 
@@ -240,6 +250,20 @@ describe("旧模板导入兼容性", () => {
       expect(layer0.fontSize).toBe(result.template.settings.textFontSize)
       expect(layer0.color).toBe(result.template.settings.textColor)
       expect(layer0.fontFamily).toBe(result.template.settings.fontFamily)
+    }
+  })
+
+  it("导入旧模板时把画幅和 autoCrop 迁移为 imagePlacement", () => {
+    const legacyWithLayout = legacyJson.replace('"filmFormat":null', '"filmFormat":"6x10"').replace('"autoCrop":false', '"autoCrop":true')
+    const result = decodeTemplateJson(legacyWithLayout)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.template.settings.imagePlacement).toMatchObject({
+        mode: "fill",
+        targetAspectRatio: 25 / 14
+      })
+      expect(result.template.settings).not.toHaveProperty("filmFormat")
+      expect(result.template.settings).not.toHaveProperty("autoCrop")
     }
   })
 })

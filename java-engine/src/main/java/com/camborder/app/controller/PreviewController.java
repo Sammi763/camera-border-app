@@ -5,6 +5,7 @@ import com.camborder.app.dto.PreviewResponse;
 import com.camborder.app.exception.ApiException;
 import com.camborder.app.model.RenderRecipe;
 import com.camborder.app.service.PreviewService;
+import com.camborder.app.util.RenderRecipeValidator;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -38,6 +39,8 @@ public final class PreviewController {
         if (recipe.getImagePath() == null || recipe.getImagePath().isBlank()) {
             throw new ApiException("imagePath is required", HttpStatus.BAD_REQUEST);
         }
+
+        RenderRecipeValidator.validateImagePlacement(recipe, "");
 
         if (request.getMaxWidth() < 0) {
             throw new ApiException("maxWidth must be non-negative", HttpStatus.BAD_REQUEST);

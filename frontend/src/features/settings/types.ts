@@ -44,6 +44,8 @@ export type BorderStyleSettings = {
  */
 export type OutputSizePreset = "original" | "1080p" | "2k" | "4k" | "custom"
 
+import type { ImagePlacement } from "../../types/preview"
+
 /**
  * 品牌标识（Logo）配置。
  *
@@ -64,6 +66,12 @@ export type LogoConfig = {
   readonly size: number
   /** 颜色模式：自动对比 / 浅色 / 深色。 */
   readonly colorMode: "auto-contrast" | "light" | "dark"
+  /** 自定义 PNG/签名的本地路径。 */
+  readonly imagePath?: string | null
+  /** PNG/签名不透明度（0-1）。 */
+  readonly opacity?: number
+  /** 自动对比度开关。 */
+  readonly autoContrast?: boolean
 }
 
 /**
@@ -87,10 +95,14 @@ export type TextLayerSettings = {
   readonly placement: string
   /** 放置区域：图片上或边框上。 */
   readonly textArea: TextArea
-  /** 水平边距（预留，首版不参与居中排版）。 */
+  /** 水平边距；按当前图片/边框区域的左右边缘定位时生效。 */
   readonly marginX: number
   /** 垂直偏移。 */
   readonly marginY: number
+  /** 行间距（px）。 */
+  readonly lineSpacing?: number
+  /** 字距（px）。 */
+  readonly letterSpacing?: number
   /** 背景条：是否启用。 */
   readonly backgroundEnabled: boolean
   /** 背景条：颜色。 */
@@ -146,9 +158,10 @@ export type RenderSettings = {
   // ---- 多段文字图层 ----
   /** 文字图层列表。空数组时回退到旧单段文字逻辑。 */
   readonly textLayers: readonly TextLayerSettings[]
-  readonly autoCrop: boolean
-  /** 画幅格式标识，null 表示不使用画幅。 */
-  readonly filmFormat: string | null
+  /** 图片布局几何；画幅选择只负责填充其中的 targetAspectRatio。 */
+  readonly imagePlacement?: ImagePlacement
+  /** 布局预设标识，展示层使用，不会写入 RenderRecipe。 */
+  readonly layoutPresetId?: string | null
   /** 渐变设置。 */
   readonly gradient: GradientSettings
   /** 边框风格；null 表示不启用风格装饰（旧模板保持原行为）。 */
@@ -170,6 +183,20 @@ export type RenderSettings = {
   /** 品牌标识配置。 */
   readonly logo: LogoConfig
 }
+
+/**
+ * 仅供旧 localStorage/模板迁移使用的布局字段。
+ *
+ * 这些字段不是当前设置或 RenderRecipe 的一部分；它们单独建类型，
+ * 防止新的设置状态继续写出已经失效的 autoCrop/filmFormat。
+ */
+export type LegacyLayoutSettings = {
+  readonly autoCrop?: boolean
+  readonly filmFormat?: string | null
+}
+
+/** 迁移入口允许的旧/新设置输入。迁移完成后必须返回 RenderSettings。 */
+export type RenderSettingsInput = Partial<RenderSettings> & LegacyLayoutSettings
 
 export type NumberSettingKey = "borderTop" | "borderBottom" | "borderLeft" | "borderRight"
   | "textFontSize" | "jpegQuality" | "customOutputLongEdge"

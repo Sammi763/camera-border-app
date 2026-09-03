@@ -19,8 +19,7 @@ const request: RenderJobRequest = {
       border: { top: 0, bottom: 0, left: 0, right: 0, color: "#fff" },
       gradient: null,
       texts: [],
-      filmFormat: null,
-      autoCrop: false
+      imagePlacement: { mode: "fit", focalX: 0.5, focalY: 0.5, rotation: 0, targetAspectRatio: null }
     },
     export: { format: "jpeg", outputPath: "/tmp/out/a.jpg", jpegQuality: 90 }
   }]

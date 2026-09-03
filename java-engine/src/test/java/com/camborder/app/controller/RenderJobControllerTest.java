@@ -400,7 +400,7 @@ final class RenderJobControllerTest extends AbstractControllerTest {
     }
 
     @Test
-    void shouldReportSkippedWhenPreserveMetadataRequested() throws Exception {
+    void shouldReportAppliedWhenNoMetadataIsPresent() throws Exception {
         String imageFile = writeTempImage();
         ExportSettings export = new ExportSettings(
                 tempDir.resolve("out.tif").toString(), "tiff", 95);
@@ -410,12 +410,12 @@ final class RenderJobControllerTest extends AbstractControllerTest {
 
         JsonNode statusResponse = submitAndWait(request);
 
-        // metadataPreservation.status 应为 SKIPPED，message 包含"暂不支持"
+        // 没有可读取的 EXIF 时，像素导出仍成功，能力状态应明确为 APPLIED。
         String metadataStatus = statusResponse.path("metadataPreservation").path("status").asText();
         String metadataMessage = statusResponse
                 .path("metadataPreservation").path("message").asText();
-        assertThat(metadataStatus).isEqualTo("SKIPPED");
-        assertThat(metadataMessage).contains("暂不支持");
+        assertThat(metadataStatus).isEqualTo("APPLIED");
+        assertThat(metadataMessage).contains("没有可读取");
     }
 
     @Test
@@ -433,7 +433,7 @@ final class RenderJobControllerTest extends AbstractControllerTest {
     }
 
     @Test
-    void shouldReportSkippedWhenPreferHighBitDepthRequested() throws Exception {
+    void shouldReportDowngradedWhenPreferHighBitDepthCannotBePreserved() throws Exception {
         String imageFile = writeTempImage();
         ExportSettings export = new ExportSettings(
                 tempDir.resolve("out.tif").toString(), "tiff", 95);
@@ -441,14 +441,16 @@ final class RenderJobControllerTest extends AbstractControllerTest {
         RenderRecipe recipe = new RenderRecipe(imageFile, null, null, null, false);
         RenderJobRequest request = new RenderJobRequest(recipe, export);
 
-        submitAndWait(request);
+        JsonNode statusResponse = submitAndWait(request);
 
         Path outputFile = tempDir.resolve("out.tif");
         assertThat(Files.exists(outputFile)).isTrue();
+        assertThat(statusResponse.path("highBitDepth").path("status").asText())
+                .isEqualTo("DOWNGRADED");
     }
 
     @Test
-    void shouldReportSkippedForPngPreserveMetadata() throws Exception {
+    void shouldReportAppliedForPngWithoutMetadata() throws Exception {
         String imageFile = writeTempImage();
         ExportSettings export = new ExportSettings(
                 tempDir.resolve("out.png").toString(), "png", 95);
@@ -458,11 +460,11 @@ final class RenderJobControllerTest extends AbstractControllerTest {
 
         JsonNode statusResponse = submitAndWait(request);
         String metadataStatus = statusResponse.path("metadataPreservation").path("status").asText();
-        assertThat(metadataStatus).isEqualTo("SKIPPED");
+        assertThat(metadataStatus).isEqualTo("APPLIED");
     }
 
     @Test
-    void shouldReportSkippedForJpegHighBitDepth() throws Exception {
+    void shouldReportDowngradedForJpegHighBitDepth() throws Exception {
         String imageFile = writeTempImage();
         ExportSettings export = new ExportSettings(
                 tempDir.resolve("out.jpg").toString(), "jpeg", 90);
@@ -474,7 +476,7 @@ final class RenderJobControllerTest extends AbstractControllerTest {
         String bitDepthStatus = statusResponse.path("highBitDepth").path("status").asText();
         String bitDepthMessage = statusResponse
                 .path("highBitDepth").path("message").asText();
-        assertThat(bitDepthStatus).isEqualTo("SKIPPED");
+        assertThat(bitDepthStatus).isEqualTo("DOWNGRADED");
         assertThat(bitDepthMessage).contains("8bit");
     }
 

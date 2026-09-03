@@ -6,6 +6,10 @@ import org.junit.jupiter.api.Test;
 
 import java.awt.Color;
 import java.awt.image.BufferedImage;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+import javax.imageio.ImageIO;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -225,6 +229,44 @@ final class LogoRendererTest {
             }
         }
         assertThat(hasLightText).isTrue();
+    }
+
+    /**
+     * 自定义 PNG 开启自动反差时，按实际边框颜色绘制反差底，而不是沿用旧 colorMode。
+     */
+    @Test
+    void shouldUseActualBorderContrastForCustomPng() throws Exception {
+        Path logoPath = Files.createTempFile("camera-border-logo-", ".png");
+        try {
+            BufferedImage logoImage = new BufferedImage(10, 10, BufferedImage.TYPE_INT_ARGB);
+            java.awt.Graphics2D logoGraphics = logoImage.createGraphics();
+            logoGraphics.setColor(Color.WHITE);
+            logoGraphics.fillRect(0, 0, 10, 10);
+            logoGraphics.dispose();
+            ImageIO.write(logoImage, "PNG", logoPath.toFile());
+
+            BufferedImage canvas = new BufferedImage(200, 100, BufferedImage.TYPE_INT_RGB);
+            java.awt.Graphics2D canvasGraphics = canvas.createGraphics();
+            canvasGraphics.setColor(Color.WHITE);
+            canvasGraphics.fillRect(0, 0, 200, 100);
+            canvasGraphics.dispose();
+
+            BorderConfig border = new BorderConfig(0, 30, 0, 0, "#ffffff");
+            LogoConfig logo = new LogoConfig(true, "brand-text", null,
+                    "border-bottom-center", 20, "light");
+            logo.setImagePath(logoPath.toString());
+            logo.setAutoContrast(true);
+
+            logoRenderer.draw(canvas, logo, border);
+
+            // colorMode=light 仍应按白色边框选择深色反差底；像素位于 PNG 上方的底板内。
+            Color contrastPixel = new Color(canvas.getRGB(100, 74));
+            assertThat(contrastPixel.getRed()).isLessThan(240);
+            assertThat(contrastPixel.getGreen()).isLessThan(240);
+            assertThat(contrastPixel.getBlue()).isLessThan(240);
+        } finally {
+            Files.deleteIfExists(logoPath);
+        }
     }
 
     /**

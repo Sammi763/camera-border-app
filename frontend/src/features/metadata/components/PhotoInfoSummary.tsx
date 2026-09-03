@@ -47,6 +47,10 @@ export const PhotoInfoSummary = ({ effectiveIdentity, sources }: PhotoInfoSummar
       </span>
       {effectiveIdentity.location.trim().length > 0 && <span>地点：{effectiveIdentity.location}</span>}
       {effectiveIdentity.frameNumber.trim().length > 0 && <span>帧号：{effectiveIdentity.frameNumber}</span>}
+      {effectiveIdentity.fNumber?.trim().length ? <span>光圈：{effectiveIdentity.fNumber}</span> : null}
+      {effectiveIdentity.exposureTime?.trim().length ? <span>快门：{effectiveIdentity.exposureTime}</span> : null}
+      {effectiveIdentity.iso?.trim().length ? <span>ISO：{effectiveIdentity.iso}</span> : null}
+      {effectiveIdentity.focalLength?.trim().length ? <span>焦距：{effectiveIdentity.focalLength}</span> : null}
     </div>
   </section>
 )

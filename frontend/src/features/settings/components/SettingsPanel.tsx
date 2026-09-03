@@ -8,8 +8,11 @@ import { VariableHelpPanel } from "../../metadata/components/VariableHelpPanel"
 import { TextLayerEditor } from "./TextLayerEditor"
 import { createDefaultTextLayers } from "../utils/defaultTextLayers"
 import { applyFilmFormatSettings } from "../utils/applyFilmFormat"
+import { normalizeImagePlacement } from "../../preview/canvas/imagePlacementGeometry"
+import { normalizeTextPlacement, textPlacementOptions } from "../utils/textPlacementOptions"
 import { CUSTOM_LONG_EDGE_MAX, CUSTOM_LONG_EDGE_MIN, OUTPUT_SIZE_PRESETS } from "../utils/outputSizePresets"
 import type { FilmFormatInfo } from "../../../types/preview"
+import { OutputPresetPanel } from "../../output/components/OutputPresetPanel"
 
 type SettingsPanelProps = {
   readonly controller: SettingsController
@@ -31,16 +34,32 @@ type SettingsPanelProps = {
 
 /** 内置画幅选项（后端不可用时的回退；含 6x10 与 6x12）。 */
 const FALLBACK_FORMATS: readonly FilmFormatInfo[] = [
-  { id: "half-frame", label: "半格", recommendedBorder: { top: 40, bottom: 40, left: 20, right: 20, color: "#ffffff" } },
-  { id: "135", label: "135", recommendedBorder: { top: 30, bottom: 30, left: 30, right: 30, color: "#ffffff" } },
-  { id: "645", label: "645", recommendedBorder: { top: 30, bottom: 50, left: 30, right: 30, color: "#ffffff" } },
-  { id: "6x6", label: "6x6", recommendedBorder: { top: 40, bottom: 40, left: 40, right: 40, color: "#ffffff" } },
-  { id: "6x7", label: "6x7", recommendedBorder: { top: 30, bottom: 50, left: 35, right: 35, color: "#ffffff" } },
-  { id: "6x8", label: "6x8", recommendedBorder: { top: 30, bottom: 50, left: 35, right: 35, color: "#ffffff" } },
-  { id: "6x9", label: "6x9", recommendedBorder: { top: 30, bottom: 50, left: 40, right: 40, color: "#ffffff" } },
-  { id: "6x10", label: "6x10", recommendedBorder: { top: 30, bottom: 50, left: 45, right: 45, color: "#ffffff" } },
-  { id: "6x12", label: "6x12", recommendedBorder: { top: 30, bottom: 50, left: 50, right: 50, color: "#ffffff" } }
+  { id: "half-frame", label: "半格", targetAspectRatio: 3 / 4, recommendedBorder: { top: 40, bottom: 40, left: 20, right: 20, color: "#ffffff" } },
+  { id: "135", label: "135", targetAspectRatio: 3 / 2, recommendedBorder: { top: 30, bottom: 30, left: 30, right: 30, color: "#ffffff" } },
+  { id: "645", label: "645", targetAspectRatio: 4 / 3, recommendedBorder: { top: 30, bottom: 50, left: 30, right: 30, color: "#ffffff" } },
+  { id: "6x6", label: "6x6", targetAspectRatio: 1, recommendedBorder: { top: 40, bottom: 40, left: 40, right: 40, color: "#ffffff" } },
+  { id: "6x7", label: "6x7", targetAspectRatio: 5 / 4, recommendedBorder: { top: 30, bottom: 50, left: 35, right: 35, color: "#ffffff" } },
+  { id: "6x8", label: "6x8", targetAspectRatio: 10 / 7, recommendedBorder: { top: 30, bottom: 50, left: 35, right: 35, color: "#ffffff" } },
+  { id: "6x9", label: "6x9", targetAspectRatio: 45 / 28, recommendedBorder: { top: 30, bottom: 50, left: 40, right: 40, color: "#ffffff" } },
+  { id: "6x10", label: "6x10", targetAspectRatio: 25 / 14, recommendedBorder: { top: 30, bottom: 50, left: 45, right: 45, color: "#ffffff" } },
+  { id: "6x12", label: "6x12", targetAspectRatio: 15 / 7, recommendedBorder: { top: 30, bottom: 50, left: 50, right: 50, color: "#ffffff" } }
 ]
+
+/** 每种边框风格实际消费的参数；界面不展示不会影响渲染的“摆设控件”。 */
+const BORDER_STYLE_PARAMETERS: Readonly<Record<string, {
+  readonly edgeWidth: boolean
+  readonly holeCount: boolean
+  readonly paperTone: boolean
+}>> = {
+  "exhibition-line": { edgeWidth: true, holeCount: false, paperTone: true },
+  "polaroid-shadow": { edgeWidth: true, holeCount: false, paperTone: false },
+  "film-perforation": { edgeWidth: false, holeCount: true, paperTone: true },
+  "mat-double-line": { edgeWidth: true, holeCount: false, paperTone: true },
+  "torn-edge": { edgeWidth: true, holeCount: false, paperTone: true },
+  "negative-band": { edgeWidth: false, holeCount: true, paperTone: true },
+  "magazine-keyline": { edgeWidth: true, holeCount: false, paperTone: true },
+  "archive-label-box": { edgeWidth: true, holeCount: false, paperTone: true }
+}
 
 /**
  * 将 EXIF 元数据格式化为可读文本。
@@ -79,6 +98,11 @@ export const SettingsPanel = ({
   const { fonts } = useSystemFonts()
   const [filmFormats, setFilmFormats] = useState<readonly FilmFormatInfo[]>(FALLBACK_FORMATS)
   const [exifStatus, setExifStatus] = useState<"idle" | "loading" | "error" | "empty">("idle")
+  const imagePlacement = normalizeImagePlacement(settings.imagePlacement)
+  const hasCustomLogo = (settings.logo.imagePath?.trim().length ?? 0) > 0
+  const borderStyleParameters = settings.borderStyle === null
+    ? null
+    : BORDER_STYLE_PARAMETERS[settings.borderStyle.id] ?? { edgeWidth: true, holeCount: true, paperTone: true }
 
   // 加载画幅格式列表
   useEffect(() => {
@@ -116,8 +140,30 @@ export const SettingsPanel = ({
 
   const handleFilmFormatChange = useCallback((formatId: string): void => {
     const format = filmFormats.find((f) => f.id === formatId)
-    update(applyFilmFormatSettings(settings, formatId, format))
+    const patch = applyFilmFormatSettings(settings, formatId, format)
+    if (formatId === "") {
+      update({
+        ...patch,
+        layoutPresetId: null,
+        imagePlacement: { ...normalizeImagePlacement(settings.imagePlacement), targetAspectRatio: null }
+      })
+    } else {
+      update(patch)
+    }
   }, [filmFormats, settings, update])
+
+  const updateImagePlacement = useCallback((patch: Partial<typeof imagePlacement>): void => {
+    update({ imagePlacement: { ...imagePlacement, ...patch } })
+  }, [imagePlacement, update])
+
+  const handleLogoFileSelect = useCallback(async (): Promise<void> => {
+    const selectLogoFile = window.desktop?.selectLogoFile
+    if (selectLogoFile === undefined) return
+    const imagePath = await selectLogoFile()
+    if (imagePath !== null) {
+      update({ logo: { ...settings.logo, imagePath } })
+    }
+  }, [settings.logo, update])
 
   const handleExifFill = useCallback(async () => {
     if (selectedFilePath === null) {
@@ -189,7 +235,10 @@ export const SettingsPanel = ({
   /** 更新文字图层放置区域：同步到 textLayers[0]。 */
   const handleTextLayerTextAreaChange = useCallback((value: "image" | "border"): void => {
     if (firstLayer !== null) {
-      updateTextLayer(firstLayer.id, { textArea: value })
+      updateTextLayer(firstLayer.id, {
+        textArea: value,
+        placement: normalizeTextPlacement(value, firstLayer.placement)
+      })
     }
   }, [firstLayer, updateTextLayer])
 
@@ -215,7 +264,7 @@ export const SettingsPanel = ({
             画幅格式
             <select
               className="settingSelect"
-              value={settings.filmFormat ?? ""}
+              value={settings.layoutPresetId ?? ""}
               onChange={(e) => handleFilmFormatChange(e.target.value)}
             >
               <option value="">不使用画幅</option>
@@ -224,12 +273,170 @@ export const SettingsPanel = ({
               ))}
             </select>
           </label>
-          {settings.filmFormat !== null && (
+          {settings.layoutPresetId !== null && settings.layoutPresetId !== undefined && (
             <p className="settingsCapabilityHint">
               切换画幅时已自动填充推荐边框值。可手动调整。
             </p>
           )}
         </div>
+      </fieldset>
+
+      {/* 图片放置（RenderRecipe v2） */}
+      <fieldset className="settingGroup">
+        <legend className="settingLabel">图片放置</legend>
+        <div className="settingRow formInlineRow">
+          <label className="settingFieldLabel">
+            模式
+            <select
+              className="settingSelect"
+              value={imagePlacement.mode}
+              onChange={(e) => updateImagePlacement({ mode: e.target.value as "fit" | "fill" })}
+            >
+              <option value="fit">适应（完整图片）</option>
+              <option value="fill">铺满（按焦点裁切）</option>
+            </select>
+          </label>
+          <label className="settingFieldLabel">
+            旋转（°）
+            <input
+              type="number"
+              className="settingNumberInput"
+              min={-360}
+              max={360}
+              step={1}
+              value={imagePlacement.rotation}
+              onChange={(e) => updateImagePlacement({ rotation: Number(e.target.value) })}
+            />
+          </label>
+        </div>
+        <div className="settingRow formInlineRow">
+          <label className="settingFieldLabel">
+            焦点 X
+            <input
+              type="number"
+              className="settingNumberInput"
+              min={0}
+              max={1}
+              step={0.01}
+              value={imagePlacement.focalX}
+              disabled={imagePlacement.mode !== "fill"}
+              onChange={(e) => updateImagePlacement({ focalX: Number(e.target.value) })}
+            />
+          </label>
+          <label className="settingFieldLabel">
+            焦点 Y
+            <input
+              type="number"
+              className="settingNumberInput"
+              min={0}
+              max={1}
+              step={0.01}
+              value={imagePlacement.focalY}
+              disabled={imagePlacement.mode !== "fill"}
+              onChange={(e) => updateImagePlacement({ focalY: Number(e.target.value) })}
+            />
+          </label>
+          <label className="settingFieldLabel">
+            目标比例
+            <input
+              type="number"
+              className="settingNumberInput"
+              min={0.01}
+              max={20}
+              step={0.01}
+              value={imagePlacement.targetAspectRatio ?? ""}
+              placeholder="原图比例"
+              onChange={(e) => updateImagePlacement({ targetAspectRatio: e.target.value === "" ? null : Number(e.target.value) })}
+            />
+          </label>
+        </div>
+        <p className="settingsCapabilityHint">
+          适应模式保留整张图；铺满模式按焦点裁切（仅铺满模式使用焦点）。预览与导出使用同一套几何规则。
+        </p>
+      </fieldset>
+
+      {/* 边框风格：八种风格共用同一组明确参数。 */}
+      <fieldset className="settingGroup">
+        <legend className="settingLabel">边框风格</legend>
+        <div className="settingRow">
+          <label className="settingFieldLabel">
+            风格
+            <select
+              className="settingSelect"
+              value={settings.borderStyle?.id ?? ""}
+              onChange={(e) => update({
+                borderStyle: e.target.value === "" ? null : {
+                  id: e.target.value,
+                  intensity: settings.borderStyle?.intensity ?? 70,
+                  edgeWidth: settings.borderStyle?.edgeWidth ?? 8,
+                  holeCount: settings.borderStyle?.holeCount ?? 16,
+                  paperTone: settings.borderStyle?.paperTone ?? "#333333"
+                }
+              })}
+            >
+              <option value="">无装饰</option>
+              <option value="exhibition-line">展览线框</option>
+              <option value="polaroid-shadow">宝丽来阴影</option>
+              <option value="film-perforation">135 齿孔</option>
+              <option value="mat-double-line">卡纸双线</option>
+              <option value="torn-edge">撕边纸张</option>
+              <option value="negative-band">负片边</option>
+              <option value="magazine-keyline">杂志键线</option>
+              <option value="archive-label-box">档案标签</option>
+            </select>
+          </label>
+        </div>
+        {settings.borderStyle !== null && (
+          <>
+            <div className="settingRow formInlineRow">
+              <label className="settingFieldLabel">
+                强度
+                <NumberInput
+                  className="settingNumberInput"
+                  value={settings.borderStyle.intensity}
+                  min={0}
+                  max={100}
+                  onCommit={(value) => update({ borderStyle: { ...settings.borderStyle!, intensity: value } })}
+                />
+              </label>
+              {borderStyleParameters?.edgeWidth === true && (
+                <label className="settingFieldLabel">
+                  特征宽度
+                  <NumberInput
+                    className="settingNumberInput"
+                    value={settings.borderStyle.edgeWidth}
+                    min={0}
+                    max={100}
+                    onCommit={(value) => update({ borderStyle: { ...settings.borderStyle!, edgeWidth: value } })}
+                  />
+                </label>
+              )}
+              {borderStyleParameters?.holeCount === true && (
+                <label className="settingFieldLabel">
+                  齿孔/刻痕数
+                  <NumberInput
+                    className="settingNumberInput"
+                    value={settings.borderStyle.holeCount}
+                    min={2}
+                    max={100}
+                    onCommit={(value) => update({ borderStyle: { ...settings.borderStyle!, holeCount: value } })}
+                  />
+                </label>
+              )}
+            </div>
+            {borderStyleParameters?.paperTone === true && <div className="settingRow">
+              <label className="settingFieldLabel">
+                装饰色
+                <input
+                  type="color"
+                  className="settingColorInput"
+                  value={settings.borderStyle.paperTone || "#333333"}
+                  onChange={(e) => update({ borderStyle: { ...settings.borderStyle!, paperTone: e.target.value } })}
+                />
+              </label>
+            </div>}
+          </>
+        )}
       </fieldset>
 
       {/* 边框 */}
@@ -452,12 +659,12 @@ export const SettingsPanel = ({
                 文字位置
                 <select
                   className="settingSelect"
-                  value={firstLayer.placement}
+                  value={normalizeTextPlacement(firstLayer.textArea, firstLayer.placement)}
                   onChange={(e) => handleTextLayerPlacementChange(e.target.value)}
                 >
-                  <option value="top-center">顶部居中</option>
-                  <option value="center">居中</option>
-                  <option value="bottom-center">底部居中</option>
+                  {textPlacementOptions(firstLayer.textArea).map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
                 </select>
               </label>
             </div>
@@ -594,49 +801,86 @@ export const SettingsPanel = ({
 
         {settings.logo.enabled && (
           <>
+            {!hasCustomLogo && (
+              <>
+                <div className="settingRow">
+                  <label className="settingFieldLabel">
+                    显示模式
+                    <select
+                      className="settingSelect"
+                      value={settings.logo.mode}
+                      onChange={(e) => update({
+                        logo: { ...settings.logo, mode: e.target.value as "auto-brand" | "brand-text" }
+                      })}
+                    >
+                      <option value="auto-brand">自动识别品牌</option>
+                      <option value="brand-text">品牌文字</option>
+                    </select>
+                  </label>
+                </div>
+
+                {settings.logo.mode === "auto-brand" && (
+                  <div className="settingRow">
+                    <label className="settingFieldLabel">
+                      当前识别到的品牌
+                      <p className="settingsCapabilityHint">
+                        {detectedBrandLabel ?? "未识别品牌，将回退为文字或不显示"}
+                      </p>
+                    </label>
+                  </div>
+                )}
+
+                {settings.logo.mode === "brand-text" && (
+                  <div className="settingRow">
+                    <label className="settingFieldLabel">
+                      品牌文字
+                      <input
+                        type="text"
+                        className="settingTextInput"
+                        placeholder="例如：Canon"
+                        value={settings.logo.brand ?? ""}
+                        onChange={(e) => update({
+                          logo: { ...settings.logo, brand: e.target.value.length > 0 ? e.target.value : null }
+                        })}
+                      />
+                    </label>
+                  </div>
+                )}
+              </>
+            )}
+
             <div className="settingRow">
               <label className="settingFieldLabel">
-                显示模式
-                <select
-                  className="settingSelect"
-                  value={settings.logo.mode}
-                  onChange={(e) => update({
-                    logo: { ...settings.logo, mode: e.target.value as "auto-brand" | "brand-text" }
-                  })}
-                >
-                  <option value="auto-brand">自动识别品牌</option>
-                  <option value="brand-text">品牌文字</option>
-                </select>
+                PNG / 签名
+                <div className="templateNameRow">
+                  <span className="settingsCapabilityHint logoPathLabel" title={settings.logo.imagePath ?? undefined}>
+                    {settings.logo.imagePath ?? "未选择，自定义图片关闭"}
+                  </span>
+                  <button
+                    type="button"
+                    className="ghostButton"
+                    disabled={window.desktop?.selectLogoFile === undefined}
+                    onClick={() => void handleLogoFileSelect()}
+                  >
+                    选择 PNG
+                  </button>
+                  {settings.logo.imagePath !== null && settings.logo.imagePath !== undefined && (
+                    <button
+                      type="button"
+                      className="ghostButton"
+                      onClick={() => update({ logo: { ...settings.logo, imagePath: null } })}
+                    >
+                      清除
+                    </button>
+                  )}
+                </div>
+                {hasCustomLogo && (
+                  <p className="settingsCapabilityHint">
+                    已使用自定义 PNG；清除后可切换文字标识模式。
+                  </p>
+                )}
               </label>
             </div>
-
-            {settings.logo.mode === "auto-brand" && (
-              <div className="settingRow">
-                <label className="settingFieldLabel">
-                  当前识别到的品牌
-                  <p className="settingsCapabilityHint">
-                    {detectedBrandLabel ?? "未识别品牌，将回退为文字或不显示"}
-                  </p>
-                </label>
-              </div>
-            )}
-
-            {settings.logo.mode === "brand-text" && (
-              <div className="settingRow">
-                <label className="settingFieldLabel">
-                  品牌文字
-                  <input
-                    type="text"
-                    className="settingTextInput"
-                    placeholder="例如：Canon"
-                    value={settings.logo.brand ?? ""}
-                    onChange={(e) => update({
-                      logo: { ...settings.logo, brand: e.target.value.length > 0 ? e.target.value : null }
-                    })}
-                  />
-                </label>
-              </div>
-            )}
 
             <div className="settingRow">
               <label className="settingFieldLabel">
@@ -658,7 +902,7 @@ export const SettingsPanel = ({
 
             <div className="settingRow">
               <label className="settingFieldLabel">
-                字号
+                大小
                 <NumberInput
                   className="settingNumberInput"
                   value={settings.logo.size}
@@ -671,41 +915,57 @@ export const SettingsPanel = ({
 
             <div className="settingRow">
               <label className="settingFieldLabel">
-                颜色模式
-                <select
-                  className="settingSelect"
-                  value={settings.logo.colorMode}
-                  onChange={(e) => update({
-                    logo: { ...settings.logo, colorMode: e.target.value as "auto-contrast" | "light" | "dark" }
+                透明度
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={Math.round((settings.logo.opacity ?? 1) * 100)}
+                  onChange={(event) => update({
+                    logo: { ...settings.logo, opacity: Number(event.target.value) / 100 }
                   })}
-                >
-                  <option value="auto-contrast">自动对比色</option>
-                  <option value="light">浅色（适合深色边框）</option>
-                  <option value="dark">深色（适合浅色边框）</option>
-                </select>
+                />
+                <span className="settingHint">{Math.round((settings.logo.opacity ?? 1) * 100)}%</span>
               </label>
-              {settings.logo.colorMode === "auto-contrast" && (
-                <p className="settingsCapabilityHint">
-                  根据边框颜色自动选择品牌标识深浅，确保可见性。
-                </p>
-              )}
             </div>
+
+            {hasCustomLogo ? (
+              <label className="settingCheckboxLabel">
+                <input
+                  type="checkbox"
+                  checked={settings.logo.autoContrast ?? true}
+                  onChange={(event) => update({ logo: { ...settings.logo, autoContrast: event.target.checked } })}
+                />
+                自动反差
+              </label>
+            ) : (
+              <div className="settingRow">
+                <label className="settingFieldLabel">
+                  颜色模式
+                  <select
+                    className="settingSelect"
+                    value={settings.logo.colorMode}
+                    onChange={(e) => update({
+                      logo: { ...settings.logo, colorMode: e.target.value as "auto-contrast" | "light" | "dark" }
+                    })}
+                  >
+                    <option value="auto-contrast">自动对比色</option>
+                    <option value="light">浅色（适合深色边框）</option>
+                    <option value="dark">深色（适合浅色边框）</option>
+                  </select>
+                </label>
+                {settings.logo.colorMode === "auto-contrast" && (
+                  <p className="settingsCapabilityHint">
+                    根据边框颜色自动选择品牌标识深浅，确保可见性。
+                  </p>
+                )}
+              </div>
+            )}
           </>
         )}
       </fieldset>
 
-      {/* 裁剪 */}
-      <fieldset className="settingGroup">
-        <legend className="settingLabel">裁剪</legend>
-        <label className="settingCheckboxLabel">
-          <input
-            type="checkbox"
-            checked={settings.autoCrop}
-            onChange={(e) => update({ autoCrop: e.target.checked })}
-          />
-          <span>自动裁剪</span>
-        </label>
-      </fieldset>
         </>
       )}
 
@@ -784,11 +1044,11 @@ export const SettingsPanel = ({
         )}
           </fieldset>
 
-          {/* 专业导出 */}
+          {/* 输出能力 */}
           <fieldset className="settingGroup">
-        <legend className="settingLabel">专业导出（实验性）</legend>
+        <legend className="settingLabel">输出选项</legend>
         <p className="settingHint" style={{ marginBottom: "var(--space-2)" }}>
-          以下能力当前版本尚未实现，开启后导出结果中将标记为"已跳过"。
+          导出时按这里的选项生成文件；无法应用的能力会在任务结果中明确标记。
         </p>
 
         <div className="settingRow">
@@ -802,7 +1062,7 @@ export const SettingsPanel = ({
           </label>
         </div>
         {settings.preserveMetadata && (
-          <p className="settingHint">当前版本暂不支持 EXIF 保留，导出时将标记为"已跳过"。</p>
+          <p className="settingHint">引擎会尽量保留源图中可读取的 EXIF 信息。</p>
         )}
 
         <div className="settingRow">
@@ -816,7 +1076,7 @@ export const SettingsPanel = ({
           </label>
         </div>
         {settings.preserveColorProfile && (
-          <p className="settingHint">当前版本暂不支持 ICC 嵌入，导出时将标记为"已跳过"。</p>
+          <p className="settingHint">引擎会在输出格式支持时保留源图 ICC 配置。</p>
         )}
 
         <div className="settingRow">
@@ -830,9 +1090,13 @@ export const SettingsPanel = ({
           </label>
         </div>
         {settings.preferHighBitDepth && (
-          <p className="settingHint">当前版本暂不支持高位深输出，导出时将标记为"已跳过"，使用 8bit。</p>
+          <p className="settingHint">TIFF 可保留高位深；PNG/JPEG 会按编码器能力降级并报告结果。</p>
         )}
           </fieldset>
+          <OutputPresetPanel
+            settings={settings}
+            onApply={(patch) => update(patch)}
+          />
         </>
       )}
     </div>

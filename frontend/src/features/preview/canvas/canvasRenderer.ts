@@ -13,6 +13,11 @@
  */
 
 import type { BorderStyleSettings, RenderSettings, TextArea, TextLayerSettings } from "../../settings/types"
+import {
+  calculateImagePlacementGeometry,
+  normalizeImagePlacement,
+  type ImagePlacement
+} from "./imagePlacementGeometry"
 import { autoContrastColor } from "../../settings/utils/colorContrast"
 
 /** 将 CSS 颜色字符串解析为 Canvas 可用的颜色值。 */
@@ -76,8 +81,11 @@ export const drawBorderStyle = (
     case "film-perforation": {
       // 齿孔：孔高 clamp(strip*0.45,3,60)，孔宽 ×1.4，圆角 r=孔宽*0.18，
       // n=clamp(holeCount,2,80)，spacing=cw/n，中心 x=spacing*(i+0.5)
+      ctx.save()
+      ctx.globalAlpha = fi
       drawPerforationRows(ctx, tone, cw, ch, borderTop, borderBottom,
-        clampNumber(style.holeCount, 2, 80), 0.45, 60, 1.4)
+        clampNumber(style.holeCount, 2, 80), 0.45, 3, 60, 1.4, false)
+      ctx.restore()
       break
     }
     case "mat-double-line": {
@@ -85,11 +93,16 @@ export const drawBorderStyle = (
       const g1 = Math.max(2, ew * 2)
       const gap = Math.max(2, ew)
       const lw = Math.max(1, Math.round(ew / 3))
+      ctx.save()
+      // 保留中画幅卡纸线的可读性；强度仍通过透明度变化，低强度也不能让线条
+      // 在深色边框底上完全消失。
+      ctx.globalAlpha = 0.2 + 0.8 * fi
       ctx.strokeStyle = tone
       ctx.lineWidth = lw
       ctx.strokeRect(ix - g1, iy - g1, iw + 2 * g1, ih + 2 * g1)
       const g2 = g1 + gap
       ctx.strokeRect(ix - g2, iy - g2, iw + 2 * g2, ih + 2 * g2)
+      ctx.restore()
       break
     }
     case "torn-edge": {
@@ -133,19 +146,20 @@ export const drawBorderStyle = (
       }
       // 小孔行（比 135 齿孔更小更密）
       drawPerforationRows(ctx, tone, cw, ch, borderTop, borderBottom,
-        clampNumber(style.holeCount, 4, 100), 0.32, 40, 1.6)
+        clampNumber(style.holeCount, 4, 100), 0.32, 2, 40, 1.6, true)
       break
     }
     case "magazine-keyline": {
       // 双键线：粗线外扩 max(1,ew/4)、线宽 max(1,round(ew/2))；细线再外扩 ew+粗线宽、1px、40% 不透明
       const o = Math.max(1, Math.floor(ew / 4))
       const lwThick = Math.max(1, Math.round(ew / 2))
+      ctx.save()
+      ctx.globalAlpha = fi
       ctx.strokeStyle = tone
       ctx.lineWidth = lwThick
       ctx.strokeRect(ix - o, iy - o, iw + 2 * o, ih + 2 * o)
       const o2 = o + ew + lwThick
-      ctx.save()
-      ctx.globalAlpha = 0.4
+      ctx.globalAlpha = 0.4 * fi
       ctx.lineWidth = 1
       ctx.strokeRect(ix - o2, iy - o2, iw + 2 * o2, ih + 2 * o2)
       ctx.restore()
@@ -165,6 +179,8 @@ export const drawBorderStyle = (
       const cy = ch - borderBottom / 2
       const y1 = cy - boxH / 2
 
+      ctx.save()
+      ctx.globalAlpha = fi
       ctx.strokeStyle = tone
       ctx.lineWidth = 1
       ctx.strokeRect(x1, y1, boxW, boxH)
@@ -178,6 +194,7 @@ export const drawBorderStyle = (
       ctx.moveTo(line2X, cy + Math.round(boxH * 0.15))
       ctx.lineTo(line2X + line2W, cy + Math.round(boxH * 0.15))
       ctx.stroke()
+      ctx.restore()
       break
     }
     default:
@@ -196,25 +213,37 @@ const drawPerforationRows = (
   borderBottom: number,
   n: number,
   heightRatio: number,
+  minHeight: number,
   maxHeight: number,
-  widthRatio: number
+  widthRatio: number,
+  allowSingleSide: boolean
 ): void => {
+  // 135 齿孔要求上下条带同时存在；负片边允许只有一侧条带。
   const strip = Math.min(borderTop, borderBottom)
-  if (strip <= 0) {
-    return
-  }
-  const holeH = clampNumber(strip * heightRatio, 3, maxHeight)
-  const holeW = holeH * widthRatio
-  const r = holeW * 0.18
+  const rows = !allowSingleSide && strip > 0
+    ? [
+        { centerY: borderTop / 2, strip },
+        { centerY: ch - borderBottom / 2, strip }
+      ]
+    : allowSingleSide
+      ? [
+        ...(borderTop > 0 ? [{ centerY: borderTop / 2, strip: borderTop }] : []),
+        ...(borderBottom > 0 ? [{ centerY: ch - borderBottom / 2, strip: borderBottom }] : [])
+        ]
+      : []
+  if (rows.length === 0) return
   const spacing = cw / n
   ctx.fillStyle = color
-  for (const centerY of [borderTop / 2, ch - borderBottom / 2]) {
+  for (const row of rows) {
+    const holeH = clampNumber(row.strip * heightRatio, minHeight, maxHeight)
+    const rowHoleW = holeH * widthRatio
+    const rowRadius = rowHoleW * 0.18
     for (let i = 0; i < n; i++) {
       const cx = spacing * (i + 0.5)
-      const x = cx - holeW / 2
-      const y = centerY - holeH / 2
+      const x = cx - rowHoleW / 2
+      const y = row.centerY - holeH / 2
       ctx.beginPath()
-      ctx.roundRect(x, y, holeW, holeH, r)
+      ctx.roundRect(x, y, rowHoleW, holeH, rowRadius)
       ctx.fill()
     }
   }
@@ -243,7 +272,7 @@ const fillTriangle = (
  * 角落 placement（border-*-left / border-*-right）返回对应水平对齐方式，
  * x 为文字锚点（左对齐=左边缘，右对齐=右边缘，居中=中心）。
  */
-const computeTextPosition = (
+export const computeTextPosition = (
   textArea: TextArea,
   placement: string,
   imgX: number,
@@ -270,12 +299,16 @@ const computeTextPosition = (
       case "top-center":
         return { x: canvasCenterX, y: borderTop / 2 + mY, baseline: "middle", align: "center" }
       case "border-top-left":
+      case "top-left":
         return { x: borderLeft + mX, y: borderTop / 2 + mY, baseline: "middle", align: "left" }
       case "border-top-right":
+      case "top-right":
         return { x: canvasW - borderRight - mX, y: borderTop / 2 + mY, baseline: "middle", align: "right" }
       case "border-bottom-left":
+      case "bottom-left":
         return { x: borderLeft + mX, y: canvasH - borderBottom / 2 + mY, baseline: "middle", align: "left" }
       case "border-bottom-right":
+      case "bottom-right":
         return { x: canvasW - borderRight - mX, y: canvasH - borderBottom / 2 + mY, baseline: "middle", align: "right" }
       case "border-bottom-center":
       case "bottom-center":
@@ -287,14 +320,32 @@ const computeTextPosition = (
   switch (placement) {
     case "image-top-center":
     case "top-center":
-      return { x: imageCenterX, y: imgY + 16 + mY, baseline: "top", align: "center" }
+      return { x: imageCenterX, y: imgY + mY, baseline: "top", align: "center" }
+    case "image-top-left":
+    case "top-left":
+      return { x: imgX + mX, y: imgY + mY, baseline: "top", align: "left" }
+    case "image-top-right":
+    case "top-right":
+      return { x: imgX + imgW - mX, y: imgY + mY, baseline: "top", align: "right" }
+    case "image-center-left":
+    case "center-left":
+      return { x: imgX + mX, y: imgY + imgH / 2 + mY, baseline: "middle", align: "left" }
     case "image-center":
     case "center":
       return { x: imageCenterX, y: imgY + imgH / 2 + mY, baseline: "middle", align: "center" }
+    case "image-center-right":
+    case "center-right":
+      return { x: imgX + imgW - mX, y: imgY + imgH / 2 + mY, baseline: "middle", align: "right" }
+    case "image-bottom-left":
+    case "bottom-left":
+      return { x: imgX + mX, y: imgY + imgH - mY, baseline: "alphabetic", align: "left" }
+    case "image-bottom-right":
+    case "bottom-right":
+      return { x: imgX + imgW - mX, y: imgY + imgH - mY, baseline: "alphabetic", align: "right" }
     case "image-bottom-center":
     case "bottom-center":
     default:
-      return { x: imageCenterX, y: imgY + imgH - 16 - mY, baseline: "alphabetic", align: "center" }
+      return { x: imageCenterX, y: imgY + imgH - mY, baseline: "alphabetic", align: "center" }
   }
 }
 
@@ -352,6 +403,8 @@ const drawTextLayer = (
   const fontSize = Math.max(8, layer.fontSize) * scale
   ctx.font = `${fontSize}px ${layer.fontFamily}`
   const align: CanvasTextAlign = "center"
+  const letterSpacing = (layer.letterSpacing ?? 0) * scale
+  const lineSpacing = (layer.lineSpacing ?? 0) * scale
 
   const { position } = parsePlacement(layer.placement)
   const pos = computeTextPosition(
@@ -365,12 +418,14 @@ const drawTextLayer = (
   ctx.textAlign = pos.align ?? align
   ctx.textBaseline = pos.baseline
 
-  // 测量文字尺寸
-  const metrics = ctx.measureText(content)
-  const textWidth = metrics.width
-  const textHeight = fontSize
+  const lines = content.split("\n")
+  const lineHeight = fontSize + lineSpacing
+  const metrics = ctx.measureText(lines[0] ?? "")
   const ascent = metrics.actualBoundingBoxAscent || fontSize * 0.75
   const descent = metrics.actualBoundingBoxDescent || fontSize * 0.25
+  const lineWidths = lines.map((line) => measureSpacedText(ctx, line, letterSpacing))
+  const textWidth = Math.max(0, ...lineWidths)
+  const textHeight = fontSize * lines.length + Math.max(0, lines.length - 1) * lineSpacing
 
   // 文字区域左上角：按对齐方式推导左边缘
   const textAlign = pos.align ?? align
@@ -379,7 +434,14 @@ const drawTextLayer = (
     : textAlign === "right"
     ? pos.x - textWidth
     : pos.x - textWidth / 2
-  const textTop = pos.y - ascent
+  const textTop = pos.baseline === "top"
+    ? pos.y
+    : pos.baseline === "middle"
+    ? pos.y - textHeight / 2
+    : pos.y - textHeight + descent
+  const firstBaseline = pos.baseline === "top"
+    ? textTop
+    : textTop + ascent
 
   // 1. 背景条
   if (layer.backgroundEnabled) {
@@ -402,7 +464,7 @@ const drawTextLayer = (
     ctx.shadowOffsetX = (layer.shadowOffsetX || 0) * scale
     ctx.shadowOffsetY = (layer.shadowOffsetY || 0) * scale
     ctx.fillStyle = ensureColor(layer.color)
-    ctx.fillText(content, pos.x, pos.y)
+    drawSpacedTextLines(ctx, lines, pos.x, firstBaseline, lineHeight, pos.align, letterSpacing)
     ctx.restore()
   }
 
@@ -412,15 +474,68 @@ const drawTextLayer = (
     ctx.strokeStyle = ensureColor(layer.strokeColor)
     ctx.lineWidth = (layer.strokeWidth || 1) * scale
     ctx.lineJoin = "round"
-    ctx.strokeText(content, pos.x, pos.y)
+    drawSpacedTextLines(ctx, lines, pos.x, firstBaseline, lineHeight, pos.align, letterSpacing, true)
     ctx.restore()
   }
 
-  // 4. 正文（阴影已在上面的 save/restore 块内处理，这里正常绘制）
-  if (!layer.shadowEnabled) {
-    ctx.fillStyle = ensureColor(layer.color)
-    ctx.fillText(content, pos.x, pos.y)
+  // 4. 正文（阴影只是额外效果，不能替代正文）
+  ctx.fillStyle = ensureColor(layer.color)
+  drawSpacedTextLines(ctx, lines, pos.x, firstBaseline, lineHeight, pos.align, letterSpacing)
+}
+
+const measureSpacedText = (
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  letterSpacing: number
+): number => {
+  if (text.length <= 1) {
+    return ctx.measureText(text).width
   }
+  return ctx.measureText(text).width + letterSpacing * (text.length - 1)
+}
+
+/** Canvas 2D 没有统一的 letterSpacing API，逐字绘制保证预览可见地响应字距。 */
+const drawSpacedText = (
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  align: CanvasTextAlign,
+  letterSpacing: number,
+  stroke: boolean
+): void => {
+  if (letterSpacing === 0) {
+    if (stroke) ctx.strokeText(text, x, y)
+    else ctx.fillText(text, x, y)
+    return
+  }
+  const width = measureSpacedText(ctx, text, letterSpacing)
+  let cursor = align === "right" ? x - width : align === "center" ? x - width / 2 : x
+  const previousAlign = ctx.textAlign
+  ctx.textAlign = "left"
+  for (const character of text) {
+    if (stroke) ctx.strokeText(character, cursor, y)
+    else ctx.fillText(character, cursor, y)
+    cursor += ctx.measureText(character).width + letterSpacing
+  }
+  ctx.textAlign = previousAlign
+}
+
+const drawSpacedTextLines = (
+  ctx: CanvasRenderingContext2D,
+  lines: readonly string[],
+  x: number,
+  firstBaseline: number,
+  lineHeight: number,
+  align: CanvasTextAlign,
+  letterSpacing: number,
+  stroke = false
+): void => {
+  ctx.textAlign = align
+  ctx.textBaseline = "alphabetic"
+  lines.forEach((line, index) => {
+    drawSpacedText(ctx, line, x, firstBaseline + index * lineHeight, align, letterSpacing, stroke)
+  })
 }
 
 /**
@@ -463,7 +578,8 @@ export const calculatePreviewImageLayout = (
   borderTop: number,
   borderBottom: number,
   borderLeft: number,
-  borderRight: number
+  borderRight: number,
+  imagePlacement?: Partial<ImagePlacement> | null
 ): PreviewImageLayout | null => {
   if (
     !Number.isFinite(canvasWidth) || !Number.isFinite(canvasHeight)
@@ -483,22 +599,30 @@ export const calculatePreviewImageLayout = (
     return null
   }
 
-  const imageAspect = sourceWidth / sourceHeight
-  const availableAspect = availableWidth / availableHeight
-  const width = imageAspect > availableAspect
-    ? availableWidth
-    : availableHeight * imageAspect
-  const height = imageAspect > availableAspect
-    ? availableWidth / imageAspect
-    : availableHeight
+  const geometry = calculateImagePlacementGeometry(sourceWidth, sourceHeight, imagePlacement)
+  if (geometry === null) {
+    return null
+  }
+  const viewportScale = Math.min(
+    availableWidth / geometry.targetWidth,
+    availableHeight / geometry.targetHeight
+  )
+  const targetWidth = geometry.targetWidth * viewportScale
+  const targetHeight = geometry.targetHeight * viewportScale
+  const targetX = left + (availableWidth - targetWidth) / 2
+  const targetY = top + (availableHeight - targetHeight) / 2
+  const width = geometry.drawWidth * viewportScale
+  const height = geometry.drawHeight * viewportScale
+  const x = targetX + geometry.offsetX * viewportScale
+  const y = targetY + geometry.offsetY * viewportScale
 
   if (width < MIN_VISIBLE_PREVIEW_IMAGE_EDGE || height < MIN_VISIBLE_PREVIEW_IMAGE_EDGE) {
     return null
   }
 
   return {
-    x: left + (availableWidth - width) / 2,
-    y: top + (availableHeight - height) / 2,
+    x,
+    y,
     width,
     height
   }
@@ -516,7 +640,8 @@ export const calculatePreviewImageLayout = (
 export const drawPreviewToCanvas = (
   canvas: HTMLCanvasElement,
   image: CanvasDrawableSource,
-  settings: RenderSettings
+  settings: RenderSettings,
+  logoImage?: CanvasDrawableSource | null
 ): void => {
   const ctx = canvas.getContext("2d")
   if (ctx === null) {
@@ -564,19 +689,52 @@ export const drawPreviewToCanvas = (
     bt,
     bb,
     bl,
-    br
+    br,
+    settings.imagePlacement
   )
   if (imageLayout === null) {
     return
   }
 
-  const { x: imgX, y: imgY, width: drawW, height: drawH } = imageLayout
-  ctx.drawImage(image, imgX, imgY, drawW, drawH)
+  const geometry = calculateImagePlacementGeometry(
+    sourceSize.width,
+    sourceSize.height,
+    normalizeImagePlacement(settings.imagePlacement)
+  )
+  if (geometry === null) {
+    return
+  }
+  const availableWidth = Math.max(0, cw - Math.max(0, bl) - Math.max(0, br))
+  const availableHeight = Math.max(0, ch - Math.max(0, bt) - Math.max(0, bb))
+  const viewportScale = Math.min(
+    availableWidth / geometry.targetWidth,
+    availableHeight / geometry.targetHeight
+  )
+  const targetWidth = geometry.targetWidth * viewportScale
+  const targetHeight = geometry.targetHeight * viewportScale
+  const targetX = Math.max(0, bl) + (availableWidth - targetWidth) / 2
+  const targetY = Math.max(0, bt) + (availableHeight - targetHeight) / 2
+  const imgX = targetX + geometry.offsetX * viewportScale
+  const imgY = targetY + geometry.offsetY * viewportScale
+  const drawW = geometry.drawWidth * viewportScale
+  const drawH = geometry.drawHeight * viewportScale
+
+  // clip 到目标图片区域；fit 的留白会显示已经绘制的边框背景，fill 的溢出不会污染边框。
+  ctx.save()
+  ctx.beginPath()
+  ctx.rect(targetX, targetY, targetWidth, targetHeight)
+  ctx.clip()
+  const drawCenterX = imgX + geometry.rotatedWidth * viewportScale * 0.5
+  const drawCenterY = imgY + geometry.rotatedHeight * viewportScale * 0.5
+  ctx.translate(drawCenterX, drawCenterY)
+  ctx.rotate((geometry.rotation * Math.PI) / 180)
+  ctx.drawImage(image, -drawW / 2, -drawH / 2, drawW, drawH)
+  ctx.restore()
 
   // 边框风格装饰：绘制在边框背景与图片之上、文字与品牌标识之下。
   // 未识别的风格 id / null / intensity=0 时保持原始行为（与引擎语义一致）。
   if (settings.borderStyle !== null && settings.borderStyle !== undefined) {
-    drawBorderStyle(ctx, settings.borderStyle, imgX, imgY, drawW, drawH, cw, ch, bt, bb)
+    drawBorderStyle(ctx, settings.borderStyle, targetX, targetY, targetWidth, targetHeight, cw, ch, bt, bb)
   }
 
   // 缩放比例：Canvas 宽度 / 800（基准宽度）
@@ -593,11 +751,15 @@ export const drawPreviewToCanvas = (
     if (content.length === 0) {
       continue
     }
-    drawTextLayer(ctx, layer, content, imgX, imgY, drawW, drawH, cw, ch, bt, bb, bl, br, scale)
+    drawTextLayer(ctx, layer, content, targetX, targetY, targetWidth, targetHeight, cw, ch, bt, bb, bl, br, scale)
   }
 
   // 绘制品牌标识（Logo）
   if (settings.logo?.enabled) {
+    if (settings.logo.imagePath && logoImage) {
+      drawLogoImage(ctx, logoImage, settings, cw, ch, bt, bb, bl, br, scale)
+      return
+    }
     let logoText: string
     if (settings.logo.mode === "brand-text") {
       logoText = (settings.logo.brand ?? "")
@@ -609,6 +771,54 @@ export const drawPreviewToCanvas = (
       drawLogo(ctx, logoText.trim(), settings, cw, ch, bt, bb, bl, br, scale)
     }
   }
+}
+
+/** 绘制自定义 PNG/签名；保持原图比例，size 表示最长边像素。 */
+const drawLogoImage = (
+  ctx: CanvasRenderingContext2D,
+  image: CanvasDrawableSource,
+  settings: RenderSettings,
+  cw: number,
+  ch: number,
+  bt: number,
+  bb: number,
+  bl: number,
+  br: number,
+  scale: number
+): void => {
+  const placement = settings.logo.placement
+  const validPlacements = [
+    "border-top-left", "border-top-center", "border-top-right",
+    "border-bottom-left", "border-bottom-center", "border-bottom-right"
+  ]
+  if (!validPlacements.includes(placement)) return
+
+  const sourceWidth = image instanceof HTMLImageElement ? image.naturalWidth : image.width
+  const sourceHeight = image instanceof HTMLImageElement ? image.naturalHeight : image.height
+  if (sourceWidth <= 0 || sourceHeight <= 0) return
+  const maxEdge = Math.max(8, settings.logo.size) * scale
+  const imageScale = maxEdge / Math.max(sourceWidth, sourceHeight)
+  const width = sourceWidth * imageScale
+  const height = sourceHeight * imageScale
+  const margin = 12 * scale
+  const x = placement.includes("left")
+    ? bl + margin
+    : placement.includes("right")
+      ? cw - br - margin - width
+      : (cw - width) / 2
+  const y = placement.includes("top")
+    ? (bt - height) / 2
+    : ch - bb + (bb - height) / 2
+
+  ctx.save()
+  ctx.globalAlpha = clampNumber(settings.logo.opacity ?? 1, 0, 1)
+  if (settings.logo.autoContrast ?? settings.logo.colorMode === "auto-contrast") {
+    // PNG 本身保持原色；细微反差阴影让透明签名在不同纸色上都可辨认。
+    ctx.shadowColor = autoContrastColor(settings.borderColor)
+    ctx.shadowBlur = Math.max(1, 2 * scale)
+  }
+  ctx.drawImage(image, x, y, width, height)
+  ctx.restore()
 }
 
 /**
@@ -676,7 +886,9 @@ const drawLogo = (
   }
 
   ctx.fillStyle = ensureColor(color)
+  ctx.globalAlpha = clampNumber(settings.logo.opacity ?? 1, 0, 1)
   ctx.fillText(text, x, y)
+  ctx.globalAlpha = 1
 }
 
 /**

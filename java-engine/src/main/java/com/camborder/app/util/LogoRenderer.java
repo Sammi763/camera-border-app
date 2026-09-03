@@ -4,18 +4,23 @@ import com.camborder.app.model.BorderConfig;
 import com.camborder.app.model.LogoConfig;
 import org.springframework.stereotype.Component;
 
+import com.camborder.app.exception.PreviewGenerationException;
 import java.awt.Color;
+import java.awt.AlphaComposite;
 import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
+import java.io.IOException;
+import java.nio.file.Path;
+import javax.imageio.ImageIO;
 
 /**
  * 品牌标识绘制器（无状态组件）。
- * 单一职责：在边框区域绘制品牌文字标识。
+ * 单一职责：在边框区域绘制品牌文字或 PNG/签名标识。
  *
- * MVP 首版支持品牌文字绘制，不支持真实 logo 矢量图。
+ * 支持品牌文字与透明 PNG/签名图片。
  * 支持自动对比色：根据边框色亮度自动选择深/浅品牌文字颜色。
  *
  * placement 语义（复用 TextRenderer 的命名规则）：
@@ -39,11 +44,6 @@ public final class LogoRenderer {
             return;
         }
 
-        String brandText = logo.getBrand();
-        if (brandText == null || brandText.isBlank()) {
-            return;
-        }
-
         String placement = logo.getPlacement();
         if (placement == null || placement.isBlank()) {
             return;
@@ -54,22 +54,12 @@ public final class LogoRenderer {
             return;
         }
 
-        int fontSize = logo.getSize() > 0 ? logo.getSize() : 14;
-        Font font = new Font(Font.SANS_SERIF, Font.BOLD, fontSize);
-
         Graphics2D graphics = canvas.createGraphics();
         try {
             graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
                     RenderingHints.VALUE_ANTIALIAS_ON);
             graphics.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING,
                     RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
-            graphics.setFont(font);
-
-            FontMetrics metrics = graphics.getFontMetrics();
-            int textWidth = metrics.stringWidth(brandText);
-            int textHeight = metrics.getHeight();
-            int ascent = metrics.getAscent();
-
             int canvasWidth = canvas.getWidth();
             int canvasHeight = canvas.getHeight();
             int[] insets = BorderComposer.insets(border);
@@ -78,34 +68,95 @@ public final class LogoRenderer {
             int borderLeft = insets[2];
             int borderRight = insets[3];
 
-            // 计算坐标
-            int margin = 12;
-            int x;
-            int y;
-
-            // 水平定位
-            if (placement.contains("left")) {
-                x = borderLeft + margin;
-            } else if (placement.contains("right")) {
-                x = canvasWidth - borderRight - margin - textWidth;
-            } else {
-                x = (canvasWidth - textWidth) / 2;
+            if (logo.getImagePath() != null && !logo.getImagePath().isBlank()) {
+                drawImage(graphics, canvas, logo, placement, borderTop, borderBottom,
+                        borderLeft, borderRight, canvasWidth, canvasHeight,
+                        border == null ? null : border.getColor());
+                return;
             }
 
-            // 垂直定位
-            if (placement.contains("top")) {
-                y = (borderTop - textHeight) / 2 + ascent;
-            } else {
-                y = (canvasHeight - borderBottom) + (borderBottom - textHeight) / 2 + ascent;
-            }
-
-            // 颜色选择
-            Color color = resolveColor(logo.getColorMode(), border.getColor());
-            graphics.setColor(color);
-            graphics.drawString(brandText, x, y);
+            String brandText = logo.getBrand();
+            if (brandText == null || brandText.isBlank()) return;
+            drawText(graphics, logo, brandText, border == null ? new BorderConfig() : border, borderTop, borderBottom,
+                    borderLeft, borderRight, canvasWidth, canvasHeight);
         } finally {
             graphics.dispose();
         }
+    }
+
+    private void drawText(final Graphics2D graphics, final LogoConfig logo, final String brandText,
+                          final BorderConfig border, final int borderTop, final int borderBottom,
+                          final int borderLeft, final int borderRight,
+                          final int canvasWidth, final int canvasHeight) {
+        int fontSize = logo.getSize() > 0 ? logo.getSize() : 14;
+        Font font = new Font(Font.SANS_SERIF, Font.BOLD, fontSize);
+        graphics.setFont(font);
+        FontMetrics metrics = graphics.getFontMetrics();
+        int textWidth = metrics.stringWidth(brandText);
+        int textHeight = metrics.getHeight();
+        int ascent = metrics.getAscent();
+        int margin = 12;
+        int x = logo.getPlacement().contains("left")
+                ? borderLeft + margin
+                : logo.getPlacement().contains("right")
+                ? canvasWidth - borderRight - margin - textWidth
+                : (canvasWidth - textWidth) / 2;
+        int y = logo.getPlacement().contains("top")
+                ? (borderTop - textHeight) / 2 + ascent
+                : (canvasHeight - borderBottom) + (borderBottom - textHeight) / 2 + ascent;
+        graphics.setComposite(AlphaComposite.getInstance(
+                AlphaComposite.SRC_OVER, (float) clamp(logo.getOpacity(), 0, 1)));
+        graphics.setColor(resolveColor(logo.getColorMode(), border.getColor()));
+        graphics.drawString(brandText, x, y);
+    }
+
+    private void drawImage(final Graphics2D graphics, final BufferedImage canvas,
+                           final LogoConfig logo, final String placement,
+                           final int borderTop, final int borderBottom,
+                           final int borderLeft, final int borderRight,
+                           final int canvasWidth, final int canvasHeight,
+                           final String borderColor) {
+        final Path path = Path.of(logo.getImagePath());
+        final BufferedImage image;
+        try {
+            image = ImageIO.read(path.toFile());
+        } catch (IOException | RuntimeException exception) {
+            throw new PreviewGenerationException("logo image could not be decoded: " + logo.getImagePath());
+        }
+        if (image == null || image.getWidth() <= 0 || image.getHeight() <= 0) {
+            throw new PreviewGenerationException("logo image could not be decoded: " + logo.getImagePath());
+        }
+
+        final double maxEdge = Math.max(8, logo.getSize() > 0 ? logo.getSize() : 32);
+        final double imageScale = maxEdge / Math.max(image.getWidth(), image.getHeight());
+        final int width = Math.max(1, (int) Math.round(image.getWidth() * imageScale));
+        final int height = Math.max(1, (int) Math.round(image.getHeight() * imageScale));
+        final int margin = 12;
+        final int x = placement.contains("left")
+                ? borderLeft + margin
+                : placement.contains("right")
+                ? canvasWidth - borderRight - margin - width
+                : (canvasWidth - width) / 2;
+        final int y = placement.contains("top")
+                ? (borderTop - height) / 2
+                : canvasHeight - borderBottom + (borderBottom - height) / 2;
+
+        graphics.setComposite(AlphaComposite.getInstance(
+                AlphaComposite.SRC_OVER, (float) clamp(logo.getOpacity(), 0, 1)));
+        if (logo.isAutoContrast()) {
+            // autoContrast 是独立开关；即使旧配置仍带有 light/dark colorMode，
+            // 自定义图片的反差底也必须按实际边框颜色计算。
+            Color contrast = resolveColor("auto-contrast", borderColor);
+            graphics.setColor(new Color(contrast.getRed(), contrast.getGreen(), contrast.getBlue(), 64));
+            graphics.fillRoundRect(x - 2, y - 2, width + 4, height + 4, 4, 4);
+        }
+        graphics.drawImage(image, x, y, width, height, null);
+        graphics.setComposite(AlphaComposite.SrcOver);
+    }
+
+    private double clamp(final double value, final double min, final double max) {
+        if (!Double.isFinite(value)) return max;
+        return Math.max(min, Math.min(max, value));
     }
 
     /**

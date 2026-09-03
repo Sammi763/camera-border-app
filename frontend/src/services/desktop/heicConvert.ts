@@ -2,9 +2,9 @@
  * HEIC/HEIF 文件转换服务。
  *
  * 桌面模式下，调用 Electron 主进程的 convertHeicFiles IPC，
- * 将 HEIC/HEIF 文件转换为临时 JPEG 供引擎处理。
+ * 将 HEIC/HEIF 文件转换为随包助手生成的临时 PNG 供引擎处理。
  *
- * 浏览器模式下不支持 HEIC，原样返回路径（引擎会报错）。
+ * 浏览器模式下不支持 HEIC，HEIC 项返回 null；普通图片原样返回。
  */
 
 import { isHeicFile } from "../../features/metadata/constants/imageFormats"
@@ -13,7 +13,7 @@ import { isHeicFile } from "../../features/metadata/constants/imageFormats"
 export type ConvertedPath = {
   /** 原始路径。 */
   readonly original: string
-  /** 转换后的路径（可能是临时 JPEG 路径，也可能是原始路径）。null 表示转换失败。 */
+  /** 转换后的路径（临时 PNG 或原始路径）。null 表示转换失败。 */
   readonly resolved: string | null
   /** 是否发生了转换。 */
   readonly converted: boolean
@@ -23,7 +23,7 @@ export type ConvertedPath = {
  * 批量转换路径列表中的 HEIC 文件。
  *
  * - 非 HEIC 文件原样返回
- * - HEIC 文件通过 Electron 主进程转换为临时 JPEG
+ * - HEIC 文件通过 Electron 主进程的随包解码助手转换为临时 PNG
  * - 转换失败的文件 resolved 为 null
  * - 浏览器模式下 HEIC 文件 resolved 为 null
  *

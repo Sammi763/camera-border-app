@@ -256,6 +256,23 @@ export const registerFileDialogIpc = (): void => {
     }
   )
 
+  // ---- 自定义 Logo / 签名文件选择 ------------------------------------------
+
+  ipcMain.handle(
+    IPC_CHANNELS.SELECT_LOGO_FILE,
+    async (): Promise<string | null> => {
+      const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+      if (parent === undefined) return null
+      const result = await dialog.showOpenDialog(parent, {
+        title: "选择 PNG Logo 或签名",
+        properties: ["openFile"],
+        filters: [{ name: "PNG", extensions: ["png"] }]
+      })
+      if (result.canceled || result.filePaths.length === 0) return null
+      return result.filePaths[0] ?? null
+    }
+  )
+
   // ---- 独立图片文件夹选择（仅目录） ----------------------------------------
 
   ipcMain.handle(

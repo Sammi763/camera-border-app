@@ -10,6 +10,7 @@ import com.camborder.app.exception.RenderOutputConflictException;
 import com.camborder.app.model.RenderRecipe;
 import com.camborder.app.service.RenderJobService;
 import com.camborder.app.util.OutputPathValidator;
+import com.camborder.app.util.RenderRecipeValidator;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -79,6 +80,8 @@ public final class RenderJobController {
         if (recipe.getImagePath() == null || recipe.getImagePath().isBlank()) {
             throw new ApiException(prefix + "imagePath is required", HttpStatus.BAD_REQUEST);
         }
+
+        RenderRecipeValidator.validateImagePlacement(recipe, prefix);
 
         ExportSettings export = snapshot.getExport();
         if (export == null || export.getOutputPath() == null || export.getOutputPath().isBlank()) {

@@ -29,8 +29,9 @@ public final class MetadataFormatServiceImpl implements MetadataFormatService {
             "camera", "lens", "film", "developer", "scanner",
             "lab", "location", "rollname", "framenumber", "captureformat",
             "filmbrand", "filmiso", "filmtype", "make", "model",
-            "focallength", "fnumber", "exposuretime", "iso",
-            "datetimeoriginal", "filmname"
+            "lensmodel",
+            "focallength", "fnumber", "aperture", "exposuretime", "shutterspeed",
+            "iso", "isospeedratings", "datetimeoriginal", "datetime", "date", "filmname"
     );
 
     /** 清理因缺失变量导致的连续分隔符，例如 " ·  · " → " · "。按行处理，不跨行匹配。 */
@@ -63,7 +64,7 @@ public final class MetadataFormatServiceImpl implements MetadataFormatService {
                         .filter(e -> e.getKey().equalsIgnoreCase(varName))
                         .findFirst()
                         .map(Map.Entry::getValue)
-                        .orElse("");
+                        .orElseGet(() -> aliasValue(safeMetadata, varName));
                 // Matcher.quoteReplacement 防止值中的 $ 或 \ 被当作替换特殊字符
                 matcher.appendReplacement(result, Matcher.quoteReplacement(value));
             }
@@ -103,5 +104,35 @@ public final class MetadataFormatServiceImpl implements MetadataFormatService {
         }
 
         return cleaned;
+    }
+
+    /** 允许常见 EXIF 命名别名，避免前端变量名与 EXIF 原始键名不一致。 */
+    private String aliasValue(final Map<String, String> metadata, final String variableName) {
+        final String alias;
+        switch (variableName.toLowerCase()) {
+            case "aperture":
+                alias = "fnumber";
+                break;
+            case "shutterspeed":
+                alias = "exposuretime";
+                break;
+            case "isospeedratings":
+                alias = "iso";
+                break;
+            case "lensmodel":
+                alias = "lens";
+                break;
+            case "datetime":
+            case "date":
+                alias = "datetimeoriginal";
+                break;
+            default:
+                return "";
+        }
+        return metadata.entrySet().stream()
+                .filter(e -> e.getKey().equalsIgnoreCase(alias))
+                .map(Map.Entry::getValue)
+                .findFirst()
+                .orElse("");
     }
 }

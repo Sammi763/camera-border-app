@@ -122,8 +122,15 @@ public final class TextRenderer {
         graphics.setFont(font);
         FontMetrics metrics = graphics.getFontMetrics();
 
-        int textWidth = metrics.stringWidth(content);
-        int textHeight = metrics.getHeight();
+        String[] lines = content.split("\\n", -1);
+        int lineSpacing = text.getLineSpacing();
+        int lineHeight = Math.max(1, metrics.getHeight() + lineSpacing);
+        int textWidth = 0;
+        for (String line : lines) {
+            textWidth = Math.max(textWidth, spacedWidth(metrics, line, text.getLetterSpacing()));
+        }
+        int textHeight = metrics.getHeight() * lines.length
+                + Math.max(0, lines.length - 1) * lineSpacing;
         int ascent = metrics.getAscent();
         int descent = metrics.getDescent();
         int marginY = Math.max(0, text.getMarginY());
@@ -131,55 +138,79 @@ public final class TextRenderer {
 
         // 计算文字基线坐标
         int x;
-        int y;
+        int firstY;
         switch (placement) {
             case "image-top-center":
                 x = imageX + (imageWidth - textWidth) / 2;
-                y = imageY + marginY + ascent;
+                firstY = imageY + marginY + ascent;
+                break;
+            case "image-top-left":
+                x = imageX + marginX;
+                firstY = imageY + marginY + ascent;
+                break;
+            case "image-top-right":
+                x = imageX + imageWidth - marginX - textWidth;
+                firstY = imageY + marginY + ascent;
+                break;
+            case "image-center-left":
+                x = imageX + marginX;
+                firstY = imageY + (imageHeight - textHeight) / 2 + ascent + marginY;
                 break;
             case "image-center":
                 x = imageX + (imageWidth - textWidth) / 2;
-                y = imageY + (imageHeight - textHeight) / 2 + ascent;
+                firstY = imageY + (imageHeight - textHeight) / 2 + ascent + marginY;
+                break;
+            case "image-center-right":
+                x = imageX + imageWidth - marginX - textWidth;
+                firstY = imageY + (imageHeight - textHeight) / 2 + ascent + marginY;
+                break;
+            case "image-bottom-left":
+                x = imageX + marginX;
+                firstY = imageY + imageHeight - marginY - descent - (lines.length - 1) * lineHeight;
+                break;
+            case "image-bottom-right":
+                x = imageX + imageWidth - marginX - textWidth;
+                firstY = imageY + imageHeight - marginY - descent - (lines.length - 1) * lineHeight;
                 break;
             case "image-bottom-center":
                 x = imageX + (imageWidth - textWidth) / 2;
-                y = imageY + imageHeight - marginY - descent;
+                firstY = imageY + imageHeight - marginY - descent - (lines.length - 1) * lineHeight;
                 break;
             case "border-top-center":
                 x = (canvasWidth - textWidth) / 2;
-                y = (borderTop - textHeight) / 2 + ascent + marginY;
-                break;
-            case "border-bottom-center":
-                x = (canvasWidth - textWidth) / 2;
-                y = (canvasHeight - borderBottom) + (borderBottom - textHeight) / 2 + ascent + marginY;
+                firstY = (borderTop - textHeight) / 2 + ascent + marginY;
                 break;
             case "border-top-left":
                 x = borderLeft + marginX;
-                y = (borderTop - textHeight) / 2 + ascent + marginY;
+                firstY = (borderTop - textHeight) / 2 + ascent + marginY;
                 break;
             case "border-top-right":
                 x = canvasWidth - borderRight - marginX - textWidth;
-                y = (borderTop - textHeight) / 2 + ascent + marginY;
+                firstY = (borderTop - textHeight) / 2 + ascent + marginY;
+                break;
+            case "border-bottom-center":
+                x = (canvasWidth - textWidth) / 2;
+                firstY = (canvasHeight - borderBottom) + (borderBottom - textHeight) / 2 + ascent + marginY;
                 break;
             case "border-bottom-left":
                 x = borderLeft + marginX;
-                y = (canvasHeight - borderBottom) + (borderBottom - textHeight) / 2 + ascent + marginY;
+                firstY = (canvasHeight - borderBottom) + (borderBottom - textHeight) / 2 + ascent + marginY;
                 break;
             case "border-bottom-right":
                 x = canvasWidth - borderRight - marginX - textWidth;
-                y = (canvasHeight - borderBottom) + (borderBottom - textHeight) / 2 + ascent + marginY;
+                firstY = (canvasHeight - borderBottom) + (borderBottom - textHeight) / 2 + ascent + marginY;
                 break;
             case "top-center":
                 x = (canvasWidth - textWidth) / 2;
-                y = marginY + ascent;
+                firstY = marginY + ascent;
                 break;
             case "center":
                 x = imageX + (imageWidth - textWidth) / 2;
-                y = imageY + (imageHeight - textHeight) / 2 + ascent;
+                firstY = imageY + (imageHeight - textHeight) / 2 + ascent + marginY;
                 break;
             case "bottom-center":
                 x = (canvasWidth - textWidth) / 2;
-                y = canvasHeight - marginY - descent;
+                firstY = canvasHeight - marginY - descent - (lines.length - 1) * lineHeight;
                 break;
             default:
                 throw new PreviewGenerationException("unsupported placement: " + placement);
@@ -187,7 +218,7 @@ public final class TextRenderer {
 
         // 文字区域左上角（用于背景条定位）
         int textLeft = x;
-        int textTop = y - ascent;
+        int textTop = firstY - ascent;
 
         // 1. 背景条：先画矩形背景
         if (text.isBackgroundEnabled()) {
@@ -214,12 +245,14 @@ public final class TextRenderer {
                         shadowColor.getBlue(), shadowColor.getAlpha() / 3));
                 for (int dx = -blur; dx <= blur; dx += Math.max(1, blur / 2)) {
                     for (int dy = -blur; dy <= blur; dy += Math.max(1, blur / 2)) {
-                        graphics.drawString(content, x + offsetX + dx, y + offsetY + dy);
+                        drawSpacedLines(graphics, lines, x + offsetX + dx, firstY + offsetY + dy,
+                                lineHeight, text.getLetterSpacing(), false, font);
                     }
                 }
             } else {
                 graphics.setColor(shadowColor);
-                graphics.drawString(content, x + offsetX, y + offsetY);
+                drawSpacedLines(graphics, lines, x + offsetX, firstY + offsetY,
+                        lineHeight, text.getLetterSpacing(), false, font);
             }
         }
 
@@ -227,16 +260,60 @@ public final class TextRenderer {
         if (text.isStrokeEnabled() && text.getStrokeWidth() > 0) {
             Color strokeColor = ColorParser.parse(text.getStrokeColor(), "#000000");
             float strokeW = text.getStrokeWidth();
-            TextLayout layout = new TextLayout(content, font, graphics.getFontRenderContext());
-            Shape outline = layout.getOutline(AffineTransform.getTranslateInstance(x, y));
             graphics.setColor(strokeColor);
             graphics.setStroke(new BasicStroke(strokeW, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-            graphics.draw(outline);
+            drawSpacedLines(graphics, lines, x, firstY, lineHeight,
+                    text.getLetterSpacing(), true, font);
         }
 
         // 4. 正文
         graphics.setColor(ColorParser.parse(text.getColor(), "#000000"));
-        graphics.drawString(content, x, y);
+        drawSpacedLines(graphics, lines, x, firstY, lineHeight,
+                text.getLetterSpacing(), false, font);
+    }
+
+    private int spacedWidth(final FontMetrics metrics, final String text, final int letterSpacing) {
+        if (text.length() <= 1) {
+            return metrics.stringWidth(text);
+        }
+        return metrics.stringWidth(text) + letterSpacing * (text.length() - 1);
+    }
+
+    /** Java2D 没有跨版本统一的字距 API，按字符绘制以保证预览/导出都响应字距。 */
+    private void drawSpacedLines(final Graphics2D graphics, final String[] lines,
+                                 final int x, final int firstY, final int lineHeight,
+                                 final int letterSpacing, final boolean stroke, final Font font) {
+        for (int lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+            drawSpacedLine(graphics, lines[lineIndex], x, firstY + lineIndex * lineHeight,
+                    letterSpacing, stroke, font);
+        }
+    }
+
+    private void drawSpacedLine(final Graphics2D graphics, final String text,
+                                final int x, final int y, final int letterSpacing,
+                                final boolean stroke, final Font font) {
+        if (letterSpacing == 0) {
+            if (stroke) {
+                TextLayout layout = new TextLayout(text, font, graphics.getFontRenderContext());
+                Shape outline = layout.getOutline(AffineTransform.getTranslateInstance(x, y));
+                graphics.draw(outline);
+            } else {
+                graphics.drawString(text, x, y);
+            }
+            return;
+        }
+        int cursor = x;
+        for (int i = 0; i < text.length(); i++) {
+            String character = text.substring(i, i + 1);
+            if (stroke) {
+                TextLayout layout = new TextLayout(character, font, graphics.getFontRenderContext());
+                Shape outline = layout.getOutline(AffineTransform.getTranslateInstance(cursor, y));
+                graphics.draw(outline);
+            } else {
+                graphics.drawString(character, cursor, y);
+            }
+            cursor += graphics.getFontMetrics(font).stringWidth(character) + letterSpacing;
+        }
     }
 
     /**

@@ -14,7 +14,21 @@
  * 3. 旧单段字段同时保留（向后兼容），但渲染时以 textLayers 为准。
  */
 
-import type { RenderSettings, TextLayerSettings } from "../../settings/types"
+import type { RenderSettings, RenderSettingsInput, TextLayerSettings } from "../../settings/types"
+import { normalizeImagePlacement } from "../../preview/canvas/imagePlacementGeometry"
+
+/** 旧画幅 id 到 v2 目标比例的迁移表。 */
+const legacyAspectRatio = (id: string): number | null => ({
+  "half-frame": 3 / 4,
+  "135": 3 / 2,
+  "645": 4 / 3,
+  "6x6": 1,
+  "6x7": 5 / 4,
+  "6x8": 10 / 7,
+  "6x9": 45 / 28,
+  "6x10": 25 / 14,
+  "6x12": 15 / 7
+}[id] ?? null)
 
 /**
  * 从旧单段文字字段生成 textLayers 数组。
@@ -51,6 +65,8 @@ const migrateLegacyToLayers = (
     textArea,
     marginX: 0,
     marginY: 20,
+    lineSpacing: 0,
+    letterSpacing: 0,
     backgroundEnabled: false,
     backgroundColor: "#000000",
     backgroundPaddingX: 6,
@@ -86,12 +102,20 @@ const migrateLegacyToLayers = (
  * @returns 规范化后的 patch（可能新增了 textLayers 字段）
  */
 export const normalizeTemplatePatch = (
-  patch: Partial<RenderSettings>
+  patch: RenderSettingsInput
 ): Partial<RenderSettings> => {
-  // 已包含 textLayers → 不迁移
-  if (patch.textLayers !== undefined) {
-    return patch
-  }
+  const legacyFilmFormat = patch.filmFormat
+  const legacyAutoCrop = patch.autoCrop
+  const { filmFormat: _filmFormat, autoCrop: _autoCrop, ...withoutLegacyLayout } = patch
+  const layoutPatch: Partial<RenderSettings> = patch.imagePlacement === undefined && (legacyFilmFormat !== undefined || legacyAutoCrop !== undefined)
+    ? {
+        layoutPresetId: legacyFilmFormat ?? null,
+        imagePlacement: normalizeImagePlacement({
+          mode: legacyAutoCrop === true ? "fill" : "fit",
+          targetAspectRatio: legacyFilmFormat === undefined || legacyFilmFormat === null ? null : legacyAspectRatio(legacyFilmFormat)
+        })
+      }
+    : {}
 
   // 不含任何旧文字字段 → 不迁移（patch 可能只改边框等非文字字段）
   if (
@@ -102,7 +126,7 @@ export const normalizeTemplatePatch = (
     patch.textArea === undefined &&
     patch.fontFamily === undefined
   ) {
-    return patch
+    return { ...withoutLegacyLayout, ...layoutPatch }
   }
 
   // 从旧字段生成 textLayers
@@ -114,7 +138,8 @@ export const normalizeTemplatePatch = (
   const textArea = patch.textArea ?? "border"
 
   return {
-    ...patch,
+    ...withoutLegacyLayout,
+    ...layoutPatch,
     textLayers: migrateLegacyToLayers(textContent, fontFamily, fontSize, color, placement, textArea),
   }
 }
@@ -131,26 +156,75 @@ export const normalizeTemplatePatch = (
  * @returns 规范化后的完整设置（textLayers 保证非 undefined）
  */
 export const normalizeTemplateSettings = (
-  settings: RenderSettings
+  settings: RenderSettingsInput
 ): RenderSettings => {
-  // 已包含 textLayers → 不迁移
-  if (settings.textLayers !== undefined && settings.textLayers.length > 0) {
-    return settings
-  }
+  // 已有多段图层直接保留；旧空数组/缺失字段才从单段字段迁移。
+  const layers = settings.textLayers !== undefined && settings.textLayers.length > 0
+    ? settings.textLayers.map((layer) => ({
+        ...layer,
+        lineSpacing: layer.lineSpacing ?? 0,
+        letterSpacing: layer.letterSpacing ?? 0
+      }))
+    : migrateLegacyToLayers(
+        settings.textContent ?? "",
+        settings.fontFamily ?? "sans-serif",
+        settings.textFontSize ?? 24,
+        settings.textColor ?? "#000000",
+        settings.textPlacement ?? "bottom-center",
+        settings.textArea ?? "image"
+      )
 
-  // textLayers 为空数组或 undefined → 从旧字段迁移
-  const layers = migrateLegacyToLayers(
-    settings.textContent,
-    settings.fontFamily,
-    settings.textFontSize,
-    settings.textColor,
-    settings.textPlacement,
-    settings.textArea
+  const legacyFilmFormat = settings.filmFormat
+  const legacyAutoCrop = settings.autoCrop
+  const { filmFormat: _filmFormat, autoCrop: _autoCrop, ...withoutLegacyLayout } = settings
+  const currentPlacement = normalizeImagePlacement(
+    settings.imagePlacement ?? {
+      mode: legacyAutoCrop === true ? "fill" : "fit",
+      targetAspectRatio: legacyFilmFormat === null || legacyFilmFormat === undefined ? null : legacyAspectRatio(legacyFilmFormat)
+    }
   )
 
   return {
-    ...settings,
+    ...withoutLegacyLayout,
+    borderColor: withoutLegacyLayout.borderColor ?? "#ffffff",
+    borderTop: withoutLegacyLayout.borderTop ?? 20,
+    borderBottom: withoutLegacyLayout.borderBottom ?? 20,
+    borderLeft: withoutLegacyLayout.borderLeft ?? 20,
+    borderRight: withoutLegacyLayout.borderRight ?? 20,
+    textContent: withoutLegacyLayout.textContent ?? "",
+    textFontSize: withoutLegacyLayout.textFontSize ?? 24,
+    textColor: withoutLegacyLayout.textColor ?? "#000000",
+    textPlacement: withoutLegacyLayout.textPlacement ?? "bottom-center",
+    textArea: withoutLegacyLayout.textArea ?? "border",
+    fontFamily: withoutLegacyLayout.fontFamily ?? "sans-serif",
+    gradient: withoutLegacyLayout.gradient ?? {
+      enabled: false,
+      type: "linear",
+      angle: 0,
+      stops: [{ offset: 0, color: "#000000" }, { offset: 1, color: "#ffffff" }]
+    },
+    borderStyle: withoutLegacyLayout.borderStyle ?? null,
+    exportFormat: withoutLegacyLayout.exportFormat ?? "png",
+    jpegQuality: withoutLegacyLayout.jpegQuality ?? 95,
+    outputSizePreset: withoutLegacyLayout.outputSizePreset ?? "original",
+    customOutputLongEdge: withoutLegacyLayout.customOutputLongEdge ?? 2048,
+    preserveMetadata: withoutLegacyLayout.preserveMetadata ?? false,
+    preserveColorProfile: withoutLegacyLayout.preserveColorProfile ?? false,
+    preferHighBitDepth: withoutLegacyLayout.preferHighBitDepth ?? false,
+    logo: withoutLegacyLayout.logo ?? {
+      enabled: false,
+      mode: "auto-brand",
+      brand: null,
+      placement: "border-top-right",
+      size: 14,
+      colorMode: "auto-contrast",
+      imagePath: null,
+      opacity: 1,
+      autoContrast: true
+    },
     textLayers: layers,
+    imagePlacement: currentPlacement,
+    layoutPresetId: settings.layoutPresetId ?? legacyFilmFormat ?? null
   }
 }
 

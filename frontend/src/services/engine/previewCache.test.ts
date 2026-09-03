@@ -11,8 +11,7 @@ const recipe: RenderRecipe = {
   border: { top: 0, bottom: 0, left: 0, right: 0, color: "#000000" },
   gradient: null,
   texts: [],
-  filmFormat: null,
-  autoCrop: false
+  imagePlacement: { mode: "fit", focalX: 0.5, focalY: 0.5, rotation: 0, targetAspectRatio: null }
 }
 
 afterEach(() => {
@@ -34,7 +33,10 @@ describe("预览 URL 缓存", () => {
     expect(createPreviewCacheKey({ imagePath: "/photos/a.jpg", maxWidth: 120, maxHeight: 120, modifiedAtMs: 101, sourceSizeBytes: 2048, recipeHash: hash })).not.toBe(base)
     expect(createPreviewCacheKey({ imagePath: "/photos/a.jpg", maxWidth: 120, maxHeight: 120, modifiedAtMs: 100, sourceSizeBytes: 2049, recipeHash: hash })).not.toBe(base)
     expect(createPreviewCacheKey({ imagePath: "/photos/b.jpg", maxWidth: 120, maxHeight: 120, modifiedAtMs: 100, sourceSizeBytes: 2048, recipeHash: hash })).not.toBe(base)
-    expect(hashRenderRecipe({ ...recipe, autoCrop: true })).not.toBe(hash)
+    expect(hashRenderRecipe({
+      ...recipe,
+      imagePlacement: { ...recipe.imagePlacement!, mode: "fill" }
+    })).not.toBe(hash)
   })
 
   it("按字节淘汰 LRU，并在淘汰 blob URL 时主动释放", () => {

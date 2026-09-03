@@ -18,6 +18,53 @@ const fullIdentity: PhotoIdentity = {
 }
 
 describe("resolveTextVariables", () => {
+  it("补齐摄影技术变量并保持变量名大小写不敏感", () => {
+    const identity = {
+      ...createEmptyIdentity(),
+      fNumber: "f/2.8",
+      exposureTime: "1/125 s",
+      iso: "400",
+      focalLength: "50 mm"
+    }
+    expect(resolveTextVariables(
+      "{FNumber} · {ExposureTime} · {ISO} · {FocalLength}",
+      identity
+    )).toBe("f/2.8 · 1/125 s · 400 · 50 mm")
+  })
+
+  it("支持常见 EXIF 技术变量别名和拍摄时间", () => {
+    const identity = {
+      ...createEmptyIdentity(),
+      fNumber: "f/4",
+      exposureTime: "1/60 s",
+      iso: "200",
+      focalLength: "35 mm",
+      dateTimeOriginal: "2025-06-01 12:30"
+    }
+    expect(resolveTextVariables(
+      "{Aperture} · {ShutterSpeed} · {ISOSpeedRatings} · {Date}",
+      identity
+    )).toBe("f/4 · 1/60 s · 200 · 2025-06-01 12:30")
+  })
+
+  it("支持 EXIF/资产变量的拆分字段，并对缺失字段输出空值", () => {
+    const identity = {
+      ...createEmptyIdentity(),
+      make: "Leica",
+      model: "M6",
+      lensModel: "Summicron-M 35mm",
+      filmBrand: "Kodak",
+      filmIso: "400",
+      filmType: "color-negative",
+      filmName: "Portra 400"
+    }
+    expect(resolveTextVariables(
+      "{Make} · {Model} · {LensModel} · {FilmBrand} · {FilmISO} · {FilmType} · {FilmName}",
+      identity
+    )).toBe("Leica · M6 · Summicron-M 35mm · Kodak · 400 · color-negative · Portra 400")
+    expect(resolveTextVariables("{FilmBrand} · {FilmType}", createEmptyIdentity())).toBe("")
+  })
+
   it("完整变量替换", () => {
     const template = "{Camera} · {Lens} · {Film} · {Scanner} · {Lab}"
     const result = resolveTextVariables(template, fullIdentity)

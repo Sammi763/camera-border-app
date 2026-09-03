@@ -23,6 +23,7 @@ import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -52,7 +53,7 @@ final class DefaultRenderJobServiceTest {
             return new ImageRenderService.ComposeOutcome(
                     new BufferedImage(1, 1, BufferedImage.TYPE_INT_RGB), SourceDecode.standard("png"));
         });
-        when(imageRenderService.writeToFile(any(BufferedImage.class), any(ExportSettings.class)))
+        when(imageRenderService.writeToFile(any(BufferedImage.class), any(ExportSettings.class), anyString()))
                 .thenReturn(exportResult("/exports/frozen.png"));
 
         DefaultRenderJobService service = service(imageRenderService);
@@ -72,7 +73,7 @@ final class DefaultRenderJobServiceTest {
         verify(imageRenderService).compose(org.mockito.ArgumentMatchers.argThat(
                 actual -> "/photos/original.png".equals(actual.getImagePath())), anyInt(), anyInt());
         verify(imageRenderService).writeToFile(any(BufferedImage.class), org.mockito.ArgumentMatchers.argThat(
-                actual -> "/exports/original.png".equals(actual.getOutputPath())));
+                actual -> "/exports/original.png".equals(actual.getOutputPath())), anyString());
     }
 
     @Test
@@ -86,7 +87,7 @@ final class DefaultRenderJobServiceTest {
             return new ImageRenderService.ComposeOutcome(
                     new BufferedImage(1, 1, BufferedImage.TYPE_INT_RGB), SourceDecode.standard("png"));
         });
-        when(imageRenderService.writeToFile(any(BufferedImage.class), any(ExportSettings.class)))
+        when(imageRenderService.writeToFile(any(BufferedImage.class), any(ExportSettings.class), anyString()))
                 .thenReturn(exportResult("/exports/first.png"));
 
         DefaultRenderJobService service = service(imageRenderService);

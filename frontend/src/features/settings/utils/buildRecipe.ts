@@ -17,6 +17,11 @@ import type {
 } from "../../../types/preview"
 import type { RenderSettings } from "../types"
 import { buildTextsFromSettings, resolveLogoBrand } from "./buildTexts"
+import { normalizeImagePlacement } from "../../preview/canvas/imagePlacementGeometry"
+import { normalizeTemplateSettings } from "../../template/utils/normalizeTemplate"
+
+/** 新配方只读取明确的 imagePlacement；旧字段由统一迁移入口提前消费。 */
+const recipeImagePlacement = (settings: RenderSettings) => normalizeImagePlacement(settings.imagePlacement)
 
 /**
  * 将 UI 渐变设置转换为 API 渐变配置。
@@ -50,32 +55,37 @@ export const buildRecipeFromSettings = (
   resolvedTexts?: readonly (string | null)[] | null,
   resolvedBrand?: string | null
 ): RenderRecipe => {
-  const logo: LogoConfig | null = settings.logo.enabled
+  // 允许旧 localStorage/模板直接进入边界时自动迁移一次；后面的配方装配不再读取
+  // autoCrop/filmFormat，避免兼容字段继续成为渲染契约。
+  const current = normalizeTemplateSettings(settings)
+  const logo: LogoConfig | null = current.logo.enabled
     ? {
         enabled: true,
-        mode: settings.logo.mode,
-        brand: resolveLogoBrand(settings.logo.mode, settings.logo.brand, resolvedBrand),
-        placement: settings.logo.placement,
-        size: settings.logo.size,
-        colorMode: settings.logo.colorMode
+        mode: current.logo.mode,
+        brand: resolveLogoBrand(current.logo.mode, current.logo.brand, resolvedBrand),
+        placement: current.logo.placement,
+        size: current.logo.size,
+        colorMode: current.logo.colorMode,
+        imagePath: current.logo.imagePath ?? null,
+        opacity: current.logo.opacity ?? 1,
+        autoContrast: current.logo.autoContrast ?? current.logo.colorMode === "auto-contrast"
       }
     : null
 
   return {
     imagePath: filePath,
     border: {
-      top: settings.borderTop,
-      bottom: settings.borderBottom,
-      left: settings.borderLeft,
-      right: settings.borderRight,
-      color: settings.borderColor
+      top: current.borderTop,
+      bottom: current.borderBottom,
+      left: current.borderLeft,
+      right: current.borderRight,
+      color: current.borderColor
     },
-    gradient: toGradientConfig(settings),
-    texts: buildTextsFromSettings(settings, textOverride, resolvedTexts),
-    filmFormat: settings.filmFormat,
-    autoCrop: settings.autoCrop,
+    gradient: toGradientConfig(current),
+    texts: buildTextsFromSettings(current, textOverride, resolvedTexts),
+    imagePlacement: recipeImagePlacement(current),
     logo,
-    borderStyle: settings.borderStyle
+    borderStyle: current.borderStyle
   }
 }
 
@@ -111,8 +121,7 @@ export const buildPlainImagePreviewRequest = (
     border: { top: 0, bottom: 0, left: 0, right: 0, color: "#000000" },
     gradient: null,
     texts: [],
-    filmFormat: null,
-    autoCrop: false
+    imagePlacement: normalizeImagePlacement()
   },
   maxWidth,
   maxHeight

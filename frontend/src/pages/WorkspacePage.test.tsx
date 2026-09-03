@@ -21,7 +21,7 @@ const runtime: DesktopRuntime = {
 type RenderJobRecord = {
   readonly imagePath: string
   readonly texts: readonly string[]
-  readonly filmFormat: string | null
+  readonly imagePlacement: { readonly mode: string; readonly targetAspectRatio: number | null }
 }
 
 const jsonResponse = (body: unknown, status = 200): Response =>
@@ -78,14 +78,20 @@ function setupWorkspace() {
     }
     if (url.endsWith("/api/render-jobs") && method === "POST") {
       const body = JSON.parse(String(init?.body)) as {
-        items: readonly { recipe: { imagePath: string; texts: readonly { content: string }[]; filmFormat: string | null } }[]
+        items: readonly {
+          recipe: {
+            imagePath: string
+            texts: readonly { content: string }[]
+            imagePlacement: { mode: string; focalX: number; focalY: number; rotation: number; targetAspectRatio: number | null }
+          }
+        }[]
       }
       for (const snapshot of body.items) {
         callLog.push(`job:${snapshot.recipe.imagePath}`)
         renderJobs.push({
           imagePath: snapshot.recipe.imagePath,
           texts: snapshot.recipe.texts.map((t) => t.content),
-          filmFormat: snapshot.recipe.filmFormat
+          imagePlacement: snapshot.recipe.imagePlacement
         })
       }
       return jsonResponse({
@@ -217,9 +223,15 @@ describe("WorkspacePage wiring（摄影预设 + EXIF 批量导出闭环）", () 
     expect(recipeB.texts).toHaveLength(0)
     expect(recipeB.texts.some((t) => t.includes("NIKON"))).toBe(false)
 
-    // 10) 预设只提供身份：不改变边框/裁剪/导出设置（filmFormat 来自设置，保持 null）
-    expect(recipeA.filmFormat).toBeNull()
-    expect(recipeB.filmFormat).toBeNull()
+    // 10) 预设只提供身份：渲染配方使用明确的 v2 图片布局，不再写入旧字段
+    expect(recipeA.imagePlacement).toEqual({
+      mode: "fit",
+      focalX: 0.5,
+      focalY: 0.5,
+      rotation: 0,
+      targetAspectRatio: null
+    })
+    expect(recipeB.imagePlacement).toEqual(recipeA.imagePlacement)
   }, 20000) // CI/冷启动下默认 5s 不足以完成完整批量导出链路；提高至此用例专属上限（非隐藏测试）
 
   it("旧 Roll 数据（readRolls 返回旧格式）不会导致工作台崩溃，界面不出现 Roll 入口", async () => {

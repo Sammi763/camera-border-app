@@ -65,7 +65,7 @@ JavaBridge 的实际端口只存在于主进程，不通过 preload、IPC 或运
 | 导出目标 | `selectExportPath` / `selectExportDirectory` | 单图保存路径 / 批量导出目录 |
 | 模板存储 | `readTemplates` / `writeTemplates` / `exportTemplateJson` / `importTemplateJson` | userData JSON 读写 + 导入导出 |
 | 资产/摄影预设 | `readAssets` / `writeAssets`（资产库）、`readPresets` / `writePresets`（摄影预设）；`readRolls` / `writeRolls` 为旧版 Roll 兼容读取，不扩展 | userData JSON 读写 |
-| 图像转换 | `convertHeicFiles` | 当前开发实现：HEIC/HEIF 经 macOS `sips` 转临时 JPEG；不代表最终平台支持，最终口径见 [docs/prd.md §0](../docs/prd.md) 与 [样片矩阵](../docs/test-samples.md) |
+| 图像转换 | `convertHeicFiles` / `probeHeicDecoder` | 使用随包 `heic-convert`/`pngjs` 解码到应用临时 PNG；worker 有超时、输入/输出尺寸限制、能力探测和退出清理，不依赖操作系统外部解码工具或系统扩展 |
 | 字体 | `listSystemFonts` | 枚举系统字体族 |
 | 目录打开 | `openDirectory` | 在系统文件管理器中打开目录（批量导出后查看产物；仅接受真实存在的目录） |
 | 系统通知 | `showNotification` | 导出完成/失败系统通知（title/body 必须非空字符串；平台不支持或创建失败返回 `false`，不抛异常；只展示文件名不外泄绝对路径） |
@@ -88,7 +88,7 @@ JavaBridge 的实际端口只存在于主进程，不通过 preload、IPC 或运
 ## 验证与已知限制
 
 - 验证：`pnpm typecheck`；冒烟走 `pnpm dev`（开发）或 `pnpm dev:managed`（托管）；打包与干净机器验收见 [docs/release-checklist.md](../docs/release-checklist.md)。当前 macOS arm64 统一工作台的实际应用验收命令为 `pnpm package && pnpm e2e:packaged`；打包 E2E 还会通过真实 preload 文件夹入口导入 100 项、审计首屏/滚动缩略图请求、预览、全尺寸导出与取消；这不宣称 macOS x64 或 Windows x64 已实测。
-- HEIC/HEIF 当前开发实现依赖 macOS `sips`，这是开发环境限制而非最终产品范围。Windows x64 的最终 HEIC/HEIF 状态为 `NOT_RUN`，必须通过 [docs/prd.md §0](../docs/prd.md) 和 [样片矩阵](../docs/test-samples.md) 后才能宣称支持。
+- HEIC/HEIF 使用随包解码助手；当前仅在 macOS arm64 验证，Windows x64 与 macOS x64 未覆盖，不能据此宣称其他平台已验收。
 - JavaBridge 的监听地址 / 就绪超时配置在 `engine/engineConfig.ts`（默认只绑定 `127.0.0.1:8099`，20s）；地址仅供主进程端口探测和 `app://` 代理使用。
 - 打包模式**必须**使用随包 Java Runtime（`requireBundledRuntime`）：解析不到时进入 `runtime-missing` 诊断，不回退系统 Java；仅开发模式允许回退系统 PATH。最终用户不需要安装 Java、Node.js 或 Python，Electron 自带应用运行时。
 - 引擎 stdout/stderr 落盘到 `userData/logs/engine.log`（启动时自动创建日志目录；目录/权限问题以 logWarning 计入诊断）。启动时写入 `[engine-start]` 横幅（platform / arch / node 版本 / jar 路径 / java 路径 / baseUrl / 时间），子进程退出时写入 `[engine-exit]`（exit code + signal），便于用户反馈日志后直接定位问题；「查看日志」经 `openLogFile` 直接打开该文件。

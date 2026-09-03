@@ -83,13 +83,17 @@ export type DesktopApi = {
   readonly exportTemplateJson: (defaultFileName: string, json: string) => Promise<string | null>
   /** 打开文件选择对话框，读取并返回模板 JSON 字符串；取消返回 null。 */
   readonly importTemplateJson: () => Promise<string | null>
+  /** 打开 PNG 文件选择器，返回自定义 Logo/签名的绝对路径；取消返回 null。 */
+  readonly selectLogoFile: () => Promise<string | null>
   /**
-   * 将 HEIC/HEIF 文件转换为临时 JPEG 文件供引擎处理。
+   * 将 HEIC/HEIF 文件转换为应用临时目录中的 PNG 文件供引擎处理，并保留可读取元数据。
    * 返回转换后的临时文件路径数组（与输入路径一一对应）。
    * 转换失败的文件返回 null（保持原位）。
    * 非 HEIC 文件原样返回。
    */
   readonly convertHeicFiles: (paths: readonly string[]) => Promise<readonly (string | null)[]>
+  /** 探测随包 HEIC 解码助手是否存在且可加载。 */
+  readonly probeHeicDecoder: () => Promise<boolean>
   /**
    * 枚举系统已安装的字体列表。
    * 返回字体族名称数组；获取失败时返回空数组（前端回退到内置列表）。
@@ -192,7 +196,9 @@ export const IPC_CHANNELS = {
   WRITE_PRESETS: "desktop:write-presets",
   EXPORT_TEMPLATE_JSON: "desktop:export-template-json",
   IMPORT_TEMPLATE_JSON: "desktop:import-template-json",
+  SELECT_LOGO_FILE: "desktop:select-logo-file",
   CONVERT_HEIC_FILES: "desktop:convert-heic-files",
+  PROBE_HEIC_DECODER: "desktop:probe-heic-decoder",
   LIST_SYSTEM_FONTS: "desktop:list-system-fonts",
   OPEN_DIRECTORY: "desktop:open-directory",
   GET_ENGINE_DIAGNOSTICS: "desktop:get-engine-diagnostics",

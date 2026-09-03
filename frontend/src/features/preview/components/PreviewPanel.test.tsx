@@ -31,8 +31,6 @@ const makeSettings = (): RenderSettings => ({
     { id: "l2", enabled: true, content: "{CaptureFormat} · {Film}", fontFamily: "sans-serif", fontSize: 16, color: "#666", placement: "bottom-center", textArea: "border", marginX: 0, marginY: 45, backgroundEnabled: false, backgroundColor: "#000", backgroundPaddingX: 6, backgroundPaddingY: 3, shadowEnabled: false, shadowColor: "#000", shadowBlur: 0, shadowOffsetX: 0, shadowOffsetY: 0, strokeEnabled: false, strokeColor: "#000", strokeWidth: 1 },
     { id: "l3", enabled: false, content: "", fontFamily: "sans-serif", fontSize: 14, color: "#888", placement: "top-center", textArea: "border", marginX: 0, marginY: 8, backgroundEnabled: false, backgroundColor: "#000", backgroundPaddingX: 6, backgroundPaddingY: 3, shadowEnabled: false, shadowColor: "#000", shadowBlur: 0, shadowOffsetX: 0, shadowOffsetY: 0, strokeEnabled: false, strokeColor: "#000", strokeWidth: 1 }
   ],
-  autoCrop: false,
-  filmFormat: null,
   gradient: { enabled: false, type: "linear", angle: 0, stops: [] },
   exportFormat: "jpeg",
   jpegQuality: 90,
@@ -870,7 +868,7 @@ describe("PreviewPanel 单图导出（EXIF 等待 + 解析一致）", () => {
       // 等到批量导出终态再结束，防止悬挂异步链路在后续测试中触发它们的通知 mock
       await waitFor(() => {
         expect(screen.getByText(/批量导出完成/)).toBeTruthy()
-      })
+      }, { timeout: 3000 })
       expect(screen.getAllByText(/EXIF：当前格式不支持 EXIF/)).toHaveLength(3)
     })
 

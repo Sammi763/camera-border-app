@@ -29,8 +29,6 @@ const baseSettings = (): RenderSettings => ({
   textArea: "border",
   fontFamily: "sans-serif",
   textLayers: [],
-  autoCrop: false,
-  filmFormat: null,
   gradient: { enabled: false, type: "linear", angle: 0, stops: [] },
   exportFormat: "png",
   jpegQuality: 95,

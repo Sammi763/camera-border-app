@@ -150,7 +150,7 @@ T-05A 只验收打包实现和可在本机执行的合成检查；安装、启�
 | macOS 提示已阻止 Electron 或“恶意软件” | Electron npm 开发二进制不完整或 ad-hoc 签名未被当前系统接受 | 执行 `pnpm prepare:electron-dev`，再重跑 `cd electron && pnpm dev` |
 | 8099 / 5174 端口被占用 | 其他进程占用 | 释放端口；临时用 `CAMBORDER_ENGINE_PORT` / `CAMBORDER_FRONTEND_PORT` 覆盖 |
 | 托管模式启动失败 | 缺少 jar 或 frontend/dist | 按「托管模式」顺序先 `mvn package` 与 `pnpm build` |
-| HEIC/HEIF 图片导入后该项失败（resolved=null） | 当前开发实现依赖 macOS `sips`；Windows x64 的最终 HEIC/HEIF 支持为 `NOT_RUN`，Linux 不在最终发行平台 | 先转成 JPG/PNG；最终支持口径以 [docs/prd.md §0](docs/prd.md) 和 [样片矩阵](docs/test-samples.md) 为准 |
+| HEIC/HEIF 图片导入后该项失败（resolved=null） | 随包 HEIC/HEIF worker 能力探测或转换失败；当前仅 macOS arm64 完成验证，macOS x64 / Windows x64 尚未覆盖 | 检查随包解码助手日志和输入限制；必要时先转成 JPG/PNG。最终支持口径以 [docs/prd.md §0](docs/prd.md) 和 [样片矩阵](docs/test-samples.md) 为准 |
 | `GET /api/render-jobs/{jobId}` 返回 404 | 任务未知：引擎重启丢失，或终态任务超过默认 30 分钟 TTL / 256 条容量上限被淘汰；queued/running 不会因清理被淘汰 | 重新发起导出任务；批量导出重跑即可 |
 | 导出 POST 很快返回 `202` | 当前接口是异步任务契约，正文中的 `jobId` 需要交给 GET 轮询 | 使用前端根级 `useExportController` 或按 [`java-engine/README.md`](java-engine/README.md) 的 GET/DELETE 语义处理 |
 | 模板/资产/摄影预设数据「丢了」 | 桌面模式持久化在 `userData` 下；浏览器模式降级 localStorage，两者不互通。旧版本可能仍有 `rolls.json` | 检查对应存储文件和迁移日志；两种模式数据不共享是预期行为 |

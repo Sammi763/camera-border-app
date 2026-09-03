@@ -64,8 +64,7 @@ describe("专业导出结构化结果", () => {
             border: { top: 20, bottom: 80, left: 20, right: 20, color: "#ffffff" },
             gradient: null,
             texts: [],
-            filmFormat: null,
-            autoCrop: false
+            imagePlacement: { mode: "fit", focalX: 0.5, focalY: 0.5, rotation: 0, targetAspectRatio: null }
           },
           export: {
             format: "tiff",

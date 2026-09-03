@@ -4,6 +4,7 @@ import { useSystemFonts } from "../hooks/useSettings"
 import type { FontOption } from "../../../services/desktop/fontsApi"
 import type { SettingsController, TextLayerSettings } from "../types"
 import { VariableHelpPanel } from "../../metadata/components/VariableHelpPanel"
+import { normalizeTextPlacement, textPlacementOptions } from "../utils/textPlacementOptions"
 
 type TextLayerEditorProps = {
   readonly controller: SettingsController
@@ -71,6 +72,7 @@ type TextLayerCardProps = {
 
 const TextLayerCard = ({ layer, index, fonts, onUpdate }: TextLayerCardProps): JSX.Element => {
   const [expanded, setExpanded] = useState(index === 0)
+  const normalizedPlacement = normalizeTextPlacement(layer.textArea, layer.placement)
 
   const title = `文字 ${index + 1}`
   const summary = layer.enabled
@@ -189,7 +191,10 @@ const TextLayerCard = ({ layer, index, fonts, onUpdate }: TextLayerCardProps): J
               <select
                 className="settingSelect"
                 value={layer.textArea}
-                onChange={(e) => onUpdate({ textArea: e.target.value as "image" | "border" })}
+                onChange={(e) => {
+                  const area = e.target.value as "image" | "border"
+                  onUpdate({ textArea: area, placement: normalizeTextPlacement(area, layer.placement) })
+                }}
               >
                 <option value="image">图片上</option>
                 <option value="border">边框上</option>
@@ -199,18 +204,28 @@ const TextLayerCard = ({ layer, index, fonts, onUpdate }: TextLayerCardProps): J
               位置
               <select
                 className="settingSelect"
-                value={layer.placement}
+                value={normalizedPlacement}
                 onChange={(e) => onUpdate({ placement: e.target.value })}
               >
-                <option value="top-center">顶部居中</option>
-                <option value="center">居中</option>
-                <option value="bottom-center">底部居中</option>
+                {textPlacementOptions(layer.textArea).map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
               </select>
             </label>
           </div>
 
-          {/* 垂直偏移 */}
-          <div className="settingRow">
+          {/* 边距与字形间距 */}
+          <div className="settingRow formInlineRow">
+            <label className="settingFieldLabel">
+              水平边距 (px)
+              <NumberInput
+                className="settingNumberInput"
+                value={layer.marginX}
+                min={0}
+                max={500}
+                onCommit={(value) => onUpdate({ marginX: value })}
+              />
+            </label>
             <label className="settingFieldLabel">
               垂直偏移 (px)
               <NumberInput
@@ -219,6 +234,28 @@ const TextLayerCard = ({ layer, index, fonts, onUpdate }: TextLayerCardProps): J
                 min={0}
                 max={200}
                 onCommit={(value) => onUpdate({ marginY: value })}
+              />
+            </label>
+          </div>
+          <div className="settingRow formInlineRow">
+            <label className="settingFieldLabel">
+              行距 (px)
+              <NumberInput
+                className="settingNumberInput"
+                value={layer.lineSpacing ?? 0}
+                min={-100}
+                max={200}
+                onCommit={(value) => onUpdate({ lineSpacing: value })}
+              />
+            </label>
+            <label className="settingFieldLabel">
+              字距 (px)
+              <NumberInput
+                className="settingNumberInput"
+                value={layer.letterSpacing ?? 0}
+                min={-20}
+                max={100}
+                onCommit={(value) => onUpdate({ letterSpacing: value })}
               />
             </label>
           </div>

@@ -12,6 +12,7 @@
 import { useEffect, useRef } from "react"
 import type { RenderSettings } from "../../settings/types"
 import { drawPreviewToCanvas, type CanvasDrawableSource } from "../../preview/canvas/canvasRenderer"
+import { calculateImagePlacementGeometry, normalizeImagePlacement } from "../../preview/canvas/imagePlacementGeometry"
 
 /** 缩略图内部渲染的最长边上限（性能保护）。 */
 const MAX_RENDER_DIM = 900
@@ -53,8 +54,16 @@ export const LiveTemplateThumbnail = ({ image, settings }: LiveTemplateThumbnail
     }
 
     // 内部分辨率 = 图片 + 边框的真实比例，CSS 负责缩小显示
-    canvas.width = Math.max(1, sourceWidth + settings.borderLeft + settings.borderRight)
-    canvas.height = Math.max(1, sourceHeight + settings.borderTop + settings.borderBottom)
+    const placement = calculateImagePlacementGeometry(
+      sourceWidth,
+      sourceHeight,
+      normalizeImagePlacement(settings.imagePlacement)
+    )
+    if (placement === null) {
+      return
+    }
+    canvas.width = Math.max(1, Math.round(placement.targetWidth + settings.borderLeft + settings.borderRight))
+    canvas.height = Math.max(1, Math.round(placement.targetHeight + settings.borderTop + settings.borderBottom))
 
     // 把真正的 drawable 传给共享渲染器，与主预览/导出链路同一份渲染逻辑。
     drawPreviewToCanvas(canvas, drawable, settings)

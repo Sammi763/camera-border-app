@@ -54,7 +54,7 @@ import { buildPresetFromText } from "../features/quick/utils/buildPresetFromText
 import { recommendTemplateId, orientationFromSize } from "../features/quick/utils/recommendTemplate"
 import type { DesktopRuntime } from "../types/runtime"
 import type { RenderSettings } from "../features/settings/types"
-import type { Template } from "../features/template/types"
+import type { LayoutSettings, Template } from "../features/template/types"
 import type { FilmStock } from "../features/metadata/types"
 import type { QueueItem } from "../features/queue/types"
 import type { OperationScope } from "../features/queue/types"
@@ -126,6 +126,24 @@ const clampWidth = (value: number, min: number, max: number): number =>
 /** 摄影信息卡默认模板的 settingsPatch（导入照片后自动应用）。 */
 const PHOTO_INFO_CARD_DEFAULT_PATCH: Partial<RenderSettings> =
   BUILT_IN_TEMPLATES.find((t) => t.id === PHOTO_INFO_CARD_TEMPLATE_IDS.centerWhite)?.settingsPatch ?? {}
+
+/** 应用只含视觉字段的版式，并明确保留当前独立 OutputPreset 对应的输出设置。 */
+const applyLayoutSettings = (
+  current: RenderSettings,
+  incoming: Partial<RenderSettings>
+): Partial<RenderSettings> => {
+  const layout = normalizeTemplateSettings(incoming)
+  return {
+    ...layout,
+    exportFormat: current.exportFormat,
+    jpegQuality: current.jpegQuality,
+    outputSizePreset: current.outputSizePreset,
+    customOutputLongEdge: current.customOutputLongEdge,
+    preserveMetadata: current.preserveMetadata,
+    preserveColorProfile: current.preserveColorProfile,
+    preferHighBitDepth: current.preferHighBitDepth
+  }
+}
 
 export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
   const health = useEngineHealth()
@@ -319,29 +337,29 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
 
   // 加载模板时更新设置（用户主动操作，标记为已修改）。
   // 用户模板可能是旧格式（不含 textLayers），走 normalizeTemplateSettings 迁移。
-  const handleLoadTemplate = useCallback((templateSettings: RenderSettings): void => {
+  const handleLoadTemplate = useCallback((templateSettings: LayoutSettings): void => {
     userModifiedRef.current = true
-    settings.update(normalizeTemplateSettings(templateSettings))
+    settings.update(applyLayoutSettings(settings.settings, templateSettings))
     setActivePresetId(null)
   }, [settings])
 
   // 拖拽/导入模板：应用到当前设置（不保存）。
   // 导入的模板也可能是旧格式，走 normalizeTemplateSettings 迁移。
-  const handleDropApply = useCallback((templateSettings: RenderSettings): void => {
+  const handleDropApply = useCallback((templateSettings: LayoutSettings): void => {
     userModifiedRef.current = true
-    settings.update(normalizeTemplateSettings(templateSettings))
+    settings.update(applyLayoutSettings(settings.settings, templateSettings))
     setActivePresetId(null)
   }, [settings])
 
   // 默认模板自动应用回调：仅在用户未手动修改过设置时生效。
   // 生效时记录 defaultTemplateAppliedRef，避免随后导入再被摄影信息卡覆盖。
   // 默认模板也可能是旧格式，走 normalizeTemplateSettings 迁移。
-  const handleDefaultLoaded = useCallback((templateSettings: RenderSettings): void => {
+  const handleDefaultLoaded = useCallback((templateSettings: LayoutSettings): void => {
     if (userModifiedRef.current) {
       return
     }
     defaultTemplateAppliedRef.current = true
-    settings.update(normalizeTemplateSettings(templateSettings))
+    settings.update(applyLayoutSettings(settings.settings, templateSettings))
   }, [settings])
 
   // 模板管理（传入默认模板自动应用回调）
@@ -380,10 +398,10 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
   const activeItem = queue.activeItem
   const activeTextOverride = activeItem?.textOverride ?? null
 
-  // 预览图片变化时惰性读取 EXIF（供身份链与变量解析使用）
+  // 预览图片变化时惰性读取 EXIF；HEIC 使用助手生成的带元数据工作 PNG。
   useEffect(() => {
-    exif.ensureExif(queue.activeFilePath)
-  }, [exif.ensureExif, queue.activeFilePath])
+    exif.ensureExif(activeItem?.filePath ?? queue.activeFilePath)
+  }, [activeItem?.filePath, exif.ensureExif, queue.activeFilePath])
 
   // 计算当前图片的有效摄影身份（每图覆盖 > 摄影预设 > EXIF > 空）
   const selectedIdentity = activeItem !== null
@@ -769,7 +787,7 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
       content: (
         <div className="workspaceOutputTab">
           <h2 className="workspaceOutputTitle">输出</h2>
-          <p className="settingsCapabilityHint">提交按钮固定在底部 Dock；这里的设置会同时用于预览与导出。</p>
+          <p className="settingsCapabilityHint">提交按钮固定在底部 Dock；这里的设置用于生成导出文件。</p>
           <dl className="workspaceOutputSummary">
             <div><dt>格式</dt><dd>{settings.settings.exportFormat.toUpperCase()}</dd></div>
             <div><dt>尺寸</dt><dd>{settings.settings.outputSizePreset === "original" ? "原图尺寸" : settings.settings.outputSizePreset}</dd></div>
@@ -928,6 +946,7 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
         <TemplatePanel
           templateController={templates}
           currentSettings={settings.settings}
+          currentImage={preview.kind === "active" ? preview.currentImage : null}
           onLoad={handleLoadTemplate}
           onImportTemplate={handleImportTemplate}
         />

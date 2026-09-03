@@ -53,7 +53,7 @@ frontend/src/
 |---|---|---|
 | 持久化 | `userData/*.json`（经 IPC） | localStorage |
 | 文件选择/保存 | 系统对话框 | 无（用 `/api/dev/photos` 样片） |
-| HEIC 转换 | 当前开发实现（macOS `sips`；不代表最终平台支持） | 当前开发模式不支持 |
+| HEIC 转换 | 随包解码助手转临时 PNG；当前仅 macOS arm64 验证 | 浏览器模式不提供本地 HEIC 转换 |
 | 引擎请求 | dev：相对 `/api`、`/previews`，经 Vite 代理；managed：相对请求经 `app://app` 安全代理 | 相对请求经 Vite 代理（`vite.config.ts` → 127.0.0.1:8099） |
 
 ## 验证
@@ -67,5 +67,5 @@ frontend/src/
 ## 已知限制
 
 - 引擎未启动/失败时仅 Canvas 即时预览，无引擎级保真预览。
-- HEIC/HEIF 当前开发实现依赖桌面 macOS `sips`；这不是最终平台限制。Windows x64 的最终 HEIC/HEIF 支持状态为 `NOT_RUN`，须完成 [最终契约](../docs/prd.md) §0 和 [样片矩阵](../docs/test-samples.md) 后才能宣称支持。
+- HEIC/HEIF 使用随包解码助手并在临时 PNG 中保留可读取方向、ICC 与元数据；当前仅 macOS arm64 验证，macOS x64/Windows x64 未覆盖。
 - 内置模板为「settingsPatch 合并」模型（不覆盖用户已调参数），复杂版式（图层/自由拖拽）不属于本阶段验收范围（见 [docs/prd.md](../docs/prd.md) §3.9 与 [docs/tasks.md](../docs/tasks.md) P1）。

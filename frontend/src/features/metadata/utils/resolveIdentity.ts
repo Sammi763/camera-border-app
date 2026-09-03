@@ -9,33 +9,6 @@ import type { PhotoAssetStore, PhotoIdentity, ShootingPreset } from "../types"
 import { createEmptyIdentity } from "../types"
 import type { PhotoMetadata } from "../../../types/preview"
 
-/** 相机资产显示名：优先别名，其次「品牌 型号」。 */
-const cameraLabel = (store: PhotoAssetStore, assetId: string): string => {
-  const asset = store.cameras.find((c) => c.id === assetId)
-  if (asset === undefined) {
-    return ""
-  }
-  return asset.alias.trim().length > 0 ? asset.alias : `${asset.brand} ${asset.model}`.trim()
-}
-
-/** 镜头资产显示名：「品牌 型号」。 */
-const lensLabel = (store: PhotoAssetStore, assetId: string): string => {
-  const asset = store.lenses.find((l) => l.id === assetId)
-  if (asset === undefined) {
-    return ""
-  }
-  return `${asset.brand} ${asset.model}`.trim()
-}
-
-/** 胶片资产显示名：「品牌 名称」。 */
-const filmLabel = (store: PhotoAssetStore, assetId: string): string => {
-  const asset = store.films.find((f) => f.id === assetId)
-  if (asset === undefined) {
-    return ""
-  }
-  return `${asset.brand} ${asset.name}`.trim()
-}
-
 /** 取第一个有实际内容的字符串；空白值不能阻断低优先级来源。 */
 const firstNonEmpty = (...values: readonly (string | null | undefined)[]): string => {
   for (const value of values) {
@@ -66,26 +39,51 @@ export const resolvePresetIdentity = (
     camera?: string
     lens?: string
     film?: string
+    make?: string
+    model?: string
+    lensModel?: string
+    filmBrand?: string
+    filmIso?: string
+    filmType?: string
+    filmName?: string
     location?: string
     captureFormat: string
   } = { captureFormat: preset.captureFormat }
 
   if (preset.cameraAssetId !== null) {
-    const label = cameraLabel(assetStore, preset.cameraAssetId)
+    const asset = assetStore.cameras.find((candidate) => candidate.id === preset.cameraAssetId)
+    const label = asset === undefined ? "" : asset.alias.trim().length > 0
+      ? asset.alias
+      : `${asset.brand} ${asset.model}`.trim()
     if (label.length > 0) {
       result.camera = label
     }
+    if (asset !== undefined) {
+      if (asset.brand.trim().length > 0) result.make = asset.brand
+      if (asset.model.trim().length > 0) result.model = asset.model
+    }
   }
   if (preset.lensAssetId !== null) {
-    const label = lensLabel(assetStore, preset.lensAssetId)
+    const asset = assetStore.lenses.find((candidate) => candidate.id === preset.lensAssetId)
+    const label = asset === undefined ? "" : `${asset.brand} ${asset.model}`.trim()
     if (label.length > 0) {
       result.lens = label
     }
+    if (asset !== undefined && asset.model.trim().length > 0) {
+      result.lensModel = asset.model
+    }
   }
   if (preset.filmAssetId !== null) {
-    const label = filmLabel(assetStore, preset.filmAssetId)
+    const asset = assetStore.films.find((candidate) => candidate.id === preset.filmAssetId)
+    const label = asset === undefined ? "" : `${asset.brand} ${asset.name}`.trim()
     if (label.length > 0) {
       result.film = label
+    }
+    if (asset !== undefined) {
+      if (asset.brand.trim().length > 0) result.filmBrand = asset.brand
+      if (asset.iso.trim().length > 0) result.filmIso = asset.iso
+      if (asset.type.trim().length > 0) result.filmType = asset.type
+      if (asset.name.trim().length > 0) result.filmName = asset.name
     }
   }
   if (preset.defaultLocation !== null && preset.defaultLocation.trim().length > 0) {
@@ -98,6 +96,8 @@ export const resolvePresetIdentity = (
 /** 导出任务使用的图片身份输入；调用方应传入任务开始时复制的快照。 */
 export type QueueIdentityInput = {
   readonly filePath: string
+  /** 原始路径仅用于回溯；转换格式时优先读取带有迁移元数据的工作 PNG。 */
+  readonly sourcePath?: string
   readonly presetId: string | null
   readonly identityOverride: Partial<PhotoIdentity> | null
 }
@@ -120,7 +120,7 @@ export const resolveIdentityForQueueItem = (
   return mergeIdentityChain({
     override: item.identityOverride,
     preset: preset === null ? null : resolvePresetIdentity(preset, assetStore),
-    exif: exifByPath.get(item.filePath) ?? null
+    exif: exifByPath.get(item.filePath) ?? exifByPath.get(item.sourcePath ?? "") ?? null
   })
 }
 
@@ -151,6 +151,18 @@ export const mergeIdentityChain = (options: {
     rollName: firstNonEmpty(override?.rollName, preset?.rollName) || empty.rollName,
     frameNumber: firstNonEmpty(override?.frameNumber) || empty.frameNumber,
     // EXIF 不提供画幅；画幅来源只有覆盖与预设
-    captureFormat: firstNonEmpty(override?.captureFormat, preset?.captureFormat) || empty.captureFormat
+    captureFormat: firstNonEmpty(override?.captureFormat, preset?.captureFormat) || empty.captureFormat,
+    fNumber: firstNonEmpty(override?.fNumber, preset?.fNumber, exif?.fNumber, exif?.aperture),
+    exposureTime: firstNonEmpty(override?.exposureTime, preset?.exposureTime, exif?.exposureTime, exif?.shutterSpeed),
+    iso: firstNonEmpty(override?.iso, preset?.iso, exif?.iso),
+    focalLength: firstNonEmpty(override?.focalLength, preset?.focalLength, exif?.focalLength),
+    dateTimeOriginal: firstNonEmpty(override?.dateTimeOriginal, preset?.dateTimeOriginal, exif?.dateTimeOriginal),
+    make: firstNonEmpty(override?.make, preset?.make, exif?.make),
+    model: firstNonEmpty(override?.model, preset?.model, exif?.model),
+    lensModel: firstNonEmpty(override?.lensModel, preset?.lensModel, exif?.lensModel),
+    filmBrand: firstNonEmpty(override?.filmBrand, preset?.filmBrand),
+    filmIso: firstNonEmpty(override?.filmIso, preset?.filmIso),
+    filmType: firstNonEmpty(override?.filmType, preset?.filmType),
+    filmName: firstNonEmpty(override?.filmName, preset?.filmName, exif?.filmName)
   }
 }

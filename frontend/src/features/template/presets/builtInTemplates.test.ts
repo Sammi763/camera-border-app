@@ -18,8 +18,7 @@ const MINIMAL_SETTINGS: RenderSettings = {
   textArea: "image",
   fontFamily: "sans-serif",
   textLayers: [],
-  autoCrop: false,
-  filmFormat: null,
+  imagePlacement: { mode: "fit", focalX: 0.5, focalY: 0.5, rotation: 0, targetAspectRatio: null },
   gradient: { enabled: false, type: "linear", angle: 0, stops: [{ offset: 0, color: "#000000" }, { offset: 1, color: "#ffffff" }] },
   exportFormat: "png",
   jpegQuality: 95,
@@ -82,8 +81,7 @@ describe("BUILT_IN_TEMPLATES", () => {
       expect(merged.textPlacement).toBeDefined()
       expect(merged.textArea).toBeDefined()
       expect(merged.fontFamily).toBeDefined()
-      expect(merged.autoCrop).toBeDefined()
-      expect(merged.filmFormat).toBeDefined()
+      expect(merged.imagePlacement).toBeDefined()
       expect(merged.gradient).toBeDefined()
       expect(merged.exportFormat).toBeDefined()
       expect(merged.jpegQuality).toBeDefined()

@@ -75,7 +75,7 @@ RAW 扩展名与样片范围、格式/位深/ICC/元数据预期见 [`docs/test-
 
 - 支持从本机选择图片文件（多选）或图片文件夹导入。
 - 支持拖拽图片到队列面板直接导入（桌面模式）。
-- 当前工程可处理 JPEG、PNG、TIFF；HEIC/HEIF 的桌面转换和 RAW 内嵌 JPEG 读取路径存在，但尚未完成最终三平台样片验收。
+- 当前工程可处理 JPEG、PNG、TIFF 和 HEIC/HEIF；HEIC/HEIF 由随包解码助手转为临时 PNG，并在 macOS arm64 完成验证。macOS x64、Windows x64 尚未覆盖。
 - 引擎请求在开发和生产均使用相对 `/api`、`/previews`：开发由 Vite 代理转发，生产由
   `app://app` 安全代理转发到托管 JavaBridge 的当前回环端口；Renderer 不获得绝对引擎地址。
 - WebP、BMP 即使在开发环境可被系统解码，也不属于最终支持格式。
@@ -205,9 +205,9 @@ camera-border-app/
 
 ## 当前限制
 
-当前版本仍是工程基线：ICC 全链路保留、16-bit 处理、完整元数据复制和三个固定导出档位
-尚未完成，现有输出控件不得被理解为最终支持。HEIC/HEIF 当前主要依赖 macOS 桌面转换；
-RAW 当前只能按内嵌 JPEG 预览路径验收，不能以任何真实显影路径作为产品承诺。
+当前版本仍需按平台样片矩阵继续验收输出位深与完整元数据覆盖；Java 导出会对 EXIF、ICC
+和高位深逐项返回 `APPLIED` 或 `DOWNGRADED`，不会把未应用能力标成成功。HEIC/HEIF 使用随包
+解码助手，RAW 当前只能按内嵌 JPEG 预览路径验收，不能以任何真实显影路径作为产品承诺。
 
 打包脚本已支持 macOS `.dmg` 与 Windows x64 `.exe` 的构建链路（`pnpm fetch:runtime && pnpm package`，
 随包 Java Runtime，最终用户无需安装 Java、Node.js 或 Python）。macOS arm64、macOS x64 和

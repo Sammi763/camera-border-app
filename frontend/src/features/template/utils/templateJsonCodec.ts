@@ -7,8 +7,7 @@
  */
 
 import type { Template } from "../types"
-import type { RenderSettings } from "../../settings/types"
-import { normalizeTemplateSettings } from "./normalizeTemplate"
+import { toLayoutSettings } from "./templateSettings"
 
 // ---- 导出格式 ---------------------------------------------------------------
 
@@ -19,10 +18,14 @@ export type TemplateExportFile = {
   readonly template: {
     readonly id: string
     readonly name: string
-    readonly settings: RenderSettings
+    /** 版式只包含视觉设置；输出格式/尺寸/质量属于独立 OutputPreset。 */
+    readonly settings: Record<string, unknown>
     readonly createdAt: number
   }
 }
+
+/** 从版式快照剥离输出设置，避免模板和 OutputPreset 发生隐式耦合。 */
+export { toLayoutSettings as stripOutputSettings }
 
 // ---- 校验结果 --------------------------------------------------------------
 
@@ -44,7 +47,7 @@ export const encodeTemplateJson = (template: Template): string => {
     template: {
       id: template.id,
       name: template.name,
-      settings: template.settings,
+      settings: toLayoutSettings(template.settings),
       createdAt: template.createdAt,
     },
   }
@@ -112,7 +115,7 @@ export const decodeTemplateJson = (json: string): ImportResult => {
   const requiredFields = [
     "borderColor", "borderTop", "borderBottom", "borderLeft", "borderRight",
     "textContent", "textFontSize", "textColor", "textPlacement", "textArea",
-    "fontFamily", "autoCrop", "filmFormat", "gradient", "exportFormat", "jpegQuality",
+    "fontFamily", "gradient",
   ]
   for (const field of requiredFields) {
     if (!(field in settings)) {
@@ -130,7 +133,7 @@ export const decodeTemplateJson = (json: string): ImportResult => {
   const template: Template = {
     id: crypto.randomUUID(),
     name: (tpl["name"] as string).trim(),
-    settings: normalizeTemplateSettings(tpl["settings"] as RenderSettings),
+    settings: toLayoutSettings(tpl["settings"] as Record<string, unknown>),
     createdAt: Date.now(),
   }
 

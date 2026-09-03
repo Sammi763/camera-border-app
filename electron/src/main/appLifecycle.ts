@@ -161,15 +161,13 @@ export const runApplication = (): void => {
 
     const currentBridge = bridge
     bridge = null
-    if (currentBridge === null) {
-      void cleanupHeicTempFiles()
-      return
-    }
-
     event.preventDefault()
+    const cleanupTasks: Array<Promise<void>> = [cleanupHeicTempFiles()]
+    if (currentBridge !== null) {
+      cleanupTasks.unshift(currentBridge.dispose())
+    }
     void Promise.all([
-      currentBridge.dispose(),
-      cleanupHeicTempFiles()
+      ...cleanupTasks
     ]).catch((error: unknown) => {
       console.error("[app] 退出清理失败", error)
     }).finally(() => {

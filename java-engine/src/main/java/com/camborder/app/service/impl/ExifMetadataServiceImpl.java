@@ -14,10 +14,10 @@ import java.io.File;
 
 /**
  * 基础 EXIF 读取服务实现（service.impl 层）。
- * 基于 metadata-extractor 读取 JPEG 基础 EXIF：相机型号、镜头型号、光圈、快门、ISO、焦距。
+ * 基于 metadata-extractor 读取可读取的 EXIF：相机型号、镜头型号、光圈、快门、ISO、焦距和拍摄时间。
  *
  * 当前支持与限制（MVP 范围）：
- * - 仅读取，不写回元数据；不处理 ICC/16-bit/TIFF 高位深。
+ * - 仅读取，不写回元数据；ICC 由导出编码器单独搬运，位深由图像编码器处理。
  * - 文件不存在或不可读 -> 抛受控异常 -> 400（与预览/导出一致）。
  * - 读取不到对应 EXIF 字段时该字段返回 null，整体不抛 500。
  * - 依赖 metadata-extractor 的格式识别能力；非 JPEG（如无 EXIF 的 PNG/TIFF）通常读不到字段，返回全 null。
@@ -40,13 +40,20 @@ public final class ExifMetadataServiceImpl implements PhotoMetadataService {
             ExifIFD0Directory ifd0 = metadata.getFirstDirectoryOfType(ExifIFD0Directory.class);
             ExifSubIFDDirectory subIfd = metadata.getFirstDirectoryOfType(ExifSubIFDDirectory.class);
 
+            final String fNumber = readAperture(subIfd);
+            final String exposureTime = readShutterSpeed(subIfd);
             return new PhotoMetadataResponse(
-                    readString(ifd0, subIfd, ExifDirectoryBase.TAG_MAKE, ExifDirectoryBase.TAG_MODEL),
+                    readString(ifd0, ExifDirectoryBase.TAG_MAKE, ExifDirectoryBase.TAG_MODEL),
                     readLensModel(metadata),
-                    readAperture(subIfd),
-                    readShutterSpeed(subIfd),
+                    fNumber,
+                    exposureTime,
+                    fNumber,
+                    exposureTime,
                     readIso(ifd0, subIfd),
-                    readFocalLength(subIfd)
+                    readFocalLength(subIfd),
+                    readDateTimeOriginal(subIfd, ifd0),
+                    readTag(ifd0, ExifDirectoryBase.TAG_MAKE),
+                    readTag(ifd0, ExifDirectoryBase.TAG_MODEL)
             );
         } catch (PreviewGenerationException e) {
             throw e;
@@ -57,7 +64,7 @@ public final class ExifMetadataServiceImpl implements PhotoMetadataService {
     }
 
     /** 读取相机型号：合并 MAKE 与 MODEL，例如 "Canon EOS R5"。读不到返回 null。 */
-    private String readString(final ExifIFD0Directory ifd0, final ExifSubIFDDirectory subIfd,
+    private String readString(final ExifIFD0Directory ifd0,
                               final int makeTag, final int modelTag) {
         String make = ifd0 == null ? null : ifd0.getString(makeTag);
         String model = ifd0 == null ? null : ifd0.getString(modelTag);
@@ -137,6 +144,21 @@ public final class ExifMetadataServiceImpl implements PhotoMetadataService {
             return null;
         }
         return trimTrailingZero(focal) + " mm";
+    }
+
+    /** 读取原始拍摄时间；优先 DateTimeOriginal，缺失时回退到 TIFF DateTime。 */
+    private String readDateTimeOriginal(final ExifSubIFDDirectory subIfd,
+                                        final ExifIFD0Directory ifd0) {
+        String original = readTag(subIfd, ExifDirectoryBase.TAG_DATETIME_ORIGINAL);
+        return original != null ? original : readTag(ifd0, ExifDirectoryBase.TAG_DATETIME);
+    }
+
+    private String readTag(final com.drew.metadata.Directory directory, final int tag) {
+        if (directory == null || !directory.containsTag(tag)) {
+            return null;
+        }
+        String value = directory.getString(tag);
+        return value == null || value.isBlank() ? null : value.trim();
     }
 
     /** 去掉 double 的小数尾零，2.0 -> "2"，2.8 -> "2.8"。 */

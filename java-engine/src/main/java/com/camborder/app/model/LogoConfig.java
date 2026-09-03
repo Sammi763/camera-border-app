@@ -17,6 +17,12 @@ public final class LogoConfig {
     private String placement;
     private int size;
     private String colorMode;
+    /** 自定义 PNG/签名的本地路径；为空时绘制 brand 文字。 */
+    private String imagePath;
+    /** 自定义 PNG/签名不透明度（0-1）。 */
+    private double opacity = 1.0;
+    /** 是否为 PNG/签名绘制反差阴影。 */
+    private boolean autoContrast = true;
 
     public LogoConfig() {
     }
@@ -77,5 +83,29 @@ public final class LogoConfig {
 
     public void setColorMode(final String colorMode) {
         this.colorMode = colorMode;
+    }
+
+    public String getImagePath() {
+        return imagePath;
+    }
+
+    public void setImagePath(final String imagePath) {
+        this.imagePath = imagePath;
+    }
+
+    public double getOpacity() {
+        return opacity;
+    }
+
+    public void setOpacity(final double opacity) {
+        this.opacity = opacity;
+    }
+
+    public boolean isAutoContrast() {
+        return autoContrast;
+    }
+
+    public void setAutoContrast(final boolean autoContrast) {
+        this.autoContrast = autoContrast;
     }
 }

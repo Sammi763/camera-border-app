@@ -54,4 +54,14 @@ public interface ImageRenderService {
      * @throws com.camborder.app.exception.RenderExportException 当输出路径非法或写入失败时抛出
      */
     ImageEncoder.ExportResult writeToFile(BufferedImage image, ExportSettings export);
+
+    /**
+     * 带源图路径的导出入口，用于保留源图 EXIF/ICC。
+     * 旧实现默认转调无路径版本，保证测试替身和外部实现仍可工作。
+     */
+    default ImageEncoder.ExportResult writeToFile(final BufferedImage image,
+                                                  final ExportSettings export,
+                                                  final String sourcePath) {
+        return writeToFile(image, export);
+    }
 }

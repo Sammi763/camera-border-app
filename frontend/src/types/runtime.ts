@@ -117,12 +117,16 @@ export type DesktopBridge = {
    * 用户取消时返回 null。
    */
   readonly importTemplateJson: () => Promise<string | null>
+  /** 打开 PNG 文件选择器，返回自定义 Logo/签名的绝对路径；取消返回 null。 */
+  readonly selectLogoFile?: () => Promise<string | null>
   /**
-   * 将 HEIC/HEIF 文件转换为临时 JPEG 文件供引擎处理。
+   * 将 HEIC/HEIF 文件转换为临时 PNG 文件供引擎处理。
    * 返回转换后的临时文件路径数组（与输入路径一一对应）。
    * 转换失败的文件返回 null。非 HEIC 文件原样返回。
    */
   readonly convertHeicFiles: (paths: readonly string[]) => Promise<readonly (string | null)[]>
+  /** 探测随包 HEIC 解码助手是否存在且可加载。 */
+  readonly probeHeicDecoder?: () => Promise<boolean>
   /**
    * 枚举系统已安装的字体列表。
    * 返回字体族名称数组；获取失败时返回空数组。

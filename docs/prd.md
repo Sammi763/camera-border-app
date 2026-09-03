@@ -130,7 +130,7 @@ macOS x64 的 `.dmg` 和 Windows x64 的 `.exe` 交付，不要求登录。
 - 数码照片自动读取并排版相机、镜头、光圈、快门、ISO、焦距等 EXIF 信息。
 - 胶片照片通过可分类的拍摄信息预设补充相机、镜头、胶片和拍摄画幅等信息。
 - 支持版式复用和批量导出，减少重复劳动。
-- 在专业模式下尽量保留原图分辨率、色彩空间、位深和元数据。
+- 在统一工作台的高保真导出档位中尽量保留原图分辨率、色彩空间、位深和元数据。
 
 ### 1.4 产品边界
 
@@ -246,7 +246,7 @@ macOS x64 的 `.dmg` 和 Windows x64 的 `.exe` 交付，不要求登录。
 阶段建议：
 
 - MVP 不需要完整 Konva 编辑器。
-- V2 可加入“高级模板编辑器”，允许自由拖放文字、Logo、矩形和装饰元素。
+- 后续可加入自由图层编辑器，允许拖放文字、Logo、矩形和装饰元素。
 
 ### 2.5 OneFrame
 
@@ -278,21 +278,16 @@ macOS x64 的 `.dmg` 和 Windows x64 的 `.exe` 交付，不要求登录。
 
 ### 3.1 信息架构
 
-应用采用“三层能力”设计：
-
-- 基础模式：导入图片、选择版式、微调边框和文字、导出。
-- 效率模式：批量导入、每图文字覆盖、EXIF 自动填充、版式保存、批量导出。
-- 专业模式：TIFF、16-bit、ICC、元数据复制、高保真预览和导出。
-
-其中，专业模式属于本计划目标，不得在当前状态中写成已经支持。阶段 0 先冻结本节
-契约，再按样片矩阵实现和验收本地安装、图片导入、数码 EXIF、拍摄信息预设、版式和
-批量导出闭环。
+应用采用一个统一工作台：导入、版式、摄影信息、预览和导出始终在同一套页面与状态中
+协同工作。批量作用域、每图覆盖和高保真导出能力是工作台里的设置与操作，不再拆成
+互相独立的产品模式。阶段 0 先冻结本节契约，再按样片矩阵验收本地安装、图片导入、
+数码 EXIF、拍摄信息预设、版式和批量导出闭环。
 
 ### 3.2 首屏流程
 
 优先推荐两种入口：
 
-- 快速开始：添加图片后自动进入工作台，使用默认版式。
+- 导入工作台：添加图片后自动进入工作台，使用默认版式。
 - 版式入口：先选择版式，再导入图片或应用到当前图片。
 
 首批内置版式建议：
@@ -473,18 +468,16 @@ V1.5 支持：
 
 - 色彩效果必须可关闭。
 - 导出时必须明确标注“将改变原图色彩”。
-- 高保真模式禁用色彩效果，除非用户明确确认。
+- 高保真导出档位禁用色彩效果，除非用户明确确认。
 
 色彩效果不是摄影信息边框 MVP 的交付前置条件，首版可不提供。
 
 ### 3.9 版式系统
 
 产品界面统一称“版式”。实现层的 `Template` 可以继续作为技术对象，但不能把技术对象
-名称直接当成新的用户术语。版式分三类：
-
-- 参数版式：保存边框、文字、渐变、导出设置。
-- 视觉版式：保存布局风格和可调参数。
-- 批量版式：保存全局样式和每图文字规则。
+名称直接当成新的用户术语。版式只保存边框、背景、渐变、图片放置、文字、Logo 和
+其它视觉布局参数；导出格式、尺寸、质量与元数据策略由独立 `OutputPreset` 管理，
+不进入版式。
 
 版式能力：
 
@@ -505,15 +498,20 @@ V1.5 支持：
   "id": "white-frame",
   "name": "经典白边",
   "version": 1,
-  "layout": "classic-info-bar",
-  "border": {},
-  "background": {},
-  "gradient": {},
-  "texts": [],
-  "logos": [],
-  "captureFormat": "film-135",
-  "export": {},
-  "metadata": {}
+  "settings": {
+    "imagePlacement": {
+      "mode": "fit",
+      "focalX": 0.5,
+      "focalY": 0.5,
+      "rotation": 0,
+      "targetAspectRatio": null
+    },
+    "border": {},
+    "gradient": {},
+    "textLayers": [],
+    "logo": {}
+  },
+  "preview": { "thumbnail": null }
 }
 ```
 
@@ -586,9 +584,9 @@ Contact Sheet 是可选的后续展示能力，不属于当前摄影信息边框
 必须作为 §0.3 定义的同档位输出格式变体提供，不得新增第四个档位；前端必须展示档位、
 输出格式、位深、尺寸、色彩和元数据结果，并拒绝未定义的档位/格式组合。
 
-当前实现中的“原图 / 1080P / 2K / 4K / 自定义长边”等尺寸控件不属于冻结契约；在完成
-产品实现前，不得把它们写成最终导出档位。导出不能覆盖原图，导出结果必须有明确的
-成功/失败状态和实际格式说明。
+当前实现中的“原图 / 1080P / 2K / 4K / 自定义长边”等控件属于输出预设的设置，不能
+写入版式。最终导出仍只能使用冻结的导出档位与格式变体；导出不能覆盖原图，导出结果
+必须有明确的成功/失败状态和实际格式说明。
 
 导出原则：
 
@@ -694,11 +692,11 @@ AI 使用边界：
   根据拍摄画幅提供边框布局建议。
 - EXIF 基础读取、每图文字覆盖、版式保存/加载/导入/导出、文本变量和批量队列工作流。
 - 拍摄信息预设与本地资产相关的工程代码路径，以及当前的统一渐进式工作台入口；这些路径仍需按
-  §0.6 样片矩阵和三平台验收，不能等同于最终支持。
-- 当前 HEIC/HEIF 主要有 macOS 桌面转换路径；RAW 相关代码可能存在实验性显影分支，
-  但产品验收只计入内嵌 JPEG 预览，任何真实显影分支都不属于产品支持。
-- 当前导出代码路径可生成 PNG/JPEG，并保留部分 TIFF 路径；当前版本尚未完成 §0.3 要求的
-  8/16-bit、ICC、全部元数据和三个固定导出档位，因此不能把当前控件当作最终导出契约。
+  §0.6 样片矩阵和三平台验收，不能等同于最终平台支持。
+- HEIC/HEIF 统一通过随包解码助手在隔离 worker 中转换；转换结果会物理应用方向，并尽力保留
+  可读取的 EXIF/ICC。RAW 的产品边界仍是内嵌 JPEG 预览，任何真实显影分支都不属于产品承诺。
+- 当前导出代码路径可生成 PNG/JPEG，并保留部分 TIFF 路径；EXIF/ICC/高位深是否真正写入由
+  导出结果逐项报告 `APPLIED` 或 `DOWNGRADED`，不能把降级结果当作能力已应用。
 - Electron 打包链路、随包运行时和引擎故障诊断已存在，但各最终平台的干净机器验收仍以
   [发布清单](release-checklist.md) 为准。
 
@@ -782,18 +780,24 @@ Java Engine：
 ```json
 {
   "imagePath": "/path/to/photo.jpg",
-  "border": {},
-  "background": {},
-  "gradient": {},
+  "border": { "top": 20, "bottom": 80, "left": 20, "right": 20, "color": "#ffffff" },
+  "gradient": null,
   "texts": [],
-  "logos": [],
-  "photoIdentity": {},
-  "captureFormat": "film-135",
-  "autoCrop": false,
-  "crop": {},
-  "colorEffect": null
+  "imagePlacement": {
+    "mode": "fit",
+    "focalX": 0.5,
+    "focalY": 0.5,
+    "rotation": 0,
+    "targetAspectRatio": null
+  },
+  "logo": null,
+  "borderStyle": null
 }
 ```
+
+拍摄画幅只负责向 `imagePlacement.targetAspectRatio` 提供布局建议；它不是
+`RenderRecipe` 的独立渲染字段。输出格式、尺寸、质量和元数据策略属于独立的
+`ExportSettings`/`OutputPreset`，不会随版式保存。
 
 ### 6.2 TextItem
 
@@ -807,12 +811,11 @@ Java Engine：
   "placement": "border-bottom-center",
   "marginX": 0,
   "marginY": 20,
+  "lineSpacing": 0,
   "letterSpacing": 0,
-  "lineHeight": 1.2,
-  "shadow": null,
-  "stroke": null,
-  "direction": "horizontal",
-  "background": null
+  "backgroundEnabled": false,
+  "shadowEnabled": false,
+  "strokeEnabled": false
 }
 ```
 
@@ -835,7 +838,7 @@ Java Engine：
 
 ```json
 {
-  "captureFormat": "film-135",
+  "captureFormat": "135",
   "camera": "Leica M6",
   "lens": "Voigtlander 35mm F1.4",
   "film": "Kodak Portra 400",
@@ -855,7 +858,7 @@ Java Engine：
   "id": "preset-film-135-portra",
   "name": "135 Portra 日常",
   "category": "135 胶片",
-  "captureFormat": "film-135",
+  "captureFormat": "135",
   "cameraAssetId": "camera-leica-m6",
   "lensAssetId": "lens-voigtlander-35-14",
   "filmAssetId": "film-portra-400",
@@ -915,16 +918,30 @@ Java Engine：
 {
   "id": "tpl-classic-white",
   "name": "经典白边",
-  "version": 1,
+  "version": 2,
   "category": "内置",
-  "recipe": {},
-  "export": {},
+  "settings": {
+    "imagePlacement": {
+      "mode": "fit",
+      "focalX": 0.5,
+      "focalY": 0.5,
+      "rotation": 0,
+      "targetAspectRatio": null
+    },
+    "border": {},
+    "textLayers": [],
+    "logo": null
+  },
   "preview": {
     "thumbnail": null,
     "description": "白底深字，底部拍摄信息"
   }
 }
 ```
+
+版式只描述视觉布局；输出格式、尺寸、质量和元数据策略由独立
+`OutputPreset` 保存，不得写入 `settings` 或版式 JSON。读取早期 `settings` 中的
+`filmFormat`、`autoCrop` 及扁平/嵌套输出字段时，应用会迁移到 v2 结构、剥离输出字段后再保存。
 
 ## 7. API 规划
 

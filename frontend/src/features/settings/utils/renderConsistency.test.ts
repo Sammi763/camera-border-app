@@ -30,8 +30,6 @@ const makeSettings = (
   textArea: "border",
   fontFamily: "sans-serif",
   textLayers: layers,
-  autoCrop: false,
-  filmFormat: null,
   gradient: { enabled: false, type: "linear", angle: 0, stops: [{ offset: 0, color: "#000000" }, { offset: 1, color: "#ffffff" }] },
   exportFormat: "png",
   jpegQuality: 95,

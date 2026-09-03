@@ -90,7 +90,7 @@ mvn package              # 打包 target/camera-border-engine.jar（托管模式
 
 ## 已知限制
 
-- 未实现：ICC Profile 全链路保留、16-bit 处理、TIFF 高位深导出、EXIF/XMP/IPTC/GPS 写回、导出保真报告（见 [README.md](../README.md) 当前边界与 [docs/prd.md](../docs/prd.md) 路线图）。
+- 专业导出会按实际编码能力报告 EXIF、ICC 与高位深状态：PNG/JPEG 可写回可读取的 EXIF/ICC；当前 Java2D 合成结果为 8-bit 时，高位深请求明确报告 `DOWNGRADED`，不会伪造保留。未识别或损坏的元数据不会阻断像素导出。
 - RAW：仅提取**内嵌 JPEG 预览**（NEF/CR2/CR3/ARW/RAF/DNG/ORF/RW2/PEF）；无可读取内嵌 JPEG 时明确失败，非完整 RAW 解码。
 - 错误语义：4xx=请求不合法、5xx=服务异常；受控异常不 500 堆栈直出（`GlobalExceptionHandler`）。
 - 字体接入流程与授权核验见 `docs/FONT_CANDIDATES.md`。

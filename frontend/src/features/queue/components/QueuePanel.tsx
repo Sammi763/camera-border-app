@@ -68,7 +68,7 @@ const QueueRow = ({
         <span className="queueName">
           {item.fileName}
           {item.converted && (
-            <span className="queueRawBadge" title={`HEIC 已转换为临时 JPEG 工作链路处理`}> HEIC→JPEG</span>
+            <span className="queueRawBadge" title={`HEIC 已由随包解码助手转换为临时 PNG`}> HEIC→PNG</span>
           )}
           {isRawFile(item.filePath) && (
             <span className="queueRawBadge" title={getRawFormatName(item.filePath) ?? "RAW 格式"}> RAW</span>
@@ -250,7 +250,7 @@ export const QueuePanel = ({ queue }: QueuePanelProps): JSX.Element => {
         if (r.successCount === 0 && r.failedFiles.length === 0) return null
         const parts: string[] = []
         if (r.convertedFiles.length > 0) {
-          parts.push(`${r.convertedFiles.length} 张 HEIC 已转换为 JPEG`)
+          parts.push(`${r.convertedFiles.length} 张 HEIC/HEIF 已转换为 PNG`)
         }
         if (r.heicUnsupported) {
           parts.push("当前平台暂不支持 HEIC 转换")

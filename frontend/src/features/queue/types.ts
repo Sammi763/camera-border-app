@@ -14,7 +14,7 @@ import type { IdentitySourceMap } from "../metadata/utils/resolveIdentityFieldSo
 /** 队列中的图片项。`filePath` 是引擎实际处理的路径（可能是转换后的临时文件）。 */
 export type QueueItem = {
   readonly id: string
-  /** 引擎实际处理的文件路径（HEIC 转换后为临时 JPEG 路径）。 */
+  /** 引擎实际处理的文件路径（HEIC/HEIF 转换后为临时 PNG 路径）。 */
   readonly filePath: string
   /** 用户可见的原始文件名。 */
   readonly fileName: string
@@ -22,9 +22,9 @@ export type QueueItem = {
   readonly sourcePath: string
   /** 原始文件格式（如 "heic"、"jpg"）。 */
   readonly sourceFormat: string
-  /** 是否发生了格式转换（如 HEIC -> JPEG）。 */
+  /** 是否发生了格式转换（如 HEIC/HEIF -> PNG）。 */
   readonly converted: boolean
-  /** 转换后的工作格式（如 "jpg"），未转换时与 sourceFormat 相同。 */
+  /** 转换后的工作格式（如 "png"），未转换时与 sourceFormat 相同。 */
   readonly workingFormat: string
   /** 每张图独立的文字内容覆盖。null 表示使用全局默认。 */
   readonly textOverride: string | null
@@ -49,7 +49,7 @@ export type ImportResult = {
   readonly failedFiles: readonly string[]
   /** 被转换的 HEIC 文件名列表。 */
   readonly convertedFiles: readonly string[]
-  /** 非 macOS 平台不支持 HEIC 时的提示。 */
+  /** 随包解码助手不可用或解码失败时的提示。 */
   readonly heicUnsupported: boolean
 }
 

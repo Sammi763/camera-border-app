@@ -37,6 +37,10 @@ export type TextItem = {
   readonly placement: string
   readonly marginX: number
   readonly marginY: number
+  /** 行间距（px），0 表示使用字号默认行高。 */
+  readonly lineSpacing?: number
+  /** 字距（px），可为负值。 */
+  readonly letterSpacing?: number
   /** 背景条：是否启用。 */
   readonly backgroundEnabled?: boolean
   /** 背景条：颜色。 */
@@ -71,6 +75,12 @@ export type LogoConfig = {
   readonly placement: string
   readonly size: number
   readonly colorMode: "auto-contrast" | "light" | "dark"
+  /** 自定义 PNG/签名的本地路径；为空时按文字模式绘制。 */
+  readonly imagePath?: string | null
+  /** 自定义 PNG/签名不透明度，范围 0-1。 */
+  readonly opacity?: number
+  /** 是否根据所在边框颜色自动选择文字/签名对比度。 */
+  readonly autoContrast?: boolean
 }
 
 /**
@@ -102,8 +112,8 @@ export type RenderRecipe = {
   readonly border: BorderConfig | null
   readonly gradient: GradientConfig | null
   readonly texts: readonly TextItem[]
-  readonly filmFormat: string | null
-  readonly autoCrop: boolean
+  /** v2 图片放置几何；兼容旧请求时 Java 引擎仍会补默认值。 */
+  readonly imagePlacement: ImagePlacement
   /** 品牌标识配置，null 表示不绘制品牌标识。 */
   readonly logo?: LogoConfig | null
   /** 边框风格；缺省/null/未识别 id 时引擎保持原始渲染行为。 */
@@ -222,6 +232,8 @@ export type RenderJobStatusResponse = {
 export type FilmFormatInfo = {
   readonly id: string
   readonly label: string
+  /** 画幅布局的明确目标宽高比，不再写入 RenderRecipe.filmFormat。 */
+  readonly targetAspectRatio?: number | null
   readonly recommendedBorder: BorderConfig
 }
 
@@ -229,11 +241,27 @@ export type FilmFormatInfo = {
  * 照片元数据，POST /api/photo-metadata 返回。
  */
 export type PhotoMetadata = {
+  readonly make?: string
+  readonly model?: string
   readonly cameraModel?: string
   readonly lensModel?: string
   readonly aperture?: string
   readonly shutterSpeed?: string
+  readonly fNumber?: string
+  readonly exposureTime?: string
   readonly iso?: string
   readonly focalLength?: string
   readonly filmName?: string
+  readonly dateTimeOriginal?: string
+}
+
+/** RenderRecipe v2 图片放置配置。 */
+export type ImagePlacementMode = "fit" | "fill"
+
+export type ImagePlacement = {
+  readonly mode: ImagePlacementMode
+  readonly focalX: number
+  readonly focalY: number
+  readonly rotation: number
+  readonly targetAspectRatio: number | null
 }

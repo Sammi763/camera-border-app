@@ -12,12 +12,16 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },
-  "dependencies": {},
+  "dependencies": {
+    "heic-convert": "2.1.0",
+    "heic-decode": "2.1.0",
+    "pngjs": "6.0.0"
+  },
   "devDependencies": {
     "@types/node": "^22.10.0",
-    "typescript": "^5.7.2",
+    "electron": "^31.0.0",
     "electron-builder": "^25.1.8",
-    "vitest": "^2.1.9",
-    "electron": "^31.0.0"
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.9"
   }
 }

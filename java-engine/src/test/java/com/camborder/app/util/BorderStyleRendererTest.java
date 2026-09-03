@@ -137,6 +137,35 @@ final class BorderStyleRendererTest extends AbstractControllerTest {
     }
 
     @Test
+    void negativeBandUsesTheActualHeightForAOneSidedStrip() {
+        BufferedImage canvas = new BufferedImage(160, 100, BufferedImage.TYPE_INT_RGB);
+        for (int y = 0; y < canvas.getHeight(); y++) {
+            for (int x = 0; x < canvas.getWidth(); x++) {
+                canvas.setRGB(x, y, new Color(10, 10, 10).getRGB());
+            }
+        }
+        BorderConfig border = new BorderConfig(40, 0, 40, 40, "#101010");
+
+        borderStyleRenderer.draw(
+                canvas,
+                new BorderStyle("negative-band", 100, 6, 12, "#ffffff"),
+                border,
+                80,
+                60);
+
+        // 单侧上边框的孔高应为 40 * 0.32（而不是把缺失的下边框当成 1px）。
+        int lightPixelsNearExpectedEdge = 0;
+        for (int y = 14; y <= 16; y++) {
+            for (int x = 0; x < canvas.getWidth(); x++) {
+                if (isLightGray(canvas.getRGB(x, y))) {
+                    lightPixelsNearExpectedEdge++;
+                }
+            }
+        }
+        assertThat(lightPixelsNearExpectedEdge).isGreaterThan(0);
+    }
+
+    @Test
     void matDoubleLineDrawsTwoStrokes() throws Exception {
         BufferedImage image = renderWithStyle(new BorderStyle("mat-double-line", 70, 9, 0, "#cfcfcf"));
         // 内线在 y = 40 - 18 = 22，外线在 y = 40 - 18 - 9 = 13 附近

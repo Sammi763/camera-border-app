@@ -2,8 +2,7 @@
  * 变量插入助手面板。
  *
  * 提供变量按钮和快捷模板，点击后将变量插入文字内容输入框。
- * 用户界面只保留当前产品流程的变量（相机/镜头/胶片/画幅/地点/帧号）；
- * 冲洗/扫描/实验室/Roll 变量仅保留解析兼容，不再提供 UI 入口。
+ * 技术拍摄变量与身份变量统一提供入口；旧的冲洗/扫描/实验室/Roll 变量仍保留解析兼容。
  */
 
 type VariableHelpPanelProps = {
@@ -20,12 +19,18 @@ const VARIABLES = [
   { var: "{Film}", label: "胶片" },
   { var: "{CaptureFormat}", label: "画幅" },
   { var: "{Location}", label: "地点" },
-  { var: "{FrameNumber}", label: "帧号" }
+  { var: "{FrameNumber}", label: "帧号" },
+  { var: "{FNumber}", label: "光圈" },
+  { var: "{ExposureTime}", label: "曝光时间" },
+  { var: "{ISO}", label: "ISO" },
+  { var: "{FocalLength}", label: "焦距" },
+  { var: "{DateTimeOriginal}", label: "拍摄时间" }
 ] as const
 
 /** 快捷模板。 */
 const COMMON_TEMPLATES = [
   { label: "经典参数", template: "{Camera} · {Lens} · {Film}" },
+  { label: "拍摄参数", template: "{FNumber} · {ExposureTime} · {ISO} · {FocalLength}" },
   { label: "胶片信息", template: "{CaptureFormat} · {Film} · {Location}" },
   { label: "逐行排列", template: "{Camera}\n{Lens}\n{Film}" }
 ] as const

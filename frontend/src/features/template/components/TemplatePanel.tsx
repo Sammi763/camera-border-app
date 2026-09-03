@@ -1,13 +1,18 @@
 import { useCallback, useRef, useState } from "react"
 import type { RenderSettings } from "../../settings/types"
-import type { Template, TemplateController } from "../types"
+import type { LayoutSettings, Template, TemplateController } from "../types"
 import { encodeTemplateJson, decodeTemplateJson, deduplicateTemplateName } from "../utils/templateJsonCodec"
 import { buildTemplateExportFileName } from "../utils/templateFileName"
+import { LiveTemplateThumbnail } from "./LiveTemplateThumbnail"
+import { TemplateThumbnail } from "./TemplateThumbnail"
+import type { BuiltInTemplate } from "../presets/builtInTemplates"
 
 type TemplatePanelProps = {
   readonly templateController: TemplateController
   readonly currentSettings: RenderSettings
-  readonly onLoad: (settings: RenderSettings) => void
+  /** 当前照片；存在时用户版式缩略图使用真实 Canvas 渲染。 */
+  readonly currentImage: HTMLImageElement | null
+  readonly onLoad: (settings: LayoutSettings) => void
   /** 导入模板后的回调（用于将模板保存到模板库）。 */
   readonly onImportTemplate: ((template: Template) => void) | undefined
 }
@@ -15,13 +20,27 @@ type TemplatePanelProps = {
 export const TemplatePanel = ({
   templateController,
   currentSettings,
+  currentImage,
   onLoad,
   onImportTemplate,
 }: TemplatePanelProps): JSX.Element => {
   const [newName, setNewName] = useState("")
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editingName, setEditingName] = useState("")
   const [importError, setImportError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
-  const { templates, defaultTemplateId, lastError, saveTemplate, deleteTemplate, setDefault, clearError } = templateController
+  const {
+    templates,
+    defaultTemplateId,
+    lastError,
+    saveTemplate,
+    updateTemplate,
+    duplicateTemplate,
+    renameTemplate,
+    deleteTemplate,
+    setDefault,
+    clearError
+  } = templateController
 
   const handleSave = useCallback(() => {
     const trimmed = newName.trim()
@@ -70,6 +89,26 @@ export const TemplatePanel = ({
 
   // ---- 导入 ----------------------------------------------------------------
 
+  const processImportedJson = useCallback((json: string) => {
+    const result = decodeTemplateJson(json)
+    if (!result.ok) {
+      setImportError(result.error)
+      return
+    }
+
+    // 去重名称
+    const existingNames = templates.map((t) => t.name)
+    const uniqueName = deduplicateTemplateName(result.template.name, existingNames)
+    const finalTemplate: Template = { ...result.template, name: uniqueName }
+
+    if (onImportTemplate !== undefined) {
+      onImportTemplate(finalTemplate)
+    } else {
+      saveTemplate(finalTemplate.name, finalTemplate.settings)
+    }
+    setImportError(null)
+  }, [templates, saveTemplate, onImportTemplate])
+
   const handleImportClick = useCallback(() => {
     setImportError(null)
 
@@ -90,7 +129,7 @@ export const TemplatePanel = ({
       // 浏览器模式：触发隐藏 file input
       fileInputRef.current?.click()
     }
-  }, [onImportTemplate])
+  }, [processImportedJson])
 
   const handleFileInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -108,27 +147,18 @@ export const TemplatePanel = ({
     reader.readAsText(file)
     // 重置 input，允许重复选择同一文件
     e.target.value = ""
-  }, [onImportTemplate])
+  }, [processImportedJson])
 
-  const processImportedJson = useCallback((json: string) => {
-    const result = decodeTemplateJson(json)
-    if (!result.ok) {
-      setImportError(result.error)
-      return
+  const thumbFor = (settings: LayoutSettings): BuiltInTemplate["thumb"] => {
+    const bottom = Math.max(0, settings.borderBottom)
+    const total = Math.max(1, settings.borderTop + bottom + 100)
+    return {
+      borderColor: settings.borderColor || "#ffffff",
+      photoColor: "#6f7278",
+      textColor: settings.textColor || "#222222",
+      bottomRatio: Math.min(0.8, Math.max(0.05, bottom / total))
     }
-
-    // 去重名称
-    const existingNames = templates.map((t) => t.name)
-    const uniqueName = deduplicateTemplateName(result.template.name, existingNames)
-    const finalTemplate: Template = { ...result.template, name: uniqueName }
-
-    if (onImportTemplate !== undefined) {
-      onImportTemplate(finalTemplate)
-    } else {
-      saveTemplate(finalTemplate.name, finalTemplate.settings)
-    }
-    setImportError(null)
-  }, [templates, saveTemplate, onImportTemplate])
+  }
 
   return (
     <fieldset className="settingGroup">
@@ -208,7 +238,33 @@ export const TemplatePanel = ({
         <ul className="templateList">
           {templates.map((t) => (
             <li key={t.id} className="templateItem">
-              <span className="templateName" title={t.name}>{t.name}</span>
+              <div className="templateItemThumbnail" aria-hidden="true">
+                {currentImage !== null ? (
+                  <LiveTemplateThumbnail
+                    image={currentImage}
+                    settings={{ ...currentSettings, ...t.settings }}
+                  />
+                ) : (
+                  <TemplateThumbnail thumb={thumbFor(t.settings)} />
+                )}
+              </div>
+              {editingId === t.id ? (
+                <input
+                  className="settingTextInput templateInlineNameInput"
+                  value={editingName}
+                  onChange={(event) => setEditingName(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      renameTemplate(t.id, editingName)
+                      setEditingId(null)
+                    }
+                    if (event.key === "Escape") setEditingId(null)
+                  }}
+                  autoFocus
+                />
+              ) : (
+                <span className="templateName" title={t.name}>{t.name}</span>
+              )}
               {defaultTemplateId === t.id && (
                 <span className="templateDefaultBadge">默认</span>
               )}
@@ -219,6 +275,30 @@ export const TemplatePanel = ({
                   onClick={() => handleLoad(t.id)}
                 >
                   加载
+                </button>
+                <button
+                  type="button"
+                  className="ghostButton"
+                  onClick={() => updateTemplate(t.id, t.name, currentSettings)}
+                >
+                  覆盖更新
+                </button>
+                <button
+                  type="button"
+                  className="ghostButton"
+                  onClick={() => {
+                    setEditingId(t.id)
+                    setEditingName(t.name)
+                  }}
+                >
+                  重命名
+                </button>
+                <button
+                  type="button"
+                  className="ghostButton"
+                  onClick={() => duplicateTemplate(t.id)}
+                >
+                  复制
                 </button>
                 <button
                   type="button"

@@ -14,7 +14,10 @@ import { captureFormatLabel } from "../constants/captureFormats"
 /** 已知变量名集合（小写）。 */
 const KNOWN_VARIABLES = new Set([
   "camera", "lens", "film", "developer", "scanner",
-  "lab", "location", "rollname", "framenumber", "captureformat"
+  "lab", "location", "rollname", "framenumber", "captureformat",
+  "filmbrand", "filmiso", "filmtype", "filmname", "make", "model", "lensmodel",
+  "fnumber", "aperture", "exposuretime", "shutterspeed", "iso", "isospeedratings",
+  "focallength", "datetimeoriginal", "datetime", "date"
 ])
 
 /** 匹配 {VariableName} 变量占位符。 */
@@ -46,6 +49,23 @@ const identityToMap = (identity: PhotoIdentity): Map<string, string> => {
   map.set("framenumber", identity.frameNumber)
   // 画幅展示为显示名（如「135」），不是 id；未知 id 为空字符串
   map.set("captureformat", captureFormatLabel(identity.captureFormat))
+  map.set("filmbrand", identity.filmBrand ?? "")
+  map.set("filmiso", identity.filmIso ?? "")
+  map.set("filmtype", identity.filmType ?? "")
+  map.set("filmname", identity.filmName ?? identity.film)
+  map.set("make", identity.make ?? "")
+  map.set("model", identity.model ?? "")
+  map.set("lensmodel", identity.lensModel ?? identity.lens)
+  map.set("fnumber", identity.fNumber ?? "")
+  map.set("aperture", identity.fNumber ?? "")
+  map.set("exposuretime", identity.exposureTime ?? "")
+  map.set("shutterspeed", identity.exposureTime ?? "")
+  map.set("iso", identity.iso ?? "")
+  map.set("isospeedratings", identity.iso ?? "")
+  map.set("focallength", identity.focalLength ?? "")
+  map.set("datetimeoriginal", identity.dateTimeOriginal ?? "")
+  map.set("datetime", identity.dateTimeOriginal ?? "")
+  map.set("date", identity.dateTimeOriginal ?? "")
   return map
 }
 

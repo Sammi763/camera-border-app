@@ -61,8 +61,14 @@ const DEFAULT_SETTINGS: RenderSettings = {
   textArea: "image",
   fontFamily: "sans-serif",
   textLayers: createDefaultTextLayersLocal(),
-  autoCrop: false,
-  filmFormat: null,
+  imagePlacement: {
+    mode: "fit",
+    focalX: 0.5,
+    focalY: 0.5,
+    rotation: 0,
+    targetAspectRatio: null
+  },
+  layoutPresetId: null,
   gradient: {
     enabled: false,
     type: "linear",
@@ -87,6 +93,9 @@ const DEFAULT_SETTINGS: RenderSettings = {
     placement: "border-top-right",
     size: 14,
     colorMode: "auto-contrast",
+    imagePath: null,
+    opacity: 1,
+    autoContrast: true
   }
 }
 

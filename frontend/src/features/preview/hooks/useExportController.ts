@@ -133,7 +133,7 @@ const featureResultLabel = (result: FeatureResult | null | undefined): string | 
     return null
   }
   if (result.status === "APPLIED") return result.message ?? "已应用"
-  if (result.status === "SKIPPED") return result.message ?? "已跳过（当前版本不支持）"
+  if (result.status === "SKIPPED") return result.message ?? "该导出能力未应用，像素文件仍已输出"
   return result.message ?? "已降级"
 }
 
@@ -279,7 +279,7 @@ export const useExportController = ({
     setSingle({ kind: "preparing" })
 
     try {
-      await prepareExifForExport([state.filePath])
+      await prepareExifForExport([frozenItem?.filePath ?? state.filePath])
       const resolved = frozenItem === null
         ? { textOverride: null, resolvedLayers: [], brand: null }
         : resolveQueueItem(frozenItem, frozenSettings)

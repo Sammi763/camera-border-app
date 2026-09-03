@@ -9,7 +9,7 @@ import { useEffect, useState } from "react"
 import { ModalDrawer } from "../../../components/layout/ModalDrawer"
 import { decodeTemplateJson } from "../utils/templateJsonCodec"
 import type { Template } from "../types"
-import type { RenderSettings } from "../../settings/types"
+import type { LayoutSettings } from "../types"
 
 type DropState =
   | { readonly kind: "idle" }
@@ -22,7 +22,7 @@ type TemplateDropOverlayProps = {
   /** 清除当前拖放事件，防止关闭后再次解析同一文件。 */
   readonly onDismiss: () => void
   /** 将模板 settings 应用到当前设置（不保存）。 */
-  readonly onApply: (settings: RenderSettings) => void
+  readonly onApply: (settings: LayoutSettings) => void
   /** 将模板保存到模板库。 */
   readonly onSave: (template: Template) => void
 }

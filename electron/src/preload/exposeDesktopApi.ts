@@ -60,6 +60,10 @@ export const exposeDesktopApi = (): void => {
       ipcRenderer.invoke(IPC_CHANNELS.EXPORT_TEMPLATE_JSON, defaultFileName, json),
     importTemplateJson: (): Promise<string | null> =>
       ipcRenderer.invoke(IPC_CHANNELS.IMPORT_TEMPLATE_JSON),
+    selectLogoFile: (): Promise<string | null> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SELECT_LOGO_FILE),
+    probeHeicDecoder: (): Promise<boolean> =>
+      ipcRenderer.invoke(IPC_CHANNELS.PROBE_HEIC_DECODER),
     convertHeicFiles: (paths: readonly string[]): Promise<readonly (string | null)[]> =>
       ipcRenderer.invoke(IPC_CHANNELS.CONVERT_HEIC_FILES, paths),
     listSystemFonts: (): Promise<readonly string[]> =>

@@ -48,6 +48,19 @@ PNG 8-bit；高保真归档允许 TIFF 或按源位深输出 PNG 8/16-bit。输�
 最终平台各自执行并分别记录结果。脚本默认使用 `photos/78330006.jpg`，不添加真实二进制
 样片，也不替代 [`docs/test-samples.md`](test-samples.md) 的格式验收。
 
+## 0.2 RenderRecipe v2 与本地解码边界（阶段 4）
+
+`RenderRecipe` 的图片几何统一放在 `imagePlacement`：`fit` 保留完整图像，`fill` 按
+`focalX/focalY` 裁切，`rotation` 使用度数，`targetAspectRatio` 指定图片区域比例。
+Canvas 与 Java 引擎都调用同一套“旋转包围盒 → 目标区域 → fit/fill 缩放 → 焦点裁切”规则；
+旧模板读取时将旧画幅/裁剪字段迁移为该对象，保存和导出时不再写回无效字段。
+
+版式只保存布局和文字，不携带输出格式、尺寸或质量；这些设置由独立 `OutputPreset` 管理。
+版式 JSON 可通过模板面板导入、导出、复制、重命名、覆盖更新和删除。HEIC/HEIF 由随包
+解码助手在隔离 worker 中转换为带 EXIF/ICC 的临时 PNG，单文件、单次数量和输出大小受限，
+超时会终止 worker 并清理临时结果；应用退出时清理本实例临时目录。能力探测失败必须明确
+报告不支持，不回退到操作系统外部解码工具或系统扩展。
+
 ## 1. 新增一个 Java API 端点（端到端）
 
 **起点**：需求明确「前端需要一个新接口」。

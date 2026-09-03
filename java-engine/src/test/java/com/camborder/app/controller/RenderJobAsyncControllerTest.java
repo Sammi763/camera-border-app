@@ -120,7 +120,12 @@ final class RenderJobAsyncControllerTest extends AbstractControllerTest {
                 "recipe", Map.of(
                         "imagePath", imagePath,
                         "texts", List.of(),
-                        "autoCrop", false
+                        "imagePlacement", Map.of(
+                                "mode", "fit",
+                                "focalX", 0.5,
+                                "focalY", 0.5,
+                                "rotation", 0
+                        )
                 ),
                 "export", Map.of(
                         "outputPath", outputPath,

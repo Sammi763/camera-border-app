@@ -33,6 +33,20 @@ files:
 
 asar: true
 
+# worker_threads 需要真实文件路径；HEIC worker 随 app.asar 一起发布，但解包到
+# resources/app.asar.unpacked 后再由主进程启动，避免打包后只在开发环境可用。
+asarUnpack:
+  - dist/ipc/heicWorker.js
+  - dist/ipc/heicMetadata.js
+  - dist/ipc/heicLimits.js
+  # worker 在 app.asar.unpacked 中运行；把解码器及其 wasm/运行时依赖一并解包，
+  # 避免生产包因 pnpm 的嵌套依赖或 asar 虚拟路径无法加载而静默失败。
+  - node_modules/heic-convert/**/*
+  - node_modules/heic-decode/**/*
+  - node_modules/libheif-js/**/*
+  - node_modules/jpeg-js/**/*
+  - node_modules/pngjs/**/*
+
 extraResources:
   - from: runtime-bundle/frontend
     to: frontend

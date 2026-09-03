@@ -102,10 +102,10 @@ public final class BorderStyleRenderer {
                     break;
                 case "film-perforation":
                     drawPerforation(g, style, cw, ch, top, bottom,
-                            clamp(style.getHoleCount(), 2, 80));
+                            clamp(style.getHoleCount(), 2, 80), fi);
                     break;
                 case "mat-double-line":
-                    drawMatDoubleLine(g, style, ew, ix, iy, iw, ih);
+                    drawMatDoubleLine(g, style, fi, ew, ix, iy, iw, ih);
                     break;
                 case "torn-edge":
                     drawTornEdge(g, style, fi, ew, ix, iy, iw, ih);
@@ -114,10 +114,10 @@ public final class BorderStyleRenderer {
                     drawNegativeBand(g, style, fi, cw, ch, top, bottom);
                     break;
                 case "magazine-keyline":
-                    drawMagazineKeyline(g, style, ew, ix, iy, iw, ih);
+                    drawMagazineKeyline(g, style, fi, ew, ix, iy, iw, ih);
                     break;
                 case "archive-label-box":
-                    drawArchiveLabel(g, style, cw, ch, bottom, ix, iy, iw, ew);
+                    drawArchiveLabel(g, style, fi, cw, ch, bottom, ix, iy, iw, ew);
                     break;
                 default:
                     // 未识别的风格 id：静默忽略，保持原始渲染行为
@@ -174,7 +174,7 @@ public final class BorderStyleRenderer {
     // ---- 3. 135 齿孔 ------------------------------------------------------------
 
     private void drawPerforation(final Graphics2D g, final BorderStyle style, final int cw, final int ch,
-                                 final int top, final int bottom, final int n) {
+                                 final int top, final int bottom, final int n, final double fi) {
         final int strip = Math.min(top, bottom);
         if (strip <= 0) {
             return;
@@ -182,19 +182,21 @@ public final class BorderStyleRenderer {
         // 孔高 = 条带高度 * 0.45（clamp 3..60），孔宽 = 孔高 * 1.4
         final double holeH = clamp(strip * 0.45, 3, 60);
         final double holeW = holeH * 1.4;
-        final Color holeColor = ColorParser.parse(style.getPaperTone(), "#e8e8e8");
+        final Color holeColor = withAlpha(ColorParser.parse(style.getPaperTone(), "#e8e8e8"), fi);
         drawPerforationRow(g, holeColor, cw, top / 2, n, holeH, holeW);
         drawPerforationRow(g, holeColor, cw, ch - bottom / 2, n, holeH, holeW);
     }
 
     // ---- 4. 中画幅卡纸留白双细线 ----------------------------------------------
 
-    private void drawMatDoubleLine(final Graphics2D g, final BorderStyle style, final int ew,
+    private void drawMatDoubleLine(final Graphics2D g, final BorderStyle style, final double fi, final int ew,
                                    final int ix, final int iy, final int iw, final int ih) {
         final int g1 = Math.max(2, ew * 2);
         final int gap = Math.max(2, ew);
         final float lw = (float) Math.max(1, Math.round(ew / 3.0));
-        g.setColor(ColorParser.parse(style.getPaperTone(), "#9a948a"));
+        // 保留中画幅卡纸线的可读性；强度仍通过不透明度变化，低强度也不能让线条
+        // 在深色边框底上完全消失。
+        g.setColor(withAlpha(ColorParser.parse(style.getPaperTone(), "#9a948a"), 0.2 + 0.8 * fi));
         g.setStroke(new BasicStroke(lw));
         g.drawRect(ix - g1, iy - g1, iw + 2 * g1, ih + 2 * g1);
         final int g2 = g1 + gap;
@@ -258,40 +260,39 @@ public final class BorderStyleRenderer {
             g.fillRect(0, ch - bottom, cw, bottom);
         }
         // 小孔行（比 135 齿孔更小更密）
-        final int strip = Math.min(Math.max(top, 1), Math.max(bottom, 1));
-        final double holeH = clamp(strip * 0.32, 2, 40);
-        final double holeW = holeH * 1.6;
         final int n = clamp(style.getHoleCount(), 4, 100);
         final Color holeColor = ColorParser.parse(style.getPaperTone(), "#cfcfcf");
         if (top > 0) {
-            drawPerforationRow(g, holeColor, cw, top / 2, n, holeH, holeW);
+            final double topHoleH = clamp(top * 0.32, 2, 40);
+            drawPerforationRow(g, holeColor, cw, top / 2, n, topHoleH, topHoleH * 1.6);
         }
         if (bottom > 0) {
-            drawPerforationRow(g, holeColor, cw, ch - bottom / 2, n, holeH, holeW);
+            final double bottomHoleH = clamp(bottom * 0.32, 2, 40);
+            drawPerforationRow(g, holeColor, cw, ch - bottom / 2, n, bottomHoleH, bottomHoleH * 1.6);
         }
     }
 
     // ---- 7. 杂志拼贴双键线 ------------------------------------------------------
 
-    private void drawMagazineKeyline(final Graphics2D g, final BorderStyle style, final int ew,
+    private void drawMagazineKeyline(final Graphics2D g, final BorderStyle style, final double fi, final int ew,
                                      final int ix, final int iy, final int iw, final int ih) {
         final int o = Math.max(1, ew / 4);
         final float lwThick = (float) Math.max(1, Math.round(ew / 2.0));
         final Color tone = ColorParser.parse(style.getPaperTone(), "#111111");
 
-        g.setColor(tone);
+        g.setColor(withAlpha(tone, fi));
         g.setStroke(new BasicStroke(lwThick));
         g.drawRect(ix - o, iy - o, iw + 2 * o, ih + 2 * o);
 
         final int o2 = o + ew + (int) lwThick;
-        g.setColor(new Color(tone.getRed(), tone.getGreen(), tone.getBlue(), 102));
+        g.setColor(new Color(tone.getRed(), tone.getGreen(), tone.getBlue(), (int) Math.round(102 * fi)));
         g.setStroke(new BasicStroke(1f));
         g.drawRect(ix - o2, iy - o2, iw + 2 * o2, ih + 2 * o2);
     }
 
     // ---- 8. 摄影档案标签 --------------------------------------------------------
 
-    private void drawArchiveLabel(final Graphics2D g, final BorderStyle style,
+    private void drawArchiveLabel(final Graphics2D g, final BorderStyle style, final double fi,
                                   final int cw, final int ch, final int bottom,
                                   final int ix, final int iy, final int iw, final int ew) {
         if (bottom < 14) {
@@ -306,7 +307,7 @@ public final class BorderStyleRenderer {
         final int y1 = cy - boxH / 2;
 
         final Color tone = ColorParser.parse(style.getPaperTone(), "#8a8578");
-        g.setColor(tone);
+        g.setColor(withAlpha(tone, fi));
         g.setStroke(new BasicStroke(1f));
         g.drawRect(x1, y1, boxW, boxH);
 
@@ -325,5 +326,10 @@ public final class BorderStyleRenderer {
 
     private static double clamp(final double value, final double min, final double max) {
         return Math.max(min, Math.min(max, value));
+    }
+
+    private static Color withAlpha(final Color color, final double factor) {
+        final int alpha = (int) Math.round(color.getAlpha() * clamp(factor, 0, 1));
+        return new Color(color.getRed(), color.getGreen(), color.getBlue(), alpha);
     }
 }

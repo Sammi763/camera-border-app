@@ -50,8 +50,13 @@ const buildThumbnailRecipe = (filePath: string): RenderRecipe => ({
   border: { top: 0, bottom: 0, left: 0, right: 0, color: "#000000" },
   gradient: null,
   texts: [],
-  filmFormat: null,
-  autoCrop: false
+  imagePlacement: {
+    mode: "fit",
+    focalX: 0.5,
+    focalY: 0.5,
+    rotation: 0,
+    targetAspectRatio: null
+  }
 })
 
 export const buildThumbnailRequest = (filePath: string, maxWidth: number, maxHeight: number): PreviewRequest => ({

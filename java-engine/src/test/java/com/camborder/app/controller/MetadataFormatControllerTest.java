@@ -46,6 +46,43 @@ final class MetadataFormatControllerTest {
     }
 
     @Test
+    void shouldReplaceTechnicalExifAliases() throws Exception {
+        String body = "{\"template\":\"{Aperture} · {ShutterSpeed} · {ISOSpeedRatings} · {Date}\","
+                + "\"metadata\":{\"fnumber\":\"f/4\",\"exposuretime\":\"1/60 s\","
+                + "\"iso\":\"200\",\"datetimeoriginal\":\"2025-06-01 12:30\"}}";
+        mockMvc.perform(post("/api/metadata/format")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.text").value("f/4 · 1/60 s · 200 · 2025-06-01 12:30"));
+    }
+
+    @Test
+    void shouldReplaceSplitCameraLensAndFilmVariables() throws Exception {
+        String body = "{\"template\":\"{Make} · {Model} · {LensModel} · {FilmBrand} · {FilmISO} · {FilmType} · {FilmName}\","
+                + "\"metadata\":{\"make\":\"Leica\",\"model\":\"M6\","
+                + "\"lensmodel\":\"Summicron-M 35mm\",\"filmbrand\":\"Kodak\","
+                + "\"filmiso\":\"400\",\"filmtype\":\"color-negative\",\"filmname\":\"Portra 400\"}}";
+        mockMvc.perform(post("/api/metadata/format")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.text").value(
+                        "Leica · M6 · Summicron-M 35mm · Kodak · 400 · color-negative · Portra 400"));
+    }
+
+    @Test
+    void shouldUseLensAsFallbackForLensModelVariable() throws Exception {
+        String body = "{\"template\":\"{LensModel} · {FocalLength}\","
+                + "\"metadata\":{\"lens\":\"Summicron-M\",\"focallength\":\"35 mm\"}}";
+        mockMvc.perform(post("/api/metadata/format")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.text").value("Summicron-M · 35 mm"));
+    }
+
+    @Test
     void shouldCleanRedundantSeparatorsWhenValueMissing() throws Exception {
         // lens 缺失，不应出现 " ·  · "
         String body = "{\"template\":\"{Camera} · {Lens} · {Film}\","

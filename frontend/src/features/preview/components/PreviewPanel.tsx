@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react"
 import { Panel } from "../../../components/layout/Panel"
-import { calculatePreviewImageLayout, drawPreviewToCanvas } from "../canvas/canvasRenderer"
+import { calculatePreviewImageLayout, drawPreviewToCanvas, type CanvasDrawableSource } from "../canvas/canvasRenderer"
+import { calculateImagePlacementGeometry, normalizeImagePlacement } from "../canvas/imagePlacementGeometry"
 import { usePreviewViewport } from "../hooks/usePreviewViewport"
 import { buildResolvedRenderSettings } from "../../settings/utils/buildTexts"
 import { sourceDecodeLabel } from "../hooks/useExportController"
@@ -122,7 +123,8 @@ const writeCanvasPreviewDiagnostics = (
     settings.borderTop,
     settings.borderBottom,
     settings.borderLeft,
-    settings.borderRight
+    settings.borderRight,
+    settings.imagePlacement
   )
   canvas.dataset["previewBorderColor"] = settings.borderColor
   canvas.dataset["previewBorderTop"] = String(settings.borderTop)
@@ -153,12 +155,52 @@ const CanvasPreview = ({
   const drawFnRef = useRef<(() => void) | null>(null)
   const dragStartRef = useRef<{ x: number; y: number } | null>(null)
   const imageRef = useRef<HTMLImageElement | null>(null)
+  const logoImageRef = useRef<CanvasDrawableSource | null>(null)
+  const [logoImage, setLogoImage] = useState<HTMLImageElement | null>(null)
   const settingsRef = useRef(settings)
   const [isPreviewAreaInsufficient, setIsPreviewAreaInsufficient] = useState(false)
   settingsRef.current = settings
   imageRef.current = state.currentImage
+  logoImageRef.current = logoImage
 
   const viewport = usePreviewViewport(state.filePath)
+
+  useEffect(() => {
+    const logoPath = settings.logo.imagePath ?? null
+    const loader = window.desktop?.loadLocalImagePreview
+    if (logoPath === null || logoPath.length === 0 || loader === undefined) {
+      setLogoImage(null)
+      return
+    }
+    let active = true
+    setLogoImage(null)
+    void loader(logoPath, 512, 512).then((preview) => {
+      if (!active || preview === null) return
+      const image = new Image()
+      image.onload = () => {
+        if (active) setLogoImage(image)
+      }
+      image.src = preview.dataUrl
+    }).catch(() => {
+      if (active) setLogoImage(null)
+    })
+    return () => { active = false }
+  }, [settings.logo.imagePath])
+
+  const naturalCanvasDimensions = useCallback((image: HTMLImageElement, currentSettings: RenderSettings): { width: number; height: number } => {
+    const geometry = calculateImagePlacementGeometry(
+      image.naturalWidth,
+      image.naturalHeight,
+      normalizeImagePlacement(currentSettings.imagePlacement)
+    )
+    if (geometry === null) {
+      return { width: 0, height: 0 }
+    }
+    return {
+      width: Math.max(1, Math.round(geometry.targetWidth + currentSettings.borderLeft + currentSettings.borderRight)),
+      height: Math.max(1, Math.round(geometry.targetHeight + currentSettings.borderTop + currentSettings.borderBottom))
+    }
+  }, [])
 
   useEffect(() => {
     if (viewportCommand?.type === "fit") {
@@ -185,9 +227,13 @@ const CanvasPreview = ({
         canvas.width = canvas.width
         return
       }
-      drawPreviewToCanvas(canvas, currentImage, settingsRef.current)
+      drawPreviewToCanvas(canvas, currentImage, settingsRef.current, logoImageRef.current)
     }
   })
+
+  useEffect(() => {
+    drawFnRef.current?.()
+  }, [logoImage])
 
   useEffect(() => {
     const container = containerRef.current
@@ -198,8 +244,9 @@ const CanvasPreview = ({
       const rect = container.getBoundingClientRect()
       const image = imageRef.current
       const currentSettings = settingsRef.current
-      const naturalWidth = image === null ? 0 : image.naturalWidth + currentSettings.borderLeft + currentSettings.borderRight
-      const naturalHeight = image === null ? 0 : image.naturalHeight + currentSettings.borderTop + currentSettings.borderBottom
+      const natural = image === null ? { width: 0, height: 0 } : naturalCanvasDimensions(image, currentSettings)
+      const naturalWidth = natural.width
+      const naturalHeight = natural.height
       viewport.setDimensions(rect.width, rect.height, naturalWidth, naturalHeight)
     }
     const updateCanvas = (): void => {
@@ -221,7 +268,7 @@ const CanvasPreview = ({
     })
     observer.observe(container)
     return () => observer.disconnect()
-  }, [viewport])
+  }, [naturalCanvasDimensions, viewport])
 
   useEffect(() => {
     const container = containerRef.current
@@ -245,10 +292,10 @@ const CanvasPreview = ({
     viewport.setDimensions(
       rect.width,
       rect.height,
-      image.naturalWidth + settings.borderLeft + settings.borderRight,
-      image.naturalHeight + settings.borderTop + settings.borderBottom
+      naturalCanvasDimensions(image, settings).width,
+      naturalCanvasDimensions(image, settings).height
     )
-  }, [settings.borderBottom, settings.borderLeft, settings.borderRight, settings.borderTop, state.currentImage, viewport])
+  }, [naturalCanvasDimensions, settings, state.currentImage, viewport])
 
   useEffect(() => {
     drawFnRef.current?.()

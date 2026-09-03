@@ -163,6 +163,20 @@ export type PhotoIdentity = {
   readonly frameNumber: string
   /** 拍摄画幅 ID（见 constants/captureFormats.ts）。空字符串表示未设置。 */
   readonly captureFormat: string
+  /** EXIF 技术变量；空值表示元数据没有该字段。 */
+  readonly fNumber?: string
+  readonly exposureTime?: string
+  readonly iso?: string
+  readonly focalLength?: string
+  readonly dateTimeOriginal?: string
+  /** 可选的 EXIF 原始拆分字段，供高级变量使用，不改变默认身份展示。 */
+  readonly make?: string
+  readonly model?: string
+  readonly lensModel?: string
+  readonly filmBrand?: string
+  readonly filmIso?: string
+  readonly filmType?: string
+  readonly filmName?: string
 }
 
 /** 创建空的摄影身份。 */
@@ -176,7 +190,19 @@ export const createEmptyIdentity = (): PhotoIdentity => ({
   location: "",
   rollName: "",
   frameNumber: "",
-  captureFormat: ""
+  captureFormat: "",
+  fNumber: "",
+  exposureTime: "",
+  iso: "",
+  focalLength: "",
+  dateTimeOriginal: "",
+  make: "",
+  model: "",
+  lensModel: "",
+  filmBrand: "",
+  filmIso: "",
+  filmType: "",
+  filmName: ""
 })
 
 /**

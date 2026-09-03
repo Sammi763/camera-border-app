@@ -1190,6 +1190,21 @@ body {
   font-size: 0.75rem;
 }
 
+.templateItemThumbnail {
+  flex: 0 0 52px;
+  width: 52px;
+  height: 38px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-dark);
+}
+
+.templateItemThumbnail .liveThumbCanvas,
+.templateItemThumbnail .templatePresetThumbFrame {
+  width: 100%;
+  height: 100%;
+}
+
 .templateName {
   flex: 1 1 auto;
   min-width: 0;

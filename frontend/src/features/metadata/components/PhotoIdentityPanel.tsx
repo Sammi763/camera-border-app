@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react"
 import type { PhotoAssetStore, PhotoIdentity, ShootingPreset } from "../types"
-import { captureFormatLabel } from "../constants/captureFormats"
+import { CAPTURE_FORMAT_GROUPS, captureFormatLabel } from "../constants/captureFormats"
 import { BUILT_IN_CAMERA_MODELS } from "../constants/cameraModels"
 import { IDENTITY_SOURCE_LABELS } from "../utils/resolveIdentityFieldSources"
 import type { IdentityFieldSource, IdentitySourceMap } from "../utils/resolveIdentityFieldSources"
@@ -182,6 +182,30 @@ export const PhotoIdentityPanel = ({
             assetSuggestions={assetStore.films.map((f) => `${f.brand} ${f.name}`)}
             source={sources?.film ?? null}
           />
+          <div className="settingRow">
+            <label className="settingFieldLabel">
+              每图拍摄画幅
+              <select
+                className="settingSelect"
+                value={identityOverride?.captureFormat ?? ""}
+                onChange={(e) => handleChange("captureFormat", e.target.value)}
+              >
+                <option value="">继承摄影预设 / 未设置</option>
+                {CAPTURE_FORMAT_GROUPS.map((group) => (
+                  <optgroup key={group.kind} label={group.label}>
+                    {group.formats.map((format) => (
+                      <option key={format.id} value={format.id}>
+                        {format.label} · {format.aspectRatio}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+              <span className="settingHint">
+                当前有效值：{captureFormatLabel(effectiveIdentity.captureFormat) || "未设置"}
+              </span>
+            </label>
+          </div>
           <IdentityField
             label="拍摄地点"
             value={identityOverride?.location ?? ""}

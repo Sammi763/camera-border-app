@@ -43,6 +43,8 @@ const layerToTextItem = (layer: TextLayerSettings, content: string): TextItem =>
   placement: encodePlacement(layer.textArea, layer.placement),
   marginX: layer.marginX,
   marginY: layer.marginY,
+  lineSpacing: layer.lineSpacing ?? 0,
+  letterSpacing: layer.letterSpacing ?? 0,
   backgroundEnabled: layer.backgroundEnabled,
   backgroundColor: layer.backgroundColor,
   backgroundPaddingX: layer.backgroundPaddingX,

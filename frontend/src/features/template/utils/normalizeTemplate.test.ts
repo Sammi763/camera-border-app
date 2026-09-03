@@ -16,8 +16,6 @@ const legacySettings: RenderSettings = {
   textArea: "border",
   fontFamily: "serif",
   textLayers: [],
-  autoCrop: false,
-  filmFormat: null,
   gradient: { enabled: false, type: "linear", angle: 0, stops: [{ offset: 0, color: "#000000" }, { offset: 1, color: "#ffffff" }] },
   exportFormat: "png",
   jpegQuality: 95,
@@ -86,6 +84,17 @@ describe("normalizeTemplatePatch", () => {
     expect(patch.textLayers).toBeDefined()
     expect(patch.textLayers!.length).toBe(0)
   })
+
+  it("旧布局字段只在迁移时消费，不会继续写入当前设置补丁", () => {
+    const patch = normalizeTemplatePatch({
+      filmFormat: "135",
+      autoCrop: true,
+    })
+    expect(patch.imagePlacement).toMatchObject({ mode: "fill", targetAspectRatio: 1.5 })
+    expect(patch.layoutPresetId).toBe("135")
+    expect(patch).not.toHaveProperty("filmFormat")
+    expect(patch).not.toHaveProperty("autoCrop")
+  })
 })
 
 describe("normalizeTemplateSettings", () => {
@@ -95,6 +104,26 @@ describe("normalizeTemplateSettings", () => {
     expect(result.textLayers[0]!.enabled).toBe(true)
     expect(result.textLayers[0]!.content).toBe("{Camera} · {Lens} · {Film}")
     expect(result.textLayers[1]!.enabled).toBe(false)
+    expect(result.imagePlacement).toMatchObject({ mode: "fit", targetAspectRatio: null })
+    expect(result).not.toHaveProperty("filmFormat")
+    expect(result).not.toHaveProperty("autoCrop")
+  })
+
+  it("旧画幅和 autoCrop 只在迁移时转换为 v2 图片布局", () => {
+    const result = normalizeTemplateSettings({
+      ...legacySettings,
+      filmFormat: "135",
+      autoCrop: true,
+    })
+    expect(result.imagePlacement).toEqual({
+      mode: "fill",
+      focalX: 0.5,
+      focalY: 0.5,
+      rotation: 0,
+      targetAspectRatio: 1.5
+    })
+    expect(result).not.toHaveProperty("filmFormat")
+    expect(result).not.toHaveProperty("autoCrop")
   })
 
   it("已含 textLayers 的 settings 不迁移", () => {

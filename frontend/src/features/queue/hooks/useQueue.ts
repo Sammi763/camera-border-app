@@ -160,7 +160,7 @@ export const useQueue = (): QueueController => {
     writePersistedSnapshot({ items, activeItemId, checkedItemIds })
   }, [activeItemId, checkedItemIds, items])
 
-  // 恢复后由受限 preload 白名单检查源文件是否仍存在；HEIC 会重新建立临时 JPEG。
+  // 恢复后由受限 preload 白名单检查源文件是否仍存在；HEIC 会重新建立临时 PNG。
   useEffect(() => {
     const checkImagePaths = window.desktop?.checkImagePaths
     if (checkImagePaths === undefined || snapshotRef.current.items.length === 0) return
@@ -184,7 +184,7 @@ export const useQueue = (): QueueController => {
               ...item,
               filePath: resolvedPath,
               converted: resolved?.converted ?? false,
-              workingFormat: resolved?.converted === true ? "jpg" : extractFormat(item.sourcePath),
+              workingFormat: resolved?.converted === true ? "png" : extractFormat(item.sourcePath),
               missing: false
             }
           })
@@ -201,7 +201,7 @@ export const useQueue = (): QueueController => {
     return () => { active = false }
   }, [commit])
 
-  /** 将路径列表追加到队列；队列为空时自动激活首张。HEIC 文件自动转换。 */
+  /** 将路径列表追加到队列；队列为空时自动激活首张。HEIC 文件由随包助手转换。 */
   const appendPaths = useCallback(async (paths: readonly string[]): Promise<void> => {
     if (paths.length === 0) return
     const converted = await resolveHeicPaths(paths)
@@ -219,7 +219,7 @@ export const useQueue = (): QueueController => {
       sourcePath: item.original,
       sourceFormat: extractFormat(item.original),
       converted: item.converted,
-      workingFormat: item.converted ? "jpg" : extractFormat(item.original),
+      workingFormat: item.converted ? "png" : extractFormat(item.original),
       textOverride: null,
       presetId: null,
       identityOverride: null,
@@ -408,7 +408,7 @@ export const useQueue = (): QueueController => {
     return mergeIdentityChain({
       override: item.identityOverride,
       preset: preset === null ? null : resolvePresetIdentity(preset, assetStore),
-      exif: exifByPath?.get(item.filePath) ?? null
+      exif: exifByPath?.get(item.sourcePath) ?? exifByPath?.get(item.filePath) ?? null
     })
   }, [])
 
@@ -424,7 +424,7 @@ export const useQueue = (): QueueController => {
     return resolveIdentityFieldSources({
       override: item.identityOverride,
       preset: preset === null ? null : resolvePresetIdentity(preset, assetStore),
-      exif: exifByPath?.get(item.filePath) ?? null
+      exif: exifByPath?.get(item.sourcePath) ?? exifByPath?.get(item.filePath) ?? null
     })
   }, [])
 
