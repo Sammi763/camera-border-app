@@ -35,6 +35,31 @@ import java.util.Set;
 @Component
 public final class RawDecoder {
 
+    /** 内嵌 JPEG 的解码结果，同时保留未采样的源像素尺寸。 */
+    public static final class DecodeResult {
+        private final BufferedImage image;
+        private final int fullWidth;
+        private final int fullHeight;
+
+        private DecodeResult(final BufferedImage image, final int fullWidth, final int fullHeight) {
+            this.image = image;
+            this.fullWidth = fullWidth;
+            this.fullHeight = fullHeight;
+        }
+
+        public BufferedImage getImage() {
+            return image;
+        }
+
+        public int getFullWidth() {
+            return fullWidth;
+        }
+
+        public int getFullHeight() {
+            return fullHeight;
+        }
+    }
+
     /** 支持的 RAW 文件扩展名（小写，含前导点）。 */
     private static final Set<String> RAW_EXTENSIONS = new HashSet<>(Arrays.asList(
             ".nef", ".cr2", ".cr3", ".arw", ".raf", ".dng", ".orf", ".rw2", ".pef"
@@ -82,6 +107,11 @@ public final class RawDecoder {
      * 导出传 0/0 保持内嵌预览的原始像素尺寸。
      */
     public BufferedImage decode(final String imagePath, final int maxWidth, final int maxHeight) {
+        return decodeWithSource(imagePath, maxWidth, maxHeight).getImage();
+    }
+
+    /** 读取内嵌 JPEG，同时返回采样前的完整 JPEG 像素尺寸。 */
+    public DecodeResult decodeWithSource(final String imagePath, final int maxWidth, final int maxHeight) {
         File file = new File(imagePath);
         if (!file.exists()) {
             throw new PreviewGenerationException("RAW 文件不存在: " + imagePath);
@@ -98,7 +128,7 @@ public final class RawDecoder {
         }
 
         // 扫描 JPEG SOI 标记并尝试解码
-        BufferedImage result = scanForJpegPreview(fileBytes, maxWidth, maxHeight);
+        DecodeResult result = scanForJpegPreview(fileBytes, maxWidth, maxHeight);
         if (result != null) {
             return result;
         }
@@ -130,25 +160,54 @@ public final class RawDecoder {
         }
     }
 
-    /**
-     * 扫描字节数组中的 JPEG SOI 标记，尝试解码为 BufferedImage。
-     * 返回第一个成功解码的有效图像；未找到时返回 null。
-     */
-    private BufferedImage scanForJpegPreview(final byte[] data, final int maxWidth, final int maxHeight) {
+    /** 扫描所有候选 JPEG，选择实际像素面积最大的有效内嵌预览。 */
+    private DecodeResult scanForJpegPreview(final byte[] data, final int maxWidth, final int maxHeight) {
         int length = data.length;
-        // 最少需要 SOI(2) + APP标记(1) + 其他(1) = 4 字节
+        int bestOffset = -1;
+        long bestArea = -1;
+        int bestWidth = 0;
+        int bestHeight = 0;
         for (int i = 0; i < length - 3; i++) {
             if (data[i] == JPEG_SOI_MARKER_1
                     && data[i + 1] == JPEG_SOI_MARKER_2
                     && data[i + 2] == JPEG_APP_MARKER) {
-                // 找到潜在的 JPEG SOI，尝试从该偏移解码
-                BufferedImage image = tryDecodeJpeg(data, i, length, maxWidth, maxHeight);
-                if (image != null) {
-                    return image;
+                int[] dimensions = tryReadDimensions(data, i, length);
+                if (dimensions != null) {
+                    long area = (long) dimensions[0] * dimensions[1];
+                    if (area > bestArea) {
+                        bestArea = area;
+                        bestOffset = i;
+                        bestWidth = dimensions[0];
+                        bestHeight = dimensions[1];
+                    }
                 }
             }
         }
-        return null;
+        if (bestOffset < 0) return null;
+        BufferedImage image = tryDecodeJpeg(data, bestOffset, length, maxWidth, maxHeight);
+        return image == null ? null : new DecodeResult(image, bestWidth, bestHeight);
+    }
+
+    private int[] tryReadDimensions(final byte[] data, final int offset, final int totalLength) {
+        int available = totalLength - offset;
+        if (available < MIN_JPEG_SIZE) return null;
+        try (ByteArrayInputStream bais = new ByteArrayInputStream(data, offset, available);
+             ImageInputStream input = ImageIO.createImageInputStream(bais)) {
+            if (input == null) return null;
+            final Iterator<javax.imageio.ImageReader> readers = ImageIO.getImageReaders(input);
+            if (!readers.hasNext()) return null;
+            final javax.imageio.ImageReader reader = readers.next();
+            try {
+                reader.setInput(input, true, true);
+                int width = reader.getWidth(0);
+                int height = reader.getHeight(0);
+                return width > 0 && height > 0 ? new int[]{width, height} : null;
+            } finally {
+                reader.dispose();
+            }
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     /**

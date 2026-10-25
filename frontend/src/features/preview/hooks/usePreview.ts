@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { requestPreview } from "../../../services/engine/previewApi"
+import { EngineHttpError } from "../../../services/engine/engineClient"
 import {
   createPreviewCacheKey,
   hashRenderRecipe,
@@ -15,6 +16,36 @@ import type { PreviewState } from "../types"
 
 const PREVIEW_MAX_WIDTH = 1280
 const PREVIEW_MAX_HEIGHT = 1280
+const ENGINE_STARTUP_RETRY_COUNT = 8
+const ENGINE_STARTUP_RETRY_DELAY_MS = 400
+
+/** 托管引擎启动窗口内重试 503；真实错误仍快速进入可解释的降级状态。 */
+const requestPreviewWithStartupRetry = async (
+  request: PreviewRequest,
+  signal: AbortSignal
+) => {
+  let lastError: unknown = null
+  for (let attempt = 0; attempt <= ENGINE_STARTUP_RETRY_COUNT; attempt++) {
+    try {
+      return await requestPreview(request, undefined, signal)
+    } catch (error: unknown) {
+      lastError = error
+      const startupError = error instanceof EngineHttpError
+        && (error.status === 503 || error.code === "ENGINE_STARTING")
+      if (!startupError || attempt === ENGINE_STARTUP_RETRY_COUNT || signal.aborted) {
+        throw error
+      }
+      await new Promise<void>((resolve, reject) => {
+        const timer = window.setTimeout(resolve, ENGINE_STARTUP_RETRY_DELAY_MS)
+        signal.addEventListener("abort", () => {
+          window.clearTimeout(timer)
+          reject(new DOMException("Preview request aborted", "AbortError"))
+        }, { once: true })
+      })
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("预览请求失败")
+}
 
 /**
  * 将引擎返回的同源相对 previewUrl 解析为可加载的 URL。
@@ -185,7 +216,7 @@ export const usePreview = (
         return
       }
 
-      const response = await requestPreview(imageRequest, undefined, requestController.signal)
+      const response = await requestPreviewWithStartupRetry(imageRequest, requestController.signal)
       if (!active || !response.previewAvailable) return
       const displayUrl = resolveDisplayUrl(response.previewUrl)
       if (displayUrl === null) return
@@ -272,10 +303,10 @@ export const usePreview = (
       return { ...prev, engineSyncStatus: "syncing" }
     })
 
-    void requestPreview(buildPreviewRequest(
+    void requestPreviewWithStartupRetry(buildPreviewRequest(
       selectedFilePath, settings, PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT,
       textOverride, stableResolvedTextLayers, resolvedBrand
-    ), undefined, requestController.signal)
+    ), requestController.signal)
       .then((response) => {
         if (!active) {
           return

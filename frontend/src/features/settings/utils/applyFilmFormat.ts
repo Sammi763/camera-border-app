@@ -13,6 +13,7 @@
 import type { FilmFormatInfo } from "../../../types/preview"
 import type { RenderSettings } from "../types"
 import { normalizeImagePlacement } from "../../preview/canvas/imagePlacementGeometry"
+import { imageAreaFromPlacement } from "./imageArea"
 
 const ASPECT_BY_FORMAT: Readonly<Record<string, number>> = {
   "half-frame": 3 / 4,
@@ -40,9 +41,11 @@ export const applyFilmFormatSettings = (
   format: FilmFormatInfo | undefined
 ): Partial<RenderSettings> => {
   if (formatId === "") {
+    const imagePlacement = { ...normalizeImagePlacement(settings.imagePlacement), targetAspectRatio: null }
     return {
       layoutPresetId: null,
-      imagePlacement: { ...normalizeImagePlacement(settings.imagePlacement), targetAspectRatio: null }
+      imagePlacement,
+      imageArea: imageAreaFromPlacement(imagePlacement)
     }
   }
   const targetAspectRatio = format?.targetAspectRatio
@@ -51,11 +54,12 @@ export const applyFilmFormatSettings = (
   const currentPlacement = normalizeImagePlacement(settings.imagePlacement)
   const imagePlacement = { ...currentPlacement, targetAspectRatio }
   if (format === undefined) {
-    return { layoutPresetId: formatId, imagePlacement }
+    return { layoutPresetId: formatId, imagePlacement, imageArea: imageAreaFromPlacement(imagePlacement) }
   }
   return {
     layoutPresetId: formatId,
     imagePlacement,
+    imageArea: imageAreaFromPlacement(imagePlacement),
     borderTop: format.recommendedBorder.top,
     borderBottom: format.recommendedBorder.bottom,
     borderLeft: format.recommendedBorder.left,

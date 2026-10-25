@@ -27,8 +27,7 @@ export const BUILTIN_FONTS: readonly FontOption[] = [
   { value: "sans-serif", label: "SansSerif", source: "builtin", engineAvailable: true },
   { value: "serif", label: "Serif", source: "builtin", engineAvailable: true },
   { value: "LXGW WenKai", label: "LXGW WenKai", source: "builtin", engineAvailable: false },
-  { value: "Maoken YingBi Kaishu", label: "Maoken YingBi Kaishu", source: "builtin", engineAvailable: false },
-  { value: "851 Tegaki Zatsu", label: "851 Tegaki Zatsu", source: "builtin", engineAvailable: false }
+  { value: "Caveat", label: "Caveat", source: "builtin", engineAvailable: false }
 ]
 
 /** 内置字体值集合。 */

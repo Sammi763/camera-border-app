@@ -3,15 +3,21 @@ import { NumberInput } from "../../../components/form/NumberInput"
 import { fetchFilmFormats } from "../../../services/engine/filmFormatsApi"
 import { fetchPhotoMetadata } from "../../../services/engine/photoMetadataApi"
 import { useSystemFonts } from "../hooks/useSettings"
-import type { NumberSettingKey, OutputSizePreset, RenderSettings, SettingsController, TextLayerSettings } from "../types"
+import type { ImageAreaSettings, NumberSettingKey, OutputSizePreset, RenderSettings, SettingsController, TextLayerSettings } from "../types"
 import { VariableHelpPanel } from "../../metadata/components/VariableHelpPanel"
 import { TextLayerEditor } from "./TextLayerEditor"
 import { createDefaultTextLayers } from "../utils/defaultTextLayers"
 import { applyFilmFormatSettings } from "../utils/applyFilmFormat"
-import { normalizeImagePlacement } from "../../preview/canvas/imagePlacementGeometry"
+import {
+  IMAGE_AREA_ORIENTATION_OPTIONS,
+  IMAGE_AREA_RATIO_OPTIONS,
+  imagePlacementFromArea,
+  normalizeImageAreaSettings,
+  summarizeImageArea
+} from "../utils/imageArea"
 import { normalizeTextPlacement, textPlacementOptions } from "../utils/textPlacementOptions"
 import { CUSTOM_LONG_EDGE_MAX, CUSTOM_LONG_EDGE_MIN, OUTPUT_SIZE_PRESETS } from "../utils/outputSizePresets"
-import type { FilmFormatInfo } from "../../../types/preview"
+import type { CapabilitiesResponse, FidelityTier, FilmFormatInfo } from "../../../types/preview"
 import { OutputPresetPanel } from "../../output/components/OutputPresetPanel"
 
 type SettingsPanelProps = {
@@ -30,6 +36,8 @@ type SettingsPanelProps = {
   readonly showStyleSettings?: boolean
   /** 是否渲染输出控制组；样式页签复用本组件时关闭。 */
   readonly showOutputSettings?: boolean
+  /** 当前进程能力快照；缺失或探测失败时不渲染专业输出控件。 */
+  readonly capabilities?: CapabilitiesResponse | null
 }
 
 /** 内置画幅选项（后端不可用时的回退；含 6x10 与 6x12）。 */
@@ -59,6 +67,14 @@ const BORDER_STYLE_PARAMETERS: Readonly<Record<string, {
   "negative-band": { edgeWidth: false, holeCount: true, paperTone: true },
   "magazine-keyline": { edgeWidth: true, holeCount: false, paperTone: true },
   "archive-label-box": { edgeWidth: true, holeCount: false, paperTone: true }
+}
+
+/** 固定档位允许的格式变体；能力探测仍是最终可用性的前置条件。 */
+const OUTPUT_FORMATS_BY_TIER: Readonly<Record<FidelityTier, readonly RenderSettings["exportFormat"][]>> = {
+  "quick-share": ["jpeg", "png"],
+  "standard-delivery": ["jpeg", "png"],
+  "high-fidelity-archive": ["tiff", "png"],
+  custom: ["jpeg", "png", "tiff"]
 }
 
 /**
@@ -92,17 +108,48 @@ export const SettingsPanel = ({
   setTextOverride,
   detectedBrandLabel,
   showStyleSettings = true,
-  showOutputSettings = true
+  showOutputSettings = true,
+  capabilities = null
 }: SettingsPanelProps): JSX.Element => {
   const { settings, update, updateNumber, updateTextLayer, resetTextLayers, replaceTextLayers, canUndo, canRedo, undo, redo } = controller
   const { fonts } = useSystemFonts()
+  const availableFonts = fonts.filter((font) => font.engineAvailable)
   const [filmFormats, setFilmFormats] = useState<readonly FilmFormatInfo[]>(FALLBACK_FORMATS)
   const [exifStatus, setExifStatus] = useState<"idle" | "loading" | "error" | "empty">("idle")
-  const imagePlacement = normalizeImagePlacement(settings.imagePlacement)
+  const imageArea = normalizeImageAreaSettings(settings.imageArea, settings.imagePlacement)
+  const imagePlacement = imagePlacementFromArea(imageArea, settings.imagePlacement)
+  const imageAreaSummary = summarizeImageArea(settings)
   const hasCustomLogo = (settings.logo.imagePath?.trim().length ?? 0) > 0
   const borderStyleParameters = settings.borderStyle === null
     ? null
     : BORDER_STYLE_PARAMETERS[settings.borderStyle.id] ?? { edgeWidth: true, holeCount: true, paperTone: true }
+
+  const effectiveTier: FidelityTier = settings.tier ?? "standard-delivery"
+  const availableTiers = (Object.keys(capabilities?.tiers ?? {}) as FidelityTier[])
+    .filter((tier) => tier !== "custom" && capabilities?.tiers[tier]?.available === true)
+  const availableFormats = (["jpeg", "png", "tiff"] as const)
+    .filter((format) => capabilities?.output[format]?.available === true
+      && OUTPUT_FORMATS_BY_TIER[effectiveTier].includes(format))
+  const updateCustomOutput = useCallback((patch: Partial<RenderSettings>): void => {
+    update({ ...patch, tier: "custom" })
+  }, [update])
+  const applyTier = useCallback((tier: FidelityTier): void => {
+    if (tier === "quick-share") {
+      update({ tier, exportFormat: "jpeg", jpegQuality: 92, outputSizePreset: "2k", customOutputLongEdge: 2048,
+        preserveMetadata: true, preserveColorProfile: true, preferHighBitDepth: false,
+        colorProfilePolicy: "srgb", metadataPolicy: "remove-location", bitDepthPolicy: "8" })
+    } else if (tier === "standard-delivery") {
+      update({ tier, exportFormat: "jpeg", jpegQuality: 95, outputSizePreset: "original",
+        preserveMetadata: true, preserveColorProfile: true, preferHighBitDepth: false,
+        colorProfilePolicy: "source", metadataPolicy: "preserve", bitDepthPolicy: "8" })
+    } else if (tier === "high-fidelity-archive") {
+      update({ tier, exportFormat: "tiff", jpegQuality: 95, outputSizePreset: "original",
+        preserveMetadata: true, preserveColorProfile: true, preferHighBitDepth: true,
+        colorProfilePolicy: "source", metadataPolicy: "preserve", bitDepthPolicy: "source" })
+    } else {
+      update({ tier: "custom" })
+    }
+  }, [update])
 
   // 加载画幅格式列表
   useEffect(() => {
@@ -141,20 +188,26 @@ export const SettingsPanel = ({
   const handleFilmFormatChange = useCallback((formatId: string): void => {
     const format = filmFormats.find((f) => f.id === formatId)
     const patch = applyFilmFormatSettings(settings, formatId, format)
-    if (formatId === "") {
-      update({
-        ...patch,
-        layoutPresetId: null,
-        imagePlacement: { ...normalizeImagePlacement(settings.imagePlacement), targetAspectRatio: null }
-      })
-    } else {
-      update(patch)
-    }
+    update(patch)
   }, [filmFormats, settings, update])
 
-  const updateImagePlacement = useCallback((patch: Partial<typeof imagePlacement>): void => {
-    update({ imagePlacement: { ...imagePlacement, ...patch } })
-  }, [imagePlacement, update])
+  const updateImageArea = useCallback((patch: Partial<ImageAreaSettings>): void => {
+    const nextArea = normalizeImageAreaSettings({ ...imageArea, ...patch }, imagePlacement)
+    update({
+      imageArea: nextArea,
+      imagePlacement: imagePlacementFromArea(nextArea, imagePlacement)
+    })
+  }, [imageArea, imagePlacement, update])
+
+  const handleImageAreaOrientationChange = useCallback((orientation: ImageAreaSettings["orientation"]): void => {
+    updateImageArea(orientation === "square"
+      ? { orientation, ratio: "1:1", targetAspectRatioOverride: null }
+      : { orientation })
+  }, [updateImageArea])
+
+  const handleImageAreaRatioChange = useCallback((ratio: ImageAreaSettings["ratio"]): void => {
+    updateImageArea({ ratio, targetAspectRatioOverride: null })
+  }, [updateImageArea])
 
   const handleLogoFileSelect = useCallback(async (): Promise<void> => {
     const selectLogoFile = window.desktop?.selectLogoFile
@@ -189,6 +242,9 @@ export const SettingsPanel = ({
   const firstLayer = settings.textLayers[0] ?? null
   const isTextOverridden = textOverride !== null
   const textLayerValue = textOverride ?? firstLayer?.content ?? ""
+  const selectedFont = firstLayer !== null && availableFonts.some((font) => font.value === firstLayer.fontFamily)
+    ? firstLayer.fontFamily
+    : "sans-serif"
 
   /** 更新文字图层内容：同步到 textLayers[0].content 或 textOverride。 */
   const handleTextLayerChange = useCallback((value: string): void => {
@@ -281,19 +337,48 @@ export const SettingsPanel = ({
         </div>
       </fieldset>
 
-      {/* 图片放置（RenderRecipe v2） */}
+      {/* 图片区域：前端产品设置统一解析为 RenderRecipe.imagePlacement。 */}
       <fieldset className="settingGroup">
-        <legend className="settingLabel">图片放置</legend>
+        <legend className="settingLabel">图片区域</legend>
         <div className="settingRow formInlineRow">
           <label className="settingFieldLabel">
-            模式
+            方向
             <select
               className="settingSelect"
-              value={imagePlacement.mode}
-              onChange={(e) => updateImagePlacement({ mode: e.target.value as "fit" | "fill" })}
+              aria-label="图片区域方向"
+              value={imageArea.orientation}
+              onChange={(e) => handleImageAreaOrientationChange(e.target.value as ImageAreaSettings["orientation"])}
             >
-              <option value="fit">适应（完整图片）</option>
-              <option value="fill">铺满（按焦点裁切）</option>
+              {IMAGE_AREA_ORIENTATION_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+          <label className="settingFieldLabel">
+            比例
+            <select
+              className="settingSelect"
+              aria-label="图片区域比例"
+              value={imageArea.ratio}
+              onChange={(e) => handleImageAreaRatioChange(e.target.value as ImageAreaSettings["ratio"])}
+            >
+              {IMAGE_AREA_RATIO_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div className="settingRow formInlineRow">
+          <label className="settingFieldLabel">
+            显示模式
+            <select
+              className="settingSelect"
+              aria-label="图片区域显示模式"
+              value={imageArea.displayMode}
+              onChange={(e) => updateImageArea({ displayMode: e.target.value as ImageAreaSettings["displayMode"] })}
+            >
+              <option value="fit">完整显示</option>
+              <option value="fill">填满裁切</option>
             </select>
           </label>
           <label className="settingFieldLabel">
@@ -304,8 +389,8 @@ export const SettingsPanel = ({
               min={-360}
               max={360}
               step={1}
-              value={imagePlacement.rotation}
-              onChange={(e) => updateImagePlacement({ rotation: Number(e.target.value) })}
+              value={imageArea.rotation}
+              onChange={(e) => updateImageArea({ rotation: Number(e.target.value) })}
             />
           </label>
         </div>
@@ -318,9 +403,9 @@ export const SettingsPanel = ({
               min={0}
               max={1}
               step={0.01}
-              value={imagePlacement.focalX}
-              disabled={imagePlacement.mode !== "fill"}
-              onChange={(e) => updateImagePlacement({ focalX: Number(e.target.value) })}
+              value={imageArea.focalX}
+              disabled={imageArea.displayMode !== "fill"}
+              onChange={(e) => updateImageArea({ focalX: Number(e.target.value) })}
             />
           </label>
           <label className="settingFieldLabel">
@@ -331,27 +416,14 @@ export const SettingsPanel = ({
               min={0}
               max={1}
               step={0.01}
-              value={imagePlacement.focalY}
-              disabled={imagePlacement.mode !== "fill"}
-              onChange={(e) => updateImagePlacement({ focalY: Number(e.target.value) })}
-            />
-          </label>
-          <label className="settingFieldLabel">
-            目标比例
-            <input
-              type="number"
-              className="settingNumberInput"
-              min={0.01}
-              max={20}
-              step={0.01}
-              value={imagePlacement.targetAspectRatio ?? ""}
-              placeholder="原图比例"
-              onChange={(e) => updateImagePlacement({ targetAspectRatio: e.target.value === "" ? null : Number(e.target.value) })}
+              value={imageArea.focalY}
+              disabled={imageArea.displayMode !== "fill"}
+              onChange={(e) => updateImageArea({ focalY: Number(e.target.value) })}
             />
           </label>
         </div>
         <p className="settingsCapabilityHint">
-          适应模式保留整张图；铺满模式按焦点裁切（仅铺满模式使用焦点）。预览与导出使用同一套几何规则。
+          当前区域：{imageAreaSummary.label} · {imageAreaSummary.displayModeLabel}。原图比例下方向跟随源图；预览与导出使用同一套几何规则。
         </p>
       </fieldset>
 
@@ -721,29 +793,29 @@ export const SettingsPanel = ({
                 字体
                 <select
                   className="settingSelect"
-                  value={firstLayer.fontFamily}
+                  value={selectedFont}
                   onChange={(e) => handleTextLayerFontFamilyChange(e.target.value)}
                 >
                   <optgroup label="内置字体">
-                    {fonts.filter((f) => f.source === "builtin").map((opt) => (
+                    {availableFonts.filter((f) => f.source === "builtin").map((opt) => (
                       <option key={opt.value} value={opt.value}>
-                        {opt.label}{!opt.engineAvailable ? "（候选）" : ""}
+                        {opt.label}
                       </option>
                     ))}
                   </optgroup>
-                  {fonts.some((f) => f.source === "system") && (
-                    <optgroup label="候选字体（系统）">
-                      {fonts.filter((f) => f.source === "system").map((opt) => (
+                  {availableFonts.some((f) => f.source === "system") && (
+                    <optgroup label="已验证系统字体">
+                      {availableFonts.filter((f) => f.source === "system").map((opt) => (
                         <option key={opt.value} value={opt.value}>
-                          {opt.label}{!opt.engineAvailable ? "（候选）" : ""}
+                          {opt.label}
                         </option>
                       ))}
                     </optgroup>
                   )}
                 </select>
-                {!fonts.some((f) => f.value === firstLayer.fontFamily && f.engineAvailable) && (
+                {!availableFonts.some((f) => f.value === firstLayer.fontFamily) && (
                   <span className="settingHint">
-                    ⚠ 当前字体引擎可能不可用，导出时将回退到 SansSerif
+                    当前保存的字体不在已验证清单中，本次导出将使用 SansSerif。
                   </span>
                 )}
               </label>
@@ -971,132 +1043,150 @@ export const SettingsPanel = ({
 
       {showOutputSettings && (
         <>
-          {/* 导出格式 */}
           <fieldset className="settingGroup">
-        <legend className="settingLabel">导出格式</legend>
-
-        <div className="settingRow">
-          <label className="settingFieldLabel">
-            格式
-            <select
-              className="settingSelect"
-              value={settings.exportFormat}
-              onChange={(e) => update({ exportFormat: e.target.value as "png" | "jpeg" | "tiff" })}
-            >
-              <option value="png">PNG（无损）</option>
-              <option value="jpeg">JPEG</option>
-              <option value="tiff">TIFF（专业无损）</option>
-            </select>
-          </label>
-        </div>
-
-        {settings.exportFormat === "jpeg" && (
-          <div className="settingRow">
-            <label className="settingFieldLabel">
-              JPEG 质量
-              <NumberInput
-                className="settingNumberInput"
-                value={settings.jpegQuality}
-                min={1}
-                max={100}
-                onCommit={handleNumberCommit("jpegQuality")}
-              />
-            </label>
-          </div>
-        )}
+            <legend className="settingLabel">导出档位</legend>
+            {availableTiers.length === 0 ? (
+              <p className="settingsCapabilityHint">专业输出能力尚未探测到，当前不显示导出控件。</p>
+            ) : (
+              <>
+                <p className="settingHint">档位由当前引擎能力决定；格式是固定档位的可选变体，修改尺寸或策略后才会变为自定义。</p>
+                <div className="settingRow" role="group" aria-label="导出档位">
+                  {availableTiers.map((tier) => (
+                    <button
+                      key={tier}
+                      type="button"
+                      className={`ghostButton${effectiveTier === tier ? " active" : ""}`}
+                      data-testid={`export-tier-${tier}`}
+                      aria-pressed={effectiveTier === tier}
+                      onClick={() => applyTier(tier)}
+                    >
+                      {tier === "quick-share" ? "快速分享" : tier === "standard-delivery" ? "标准交付" : "高保真归档"}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    className={`ghostButton${effectiveTier === "custom" ? " active" : ""}`}
+                    data-testid="export-tier-custom"
+                    aria-pressed={effectiveTier === "custom"}
+                    onClick={() => applyTier("custom")}
+                  >自定义</button>
+                </div>
+                <p className="settingsCapabilityHint">
+                  当前：{effectiveTier === "quick-share" ? "快速分享（JPEG 92、2048 长边、sRGB、移除位置）"
+                    : effectiveTier === "standard-delivery" ? "标准交付（JPEG 95、原尺寸、源 ICC、保留元数据）"
+                      : effectiveTier === "high-fidelity-archive" ? "高保真归档（TIFF、源位深、源 ICC、保留元数据）"
+                        : "自定义（导出前会明确报告实际降级或不支持项）"}
+                </p>
+              </>
+            )}
           </fieldset>
 
-          {/* 输出尺寸 */}
-          <fieldset className="settingGroup">
-        <legend className="settingLabel">输出尺寸</legend>
-        <p className="settingHint" style={{ marginBottom: "var(--space-2)" }}>
-          默认按原图尺寸导出，不缩放。选择预设时按长边等比缩小，适合社交平台分享。
-        </p>
+          {availableTiers.length > 0 && availableFormats.length > 0 && (
+            <fieldset className="settingGroup">
+              <legend className="settingLabel">输出格式</legend>
+              <div className="settingRow">
+                <label className="settingFieldLabel">
+                  格式
+                  <select
+                    className="settingSelect"
+                    aria-label="输出格式"
+                    data-testid="export-format"
+                    value={settings.exportFormat}
+                    onChange={(e) => update({ exportFormat: e.target.value as "png" | "jpeg" | "tiff" })}
+                  >
+                    {availableFormats.map((format) => (
+                      <option key={format} value={format}>{format === "jpeg" ? "JPEG" : format === "png" ? "PNG（无损）" : "TIFF"}</option>
+                    ))}
+                  </select>
+                </label>
+                <p className="settingsCapabilityHint">当前选择不会改变固定档位。</p>
+              </div>
+            </fieldset>
+          )}
 
-        <div className="settingRow">
-          <label className="settingFieldLabel">
-            尺寸预设
-            <select
-              className="settingSelect"
-              value={settings.outputSizePreset}
-              onChange={(e) => update({ outputSizePreset: e.target.value as OutputSizePreset })}
-            >
-              {OUTPUT_SIZE_PRESETS.map((preset) => (
-                <option key={preset.id} value={preset.id}>{preset.label}</option>
-              ))}
-            </select>
-          </label>
-        </div>
+          {availableTiers.length > 0 && effectiveTier === "custom" && (
+            <>
+              <fieldset className="settingGroup">
+                <legend className="settingLabel">自定义输出</legend>
+                {settings.exportFormat === "jpeg" && (
+                  <div className="settingRow">
+                    <label className="settingFieldLabel">
+                      JPEG 质量
+                      <NumberInput
+                        className="settingNumberInput"
+                        value={settings.jpegQuality}
+                        min={1}
+                        max={100}
+                        onCommit={(value) => updateCustomOutput({ jpegQuality: value })}
+                      />
+                    </label>
+                  </div>
+                )}
+                <div className="settingRow">
+                  <label className="settingFieldLabel">
+                    尺寸预设
+                    <select
+                      className="settingSelect"
+                      value={settings.outputSizePreset}
+                      onChange={(e) => updateCustomOutput({ outputSizePreset: e.target.value as OutputSizePreset })}
+                    >
+                      {OUTPUT_SIZE_PRESETS.map((preset) => (
+                        <option key={preset.id} value={preset.id}>{preset.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                {settings.outputSizePreset === "custom" && (
+                  <div className="settingRow">
+                    <label className="settingFieldLabel">
+                      自定义长边（px）
+                      <NumberInput
+                        className="settingNumberInput"
+                        value={settings.customOutputLongEdge}
+                        min={CUSTOM_LONG_EDGE_MIN}
+                        max={CUSTOM_LONG_EDGE_MAX}
+                        onCommit={(value) => updateCustomOutput({ customOutputLongEdge: value })}
+                      />
+                    </label>
+                  </div>
+                )}
+              </fieldset>
 
-        {settings.outputSizePreset === "custom" && (
-          <div className="settingRow">
-            <label className="settingFieldLabel">
-              自定义长边（px）
-              <NumberInput
-                className="settingNumberInput"
-                value={settings.customOutputLongEdge}
-                min={CUSTOM_LONG_EDGE_MIN}
-                max={CUSTOM_LONG_EDGE_MAX}
-                onCommit={handleNumberCommit("customOutputLongEdge")}
-              />
-            </label>
-          </div>
-        )}
-          </fieldset>
-
-          {/* 输出能力 */}
-          <fieldset className="settingGroup">
-        <legend className="settingLabel">输出选项</legend>
-        <p className="settingHint" style={{ marginBottom: "var(--space-2)" }}>
-          导出时按这里的选项生成文件；无法应用的能力会在任务结果中明确标记。
-        </p>
-
-        <div className="settingRow">
-          <label className="settingCheckboxLabel">
-            <input
-              type="checkbox"
-              checked={settings.preserveMetadata}
-              onChange={(e) => update({ preserveMetadata: e.target.checked })}
-            />
-            保留 EXIF 元数据
-          </label>
-        </div>
-        {settings.preserveMetadata && (
-          <p className="settingHint">引擎会尽量保留源图中可读取的 EXIF 信息。</p>
-        )}
-
-        <div className="settingRow">
-          <label className="settingCheckboxLabel">
-            <input
-              type="checkbox"
-              checked={settings.preserveColorProfile}
-              onChange={(e) => update({ preserveColorProfile: e.target.checked })}
-            />
-            保留 ICC 色彩配置
-          </label>
-        </div>
-        {settings.preserveColorProfile && (
-          <p className="settingHint">引擎会在输出格式支持时保留源图 ICC 配置。</p>
-        )}
-
-        <div className="settingRow">
-          <label className="settingCheckboxLabel">
-            <input
-              type="checkbox"
-              checked={settings.preferHighBitDepth}
-              onChange={(e) => update({ preferHighBitDepth: e.target.checked })}
-            />
-            优先高位深（&gt;8bit）
-          </label>
-        </div>
-        {settings.preferHighBitDepth && (
-          <p className="settingHint">TIFF 可保留高位深；PNG/JPEG 会按编码器能力降级并报告结果。</p>
-        )}
-          </fieldset>
-          <OutputPresetPanel
-            settings={settings}
-            onApply={(patch) => update(patch)}
-          />
+              <fieldset className="settingGroup">
+                <legend className="settingLabel">自定义保真策略</legend>
+                <div className="settingRow">
+                  <label className="settingFieldLabel">色彩配置
+                    <select className="settingSelect" value={settings.colorProfilePolicy ?? "source"}
+                      onChange={(e) => updateCustomOutput({ colorProfilePolicy: e.target.value as "source" | "srgb" | "none" })}>
+                      <option value="source">源 ICC（无 ICC 按 sRGB）</option>
+                      <option value="srgb">转换并嵌入 sRGB</option>
+                      <option value="none">不嵌入 ICC</option>
+                    </select>
+                  </label>
+                </div>
+                <div className="settingRow">
+                  <label className="settingFieldLabel">元数据
+                    <select className="settingSelect" value={settings.metadataPolicy ?? "preserve"}
+                      onChange={(e) => updateCustomOutput({ metadataPolicy: e.target.value as "preserve" | "remove-location" | "strip" })}>
+                      <option value="preserve">保留 EXIF/XMP/IPTC/GPS/DPI</option>
+                      <option value="remove-location">保留元数据并移除位置</option>
+                      <option value="strip">移除源元数据</option>
+                    </select>
+                  </label>
+                </div>
+                <div className="settingRow">
+                  <label className="settingFieldLabel">位深
+                    <select className="settingSelect" value={settings.bitDepthPolicy ?? "8"}
+                      onChange={(e) => updateCustomOutput({ bitDepthPolicy: e.target.value as "source" | "8" })}>
+                      <option value="8">8-bit</option>
+                      <option value="source">源位深（仅真实 8/16-bit）</option>
+                    </select>
+                  </label>
+                </div>
+              </fieldset>
+            </>
+          )}
+          {availableTiers.length > 0 && <OutputPresetPanel settings={settings} onApply={(patch) => update(patch)} />}
         </>
       )}
     </div>

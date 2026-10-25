@@ -1,0 +1,189 @@
+# macOS 原生安装包：分别在 arm64 与 x64 runner 构建，不把交叉构建当作安装后验收。
+# 本 workflow 不处理签名、公证或自动更新；只生成未签名测试包、清单和 SHA-256。
+
+name: macOS package
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Native macOS ${{ matrix.arch }} package
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-14
+            runtime_variable: RUNTIME_SHA256_MACOS_ARM64
+          - arch: x64
+            runner: macos-13
+            runtime_variable: RUNTIME_SHA256_MACOS_X64
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.0.0
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: 安装 JDK 11
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 11
+          cache: maven
+
+      - name: 安装项目依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 脚本级测试
+        run: pnpm test:scripts
+
+      - name: 下载并校验目标 Java Runtime（fail-closed）
+        shell: bash
+        env:
+          TARGETS: macos-${{ matrix.arch }}
+          RUNTIME_SHA256_MACOS_ARM64: ${{ vars.RUNTIME_SHA256_MACOS_ARM64 }}
+          RUNTIME_SHA256_MACOS_X64: ${{ vars.RUNTIME_SHA256_MACOS_X64 }}
+          RUNTIME_HASH: ${{ matrix.arch == 'arm64' && vars.RUNTIME_SHA256_MACOS_ARM64 || vars.RUNTIME_SHA256_MACOS_X64 }}
+          REQUIRE_RUNTIME_SHA256: "1"
+        run: |
+          set -euo pipefail
+          runtime_hash="${RUNTIME_HASH:-}"
+          if [ -z "$runtime_hash" ]; then
+            echo "错误：未配置 ${{ matrix.runtime_variable }}，构建中止。" >&2
+            exit 1
+          fi
+          if ! printf '%s' "$runtime_hash" | grep -Eq '^[0-9a-fA-F]{64}$'; then
+            echo "错误：${{ matrix.runtime_variable }} 不是 64 位十六进制哈希。" >&2
+            exit 1
+          fi
+          bash scripts/fetch-runtime.sh
+
+      - name: 前端/Electron/Java 验证
+        run: |
+          pnpm --filter frontend typecheck
+          pnpm --filter frontend test
+          pnpm --filter electron typecheck
+          pnpm --filter electron test
+          mvn -B test -f java-engine/pom.xml
+
+      - name: 构建 macOS ${{ matrix.arch }} 安装包
+        shell: bash
+        env:
+          TARGET_OS: macos
+          ARCH: ${{ matrix.arch }}
+          FORCE_UNSIGNED: "true"
+        run: bash scripts/package-app.sh
+
+      - name: 从 DMG 安装 macOS ${{ matrix.arch }} 应用并运行完整 E2E
+        shell: bash
+        env:
+          INSTALL_DIR: ${{ runner.temp }}/Camera Border Stage6
+          E2E_ARTIFACT_DIR: ${{ runner.temp }}/Camera Border Stage6 E2E
+          USER_DATA_ROOT: ${{ runner.temp }}/Camera Border Stage6 User Data
+        run: |
+          set -euo pipefail
+          dmg="$(find "${GITHUB_WORKSPACE}/electron/release/macos-${{ matrix.arch }}" -maxdepth 1 -type f -name 'Camera-Border-*.dmg' -print -quit)"
+          if [ -z "$dmg" ]; then
+            echo "未找到 macOS DMG，拒绝绕过安装验收。" >&2
+            exit 1
+          fi
+          mount_dir="$(mktemp -d "${RUNNER_TEMP}/camborder-dmg.XXXXXX")"
+          cleanup() {
+            hdiutil detach "$mount_dir" -force >/dev/null 2>&1 || true
+            rm -rf "$mount_dir"
+          }
+          trap cleanup EXIT
+          hdiutil attach "$dmg" -nobrowse -readonly -mountpoint "$mount_dir" >/dev/null
+          if [ ! -d "$mount_dir/Camera Border.app" ]; then
+            echo "DMG 内缺少 Camera Border.app。" >&2
+            exit 1
+          fi
+          rm -rf "$INSTALL_DIR"
+          mkdir -p "$INSTALL_DIR"
+          ditto "$mount_dir/Camera Border.app" "$INSTALL_DIR/Camera Border.app"
+          rm -rf "$E2E_ARTIFACT_DIR"
+          rm -rf "$USER_DATA_ROOT"
+          mkdir -p "$E2E_ARTIFACT_DIR/run-1" "$E2E_ARTIFACT_DIR/run-2"
+          export CAMBORDER_PACKAGED_APP="$INSTALL_DIR/Camera Border.app"
+          export CAMBORDER_E2E_INSTALLED_FROM_PACKAGE=1
+          export CAMBORDER_E2E_ARTIFACT_DIR="$E2E_ARTIFACT_DIR/run-1"
+          export CAMBORDER_E2E_USER_DATA_DIR="$USER_DATA_ROOT/run-1"
+          pnpm e2e:packaged
+          export CAMBORDER_E2E_ARTIFACT_DIR="$E2E_ARTIFACT_DIR/run-2"
+          export CAMBORDER_E2E_USER_DATA_DIR="$USER_DATA_ROOT/run-2"
+          pnpm e2e:packaged
+
+      - name: 卸载 macOS ${{ matrix.arch }} 已安装应用
+        if: always()
+        shell: bash
+        env:
+          INSTALL_DIR: ${{ runner.temp }}/Camera Border Stage6
+        run: |
+          set -euo pipefail
+          rm -rf "$INSTALL_DIR"
+          if [ -e "$INSTALL_DIR/Camera Border.app" ]; then
+            echo "卸载后仍存在 Camera Border.app。" >&2
+            exit 1
+          fi
+
+      - name: 记录 macOS ${{ matrix.arch }} 安装生命周期证据
+        if: always()
+        shell: bash
+        env:
+          INSTALL_DIR: ${{ runner.temp }}/Camera Border Stage6
+          E2E_ARTIFACT_DIR: ${{ runner.temp }}/Camera Border Stage6 E2E
+          USER_DATA_ROOT: ${{ runner.temp }}/Camera Border Stage6 User Data/run-2
+        run: |
+          set -euo pipefail
+          manifest="$(find "${GITHUB_WORKSPACE}/electron/release/macos-${{ matrix.arch }}" -maxdepth 1 -type f -name 'Camera-Border-*.manifest.json' -print -quit)"
+          if [ -z "$manifest" ]; then
+            echo "未找到包 manifest，无法生成安装生命周期证据。" >&2
+            exit 1
+          fi
+          commit="$(node -p 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).commit' "$manifest")"
+          node scripts/write-install-lifecycle-evidence.mjs \
+            --output "$E2E_ARTIFACT_DIR/install-lifecycle-result.json" \
+            --platform darwin \
+            --arch "${{ matrix.arch }}" \
+            --package-commit "$commit" \
+            --installed-path "$INSTALL_DIR" \
+            --user-data-path "$USER_DATA_ROOT"
+
+      - name: 生成 macOS ${{ matrix.arch }} 发布报告
+        if: always()
+        shell: bash
+        env:
+          E2E_ARTIFACT_DIR: ${{ runner.temp }}/Camera Border Stage6 E2E
+        run: node scripts/generate-release-report.mjs --e2e-artifact-root "$E2E_ARTIFACT_DIR" --acceptance-root "$E2E_ARTIFACT_DIR"
+
+      - name: 上传 macOS ${{ matrix.arch }} 安装包和证据
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Camera-Border-macos-${{ matrix.arch }}
+          if-no-files-found: warn
+          path: |
+            electron/release/macos-${{ matrix.arch }}/Camera-Border-*.dmg
+            electron/release/macos-${{ matrix.arch }}/Camera-Border-*.dmg.sha256
+            electron/release/macos-${{ matrix.arch }}/Camera-Border-*.dmg.manifest.json
+            electron/release/release-report.json
+            ${{ runner.temp }}/Camera Border Stage6 E2E/**
+          compression-level: 0

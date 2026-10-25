@@ -6,6 +6,9 @@ import { registerEngineDiagnosticsIpc } from "./engineDiagnostics.js"
 import { registerNotificationsIpc } from "./notifications.js"
 import { registerLocalImagePreviewIpc } from "./localImagePreview.js"
 import { registerFilePresenceIpc, registerImageFileVersionIpc } from "./filePresence.js"
+import { registerWindowStateIpc } from "./windowState.js"
+import { registerPackageCapabilitiesIpc } from "./packageCapabilities.js"
+import { registerAiGatewayIpc } from "./aiGateway.js"
 
 /**
  * 统一注册所有 IPC handler。
@@ -13,6 +16,8 @@ import { registerFilePresenceIpc, registerImageFileVersionIpc } from "./filePres
  * 在 app.whenReady() 之后、窗口创建之前调用。
  */
 export const registerAllIpc = (): void => {
+  registerWindowStateIpc()
+  registerPackageCapabilitiesIpc()
   registerFileDialogIpc()
   registerTemplateStorageIpc()
   registerAssetStorageIpc()
@@ -27,4 +32,6 @@ export const registerAllIpc = (): void => {
   registerFilePresenceIpc()
   // 预览缓存仅用 mtime/字节数失效，不向渲染进程暴露文件内容或目录能力。
   registerImageFileVersionIpc()
+  // AI 网关（联通国际 Uni Token）：V2 AI 能力预留；密钥未配置时调用返回 key-missing 错误。
+  registerAiGatewayIpc()
 }

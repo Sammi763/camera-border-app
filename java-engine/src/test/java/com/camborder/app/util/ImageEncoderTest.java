@@ -1,6 +1,7 @@
 package com.camborder.app.util;
 
 import com.camborder.app.dto.ExportSettings;
+import com.camborder.app.service.impl.ExifMetadataServiceImpl;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -54,6 +55,150 @@ final class ImageEncoderTest {
         assertThat(hasJpegSegment(encoded, 0xe2, "ICC_PROFILE\0".getBytes(StandardCharsets.US_ASCII))).isTrue();
     }
 
+    @Test
+    void writesRealTiffExifAndIccAfterChangingOutputDimensions(@TempDir final Path tempDir)
+            throws IOException {
+        Path source = realTiffFixture();
+        Path output = tempDir.resolve("real-metadata.tif");
+        ExportSettings settings = tiffExportSettings(output, true, true);
+
+        ImageEncoder.ExportResult result = new ImageEncoder().writeToFile(
+                sampleImage(), output.toString(), settings, source.toString());
+
+        assertThat(result.getMetadataPreservation().getStatus())
+                .isEqualTo(ImageEncoder.FeatureStatus.APPLIED);
+        assertThat(result.getColorProfilePreservation().getStatus())
+                .isEqualTo(ImageEncoder.FeatureStatus.APPLIED);
+        assertThat(ImageIO.read(output.toFile()).getWidth()).isEqualTo(16);
+        assertThat(ImageIO.read(output.toFile()).getHeight()).isEqualTo(12);
+
+        ImageMetadataPayload outputMetadata = ImageMetadataPayload.read(output.toString());
+        assertThat(outputMetadata.hasExif()).isTrue();
+        assertThat(outputMetadata.hasIcc()).isTrue();
+        var exif = new ExifMetadataServiceImpl().readMetadata(output.toString());
+        assertThat(exif.getCameraModel()).contains("Canon", "1Ds Mark II");
+        assertThat(exif.getDateTimeOriginal()).isEqualTo("2006:12:05 03:45:51");
+    }
+
+    @Test
+    void convertsRealJpegExifAndIccIntoTiff(@TempDir final Path tempDir) throws IOException {
+        Path source = Path.of("..", "fixtures", "stage4", "real-exif-canon-m03a9518.jpg")
+                .toAbsolutePath().normalize();
+        Path output = tempDir.resolve("jpeg-source.tif");
+
+        ImageEncoder.ExportResult result = new ImageEncoder().writeToFile(
+                sampleImage(), output.toString(), tiffExportSettings(output, true, true),
+                source.toString());
+
+        assertThat(result.getMetadataPreservation().getStatus())
+                .isEqualTo(ImageEncoder.FeatureStatus.APPLIED);
+        assertThat(result.getColorProfilePreservation().getStatus())
+                .isEqualTo(ImageEncoder.FeatureStatus.APPLIED);
+        ImageMetadataPayload outputMetadata = ImageMetadataPayload.read(output.toString());
+        assertThat(outputMetadata.hasExif()).isTrue();
+        assertThat(outputMetadata.hasIcc()).isTrue();
+        var exif = new ExifMetadataServiceImpl().readMetadata(output.toString());
+        assertThat(exif.getCameraModel()).contains("Canon", "5D Mark IV");
+        assertThat(exif.getLensModel()).contains("EF24-70mm");
+        assertThat(exif.getDateTimeOriginal()).isEqualTo("2017:05:11 15:52:33");
+    }
+
+    @Test
+    void convertsRealJpegExifIntoPngTiffPayload(@TempDir final Path tempDir) throws IOException {
+        Path source = Path.of("..", "fixtures", "stage4", "real-exif-canon-m03a9518.jpg")
+                .toAbsolutePath().normalize();
+        Path output = tempDir.resolve("jpeg-source.png");
+
+        ImageEncoder.ExportResult result = new ImageEncoder().writeToFile(
+                sampleImage(), output.toString(), exportSettings(output, true, true),
+                source.toString());
+
+        assertThat(result.getMetadataPreservation().getStatus())
+                .isEqualTo(ImageEncoder.FeatureStatus.APPLIED);
+        assertThat(result.getColorProfilePreservation().getStatus())
+                .isEqualTo(ImageEncoder.FeatureStatus.APPLIED);
+        ImageMetadataPayload outputMetadata = ImageMetadataPayload.read(output.toString());
+        assertThat(outputMetadata.hasExif()).isTrue();
+        assertThat(outputMetadata.hasIcc()).isTrue();
+        var exif = new ExifMetadataServiceImpl().readMetadata(output.toString());
+        assertThat(exif.getCameraModel()).contains("Canon", "5D Mark IV");
+        assertThat(exif.getDateTimeOriginal()).isEqualTo("2017:05:11 15:52:33");
+    }
+
+    @Test
+    void convertsRealTiffExifAndIccIntoJpeg(@TempDir final Path tempDir) throws IOException {
+        Path source = realTiffFixture();
+        Path output = tempDir.resolve("tiff-source.jpg");
+        ExportSettings settings = exportSettings(output, true, true);
+
+        ImageEncoder.ExportResult result = new ImageEncoder().writeToFile(
+                sampleImage(), output.toString(), settings, source.toString());
+
+        assertThat(result.getMetadataPreservation().getStatus())
+                .isEqualTo(ImageEncoder.FeatureStatus.APPLIED);
+        assertThat(result.getColorProfilePreservation().getStatus())
+                .isEqualTo(ImageEncoder.FeatureStatus.APPLIED);
+        ImageMetadataPayload outputMetadata = ImageMetadataPayload.read(output.toString());
+        assertThat(outputMetadata.hasExif()).isTrue();
+        assertThat(outputMetadata.hasIcc()).isTrue();
+        var exif = new ExifMetadataServiceImpl().readMetadata(output.toString());
+        assertThat(exif.getCameraModel()).contains("Canon", "1Ds Mark II");
+        assertThat(exif.getDateTimeOriginal()).isEqualTo("2006:12:05 03:45:51");
+    }
+
+    @Test
+    void convertsRealTiffExifAndIccIntoPng(@TempDir final Path tempDir) throws IOException {
+        Path source = realTiffFixture();
+        Path output = tempDir.resolve("tiff-source.png");
+        ExportSettings settings = new ExportSettings(output.toString(), "png", 95);
+        settings.setPreserveMetadata(true);
+        settings.setPreserveColorProfile(true);
+
+        ImageEncoder.ExportResult result = new ImageEncoder().writeToFile(
+                sampleImage(), output.toString(), settings, source.toString());
+
+        assertThat(result.getMetadataPreservation().getStatus())
+                .isEqualTo(ImageEncoder.FeatureStatus.APPLIED);
+        assertThat(result.getColorProfilePreservation().getStatus())
+                .isEqualTo(ImageEncoder.FeatureStatus.APPLIED);
+        ImageMetadataPayload outputMetadata = ImageMetadataPayload.read(output.toString());
+        assertThat(outputMetadata.hasExif()).isTrue();
+        assertThat(outputMetadata.hasIcc()).isTrue();
+        var exif = new ExifMetadataServiceImpl().readMetadata(output.toString());
+        assertThat(exif.getCameraModel()).contains("Canon", "1Ds Mark II");
+        assertThat(exif.getDateTimeOriginal()).isEqualTo("2006:12:05 03:45:51");
+    }
+
+    @Test
+    void keepsRealTiffExifAndIccSwitchesIndependent(@TempDir final Path tempDir) {
+        Path source = realTiffFixture();
+        ImageEncoder encoder = new ImageEncoder();
+
+        Path exifOnly = tempDir.resolve("exif-only.tif");
+        ImageEncoder.ExportResult exifResult = encoder.writeToFile(
+                sampleImage(), exifOnly.toString(), tiffExportSettings(exifOnly, true, false),
+                source.toString());
+        ImageMetadataPayload exifOutput = ImageMetadataPayload.read(exifOnly.toString());
+        assertThat(exifResult.getMetadataPreservation().getStatus())
+                .isEqualTo(ImageEncoder.FeatureStatus.APPLIED);
+        assertThat(exifResult.getColorProfilePreservation().getStatus())
+                .isEqualTo(ImageEncoder.FeatureStatus.NOT_REQUESTED);
+        assertThat(exifOutput.hasExif()).isTrue();
+        assertThat(exifOutput.hasIcc()).isFalse();
+
+        Path iccOnly = tempDir.resolve("icc-only.tif");
+        ImageEncoder.ExportResult iccResult = encoder.writeToFile(
+                sampleImage(), iccOnly.toString(), tiffExportSettings(iccOnly, false, true),
+                source.toString());
+        ImageMetadataPayload iccOutput = ImageMetadataPayload.read(iccOnly.toString());
+        assertThat(iccResult.getMetadataPreservation().getStatus())
+                .isEqualTo(ImageEncoder.FeatureStatus.NOT_REQUESTED);
+        assertThat(iccResult.getColorProfilePreservation().getStatus())
+                .isEqualTo(ImageEncoder.FeatureStatus.APPLIED);
+        assertThat(iccOutput.hasExif()).isFalse();
+        assertThat(iccOutput.hasIcc()).isTrue();
+    }
+
     private static ExportSettings exportSettings(final Path output,
                                                  final boolean preserveMetadata,
                                                  final boolean preserveColorProfile) {
@@ -70,6 +215,20 @@ final class ImageEncoderTest {
         graphics.fillRect(0, 0, image.getWidth(), image.getHeight());
         graphics.dispose();
         return image;
+    }
+
+    private static ExportSettings tiffExportSettings(final Path output,
+                                                      final boolean preserveMetadata,
+                                                      final boolean preserveColorProfile) {
+        ExportSettings settings = new ExportSettings(output.toString(), "tiff", 95);
+        settings.setPreserveMetadata(preserveMetadata);
+        settings.setPreserveColorProfile(preserveColorProfile);
+        return settings;
+    }
+
+    private static Path realTiffFixture() {
+        return Path.of("..", "fixtures", "stage4", "real-exif-canon-farmers-nooning.tif")
+                .toAbsolutePath().normalize();
     }
 
     /** 创建带最小 EXIF/ICC APP 段的 JPEG，测试只关心编码器的块选择。 */

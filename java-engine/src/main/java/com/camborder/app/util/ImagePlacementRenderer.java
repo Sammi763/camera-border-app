@@ -129,7 +129,7 @@ public final class ImagePlacementRenderer {
         final Geometry geometry = calculate(source.getWidth(), source.getHeight(), placement);
         final int width = Math.max(1, (int) Math.round(geometry.targetWidth()));
         final int height = Math.max(1, (int) Math.round(geometry.targetHeight()));
-        final BufferedImage output = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+        final BufferedImage output = PixelBufferFactory.createLikeInSrgb(source, width, height);
 
         final Graphics2D graphics = output.createGraphics();
         try {

@@ -10,7 +10,11 @@ export const OUTPUT_SETTING_KEYS: readonly OutputSettingKey[] = [
   "customOutputLongEdge",
   "preserveMetadata",
   "preserveColorProfile",
-  "preferHighBitDepth"
+  "preferHighBitDepth",
+  "tier",
+  "colorProfilePolicy",
+  "metadataPolicy",
+  "bitDepthPolicy"
 ]
 
 /**

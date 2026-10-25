@@ -1,5 +1,7 @@
 package com.camborder.app.dto;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 /**
  * 摄影元数据响应 DTO。
  * 字段：相机型号、镜头型号、光圈、快门速度、ISO、焦距、拍摄时间以及
@@ -69,6 +71,7 @@ public final class PhotoMetadataResponse {
         return shutterSpeed;
     }
 
+    @JsonProperty("fNumber")
     public String getFNumber() {
         return fNumber;
     }

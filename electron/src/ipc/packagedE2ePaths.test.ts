@@ -16,4 +16,17 @@ describe("composePackagedE2eImagePaths", () => {
   it("缺少主样片时不注入孤立失败样片", () => {
     expect(composePackagedE2eImagePaths(null, "/tmp/retry.jpg")).toEqual([])
   })
+
+  it("在主样片和失败样片之间保留明确的真实附加样片顺序", () => {
+    expect(composePackagedE2eImagePaths(
+      "/tmp/sample.jpg",
+      "/tmp/retry.jpg",
+      ["/tmp/real.tif", "/tmp/real.heic"]
+    )).toEqual([
+      "/tmp/sample.jpg",
+      "/tmp/real.tif",
+      "/tmp/real.heic",
+      "/tmp/retry.jpg"
+    ])
+  })
 })

@@ -90,7 +90,7 @@ public final class Java2DImageRenderService implements ImageRenderService {
                 scaled.getWidth(), scaled.getHeight());
         // 品牌标识绘制（如果启用）
         logoRenderer.draw(canvas, recipe.getLogo(), recipe.getBorder());
-        return new ComposeOutcome(canvas, read.getSourceDecode());
+        return new ComposeOutcome(canvas, read.getSourceDecode(), read.getSourceInfo());
     }
 
     @Override
@@ -107,5 +107,12 @@ public final class Java2DImageRenderService implements ImageRenderService {
     public ImageEncoder.ExportResult writeToFile(final BufferedImage image, final ExportSettings export,
                                                  final String sourcePath) {
         return imageEncoder.writeToFile(image, export.getOutputPath(), export, sourcePath);
+    }
+
+    @Override
+    public ImageEncoder.ExportResult writeToFile(final BufferedImage image, final ExportSettings export,
+                                                 final String sourcePath,
+                                                 final com.camborder.app.util.SourceImageInfo sourceInfo) {
+        return imageEncoder.writeToFile(image, export.getOutputPath(), export, sourcePath, sourceInfo);
     }
 }

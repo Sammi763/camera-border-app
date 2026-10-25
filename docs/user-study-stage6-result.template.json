@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "status": "NOT_RUN",
+  "participants": 0,
+  "firstUseCompletionRate": null,
+  "medianFirstOutputSeconds": null,
+  "rawMisunderstandings": null,
+  "scopeMisunderstandings": null,
+  "defects": {
+    "P0": null,
+    "P1": null,
+    "P2": null,
+    "P3": null
+  },
+  "p3OnlyVisual": false,
+  "blockers": [],
+  "participantRecords": [],
+  "completedAt": null
+}

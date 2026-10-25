@@ -9,6 +9,7 @@ import com.camborder.app.exception.ResourceNotFoundException;
 import com.camborder.app.exception.RenderOutputConflictException;
 import com.camborder.app.model.RenderRecipe;
 import com.camborder.app.service.RenderJobService;
+import com.camborder.app.service.ExportPreflightService;
 import com.camborder.app.util.OutputPathValidator;
 import com.camborder.app.util.RenderRecipeValidator;
 import org.springframework.http.HttpStatus;
@@ -45,9 +46,12 @@ public final class RenderJobController {
     private static final int MAX_SNAPSHOTS_PER_JOB = 100;
 
     private final RenderJobService renderJobService;
+    private final ExportPreflightService exportPreflightService;
 
-    public RenderJobController(final RenderJobService renderJobService) {
+    public RenderJobController(final RenderJobService renderJobService,
+                               final ExportPreflightService exportPreflightService) {
         this.renderJobService = renderJobService;
+        this.exportPreflightService = exportPreflightService;
     }
 
     @PostMapping("/render-jobs")
@@ -67,6 +71,13 @@ public final class RenderJobController {
             }
         }
 
+        if (snapshots.stream().anyMatch(snapshot -> snapshot != null && snapshot.getExport() != null
+                && snapshot.getExport().hasProfessionalPolicy())) {
+            final var preflight = exportPreflightService.preflight(request);
+            if (!"ready".equals(preflight.getStatus())) {
+                throw new ApiException("export preflight blocked", HttpStatus.CONFLICT);
+            }
+        }
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(renderJobService.submitJob(request));
     }
 
@@ -95,6 +106,11 @@ public final class RenderJobController {
         }
         if (export.getMaxWidth() < 0 || export.getMaxHeight() < 0) {
             throw new ApiException(prefix + "maxWidth and maxHeight must be non-negative", HttpStatus.BAD_REQUEST);
+        }
+        if (export.getTier() != null && !Set.of(
+                "quick-share", "standard-delivery", "high-fidelity-archive", "custom")
+                .contains(export.getTier())) {
+            throw new ApiException(prefix + "tier is invalid", HttpStatus.BAD_REQUEST);
         }
 
         final Path imagePath;

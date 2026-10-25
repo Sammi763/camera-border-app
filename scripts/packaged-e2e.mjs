@@ -1,17 +1,24 @@
 import assert from "node:assert/strict"
-import { spawn } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import { createServer } from "node:net"
-import { accessSync, constants, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs"
+import { accessSync, constants, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, truncateSync, unlinkSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { tmpdir } from "node:os"
 import { fileURLToPath } from "node:url"
+import { inflateSync } from "node:zlib"
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
-const DEFAULT_SAMPLE = path.join(ROOT, "photos", "78330006.jpg")
+const DEFAULT_SAMPLE = path.join(ROOT, "fixtures", "stage4", "real-exif-canon-m03a9518.jpg")
 const DEFAULT_TIMEOUT_MS = 45_000
 const UI_PERFORMANCE_QUEUE_COUNT = 100
 export const PHOTO_CONTENT_PIXEL_THRESHOLD = 1000
+/** 阶段 2 固定验收的三个工作台窗口尺寸。 */
+export const STAGE2_RESPONSIVE_WINDOW_SIZES = Object.freeze([
+  Object.freeze({ width: 1200, height: 760 }),
+  Object.freeze({ width: 1400, height: 863 }),
+  Object.freeze({ width: 1920, height: 1080 })
+])
 const EXPECTED_CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
   "script-src 'self'",
@@ -130,7 +137,9 @@ export const findPackagedExecutable = ({
     }
     throw new Error(`显式打包应用路径不是有效的当前平台可执行文件：${candidate}`)
   }
-  return candidate
+  // macOS /tmp 等目录可能是指向 /private/tmp 的符号链接；应用日志记录 realpath，
+  // E2E 也必须使用同一真实路径，避免把已启动的随包 JRE 判为缺失。
+  return realpathSync(candidate)
 }
 
 export const resourcesDirectoryFor = (executable) => process.platform === "darwin"
@@ -140,6 +149,60 @@ export const resourcesDirectoryFor = (executable) => process.platform === "darwi
 const bundledJavaPathFor = (executable) => process.platform === "darwin"
   ? path.join(resourcesDirectoryFor(executable), "java-runtime", "Contents", "Home", "bin", "java")
   : path.join(resourcesDirectoryFor(executable), "java-runtime", "bin", process.platform === "win32" ? "java.exe" : "java")
+
+const bundledExifToolPathFor = (executable) => process.platform === "win32"
+  ? path.join(resourcesDirectoryFor(executable), "professional-tools", "exiftool", "win-x64", "exiftool.exe")
+  : path.join(resourcesDirectoryFor(executable), "professional-tools", "exiftool", "macos", "exiftool")
+
+/** 使用独立 ExifTool 读取导出文件，避免把 Java 应用自身报告当作最终证据。 */
+export const readIndependentExifToolJson = (exifTool, imagePath) => {
+  const result = spawnSync(exifTool, ["-j", "-G1", "-s", "-n", imagePath], {
+    encoding: "utf8",
+    timeout: 15_000,
+    windowsHide: true
+  })
+  if (result.error !== undefined) throw result.error
+  if (result.status !== 0) {
+    throw new Error(`独立 ExifTool 读取失败，退出码=${result.status}：${result.stderr ?? ""}`)
+  }
+  let parsed
+  try {
+    parsed = JSON.parse(result.stdout)
+  } catch (error) {
+    throw new Error(`独立 ExifTool 输出无效：${error instanceof Error ? error.message : String(error)}`)
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0 || parsed[0] === null || typeof parsed[0] !== "object") {
+    throw new Error("独立 ExifTool 没有返回有效文件事实")
+  }
+  return parsed[0]
+}
+
+const exifValue = (record, suffix) => Object.entries(record)
+  .find(([key]) => key === suffix || key.endsWith(`:${suffix}`))?.[1] ?? null
+
+const hasExifGroup = (record, prefix) => Object.keys(record).some((key) =>
+  key === prefix || key.startsWith(`${prefix}:`) || key.startsWith(`${prefix}-`) || key.startsWith(`${prefix}_`)
+)
+
+/** 独立 ExifTool 的分组事实；应用自身 FidelityReport 不能替代这些断言。 */
+export const independentMetadataFacts = (record) => ({
+  exif: hasExifGroup(record, "ExifIFD") || hasExifGroup(record, "IFD0"),
+  xmp: hasExifGroup(record, "XMP"),
+  iptc: hasExifGroup(record, "IPTC"),
+  gps: hasExifGroup(record, "GPS") || exifValue(record, "GPSPosition") !== null,
+  icc: hasExifGroup(record, "ICC"),
+  dpi: exifValue(record, "XResolution") !== null && exifValue(record, "YResolution") !== null,
+  orientation: Number(exifValue(record, "Orientation")),
+  colorSpace: exifValue(record, "ColorSpace")
+})
+
+const independentBitDepth = (record) => {
+  const raw = exifValue(record, "BitsPerSample") ?? exifValue(record, "BitDepth")
+  const values = Array.isArray(raw)
+    ? raw.flatMap((value) => String(value).match(/\d+/g) ?? []).map(Number)
+    : String(raw ?? "").match(/\d+/g)?.map(Number) ?? []
+  return values.length === 0 ? null : Math.max(...values)
+}
 
 const getFreePort = async () => await new Promise((resolve, reject) => {
   const server = createServer()
@@ -156,6 +219,258 @@ const getFreePort = async () => await new Promise((resolve, reject) => {
 })
 
 const sha256File = (filePath) => createHash("sha256").update(readFileSync(filePath)).digest("hex")
+
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+
+/** 解码本项目 ImageIO/Canvas 输出的 8-bit RGB/RGBA PNG，得到真实像素而非只比较文件长度。 */
+const readPngRaster = (data) => {
+  if (!Buffer.isBuffer(data) || data.length < 33 || !data.subarray(0, 8).equals(PNG_SIGNATURE)) return null
+  let width = 0
+  let height = 0
+  let bitDepth = null
+  let colorType = null
+  let interlace = null
+  const idat = []
+  let offset = 8
+  while (offset + 12 <= data.length) {
+    const length = data.readUInt32BE(offset)
+    const end = offset + 12 + length
+    if (end > data.length) return null
+    const type = data.toString("ascii", offset + 4, offset + 8)
+    const payload = data.subarray(offset + 8, offset + 8 + length)
+    if (type === "IHDR" && payload.length >= 13) {
+      width = payload.readUInt32BE(0)
+      height = payload.readUInt32BE(4)
+      bitDepth = payload[8]
+      colorType = payload[9]
+      interlace = payload[12]
+    } else if (type === "IDAT") {
+      idat.push(payload)
+    } else if (type === "IEND") {
+      break
+    }
+    offset = end
+  }
+  if (width <= 0 || height <= 0 || bitDepth !== 8 || interlace !== 0 || ![2, 6].includes(colorType) || idat.length === 0) {
+    return null
+  }
+  let inflated
+  try {
+    inflated = inflateSync(Buffer.concat(idat))
+  } catch {
+    return null
+  }
+  const sourceBytesPerPixel = colorType === 6 ? 4 : 3
+  const rowBytes = width * sourceBytesPerPixel
+  const expectedLength = height * (rowBytes + 1)
+  if (inflated.length < expectedLength) return null
+  const rows = Buffer.alloc(height * rowBytes)
+  const paeth = (left, up, upperLeft) => {
+    const estimate = left + up - upperLeft
+    const leftDistance = Math.abs(estimate - left)
+    const upDistance = Math.abs(estimate - up)
+    const upperLeftDistance = Math.abs(estimate - upperLeft)
+    if (leftDistance <= upDistance && leftDistance <= upperLeftDistance) return left
+    if (upDistance <= upperLeftDistance) return up
+    return upperLeft
+  }
+  for (let y = 0; y < height; y++) {
+    const filter = inflated[y * (rowBytes + 1)]
+    const sourceStart = y * (rowBytes + 1) + 1
+    const rowStart = y * rowBytes
+    const previousStart = (y - 1) * rowBytes
+    if (![0, 1, 2, 3, 4].includes(filter)) return null
+    for (let x = 0; x < rowBytes; x++) {
+      const raw = inflated[sourceStart + x]
+      const left = x >= sourceBytesPerPixel ? rows[rowStart + x - sourceBytesPerPixel] : 0
+      const up = y > 0 ? rows[previousStart + x] : 0
+      const upperLeft = y > 0 && x >= sourceBytesPerPixel ? rows[previousStart + x - sourceBytesPerPixel] : 0
+      let value = raw
+      if (filter === 1) value += left
+      if (filter === 2) value += up
+      if (filter === 3) value += Math.floor((left + up) / 2)
+      if (filter === 4) value += paeth(left, up, upperLeft)
+      rows[rowStart + x] = value & 0xff
+    }
+  }
+  const rgba = Buffer.alloc(width * height * 4)
+  for (let index = 0; index < width * height; index++) {
+    const source = index * sourceBytesPerPixel
+    const target = index * 4
+    rgba[target] = rows[source]
+    rgba[target + 1] = rows[source + 1]
+    rgba[target + 2] = rows[source + 2]
+    rgba[target + 3] = colorType === 6 ? rows[source + 3] : 255
+  }
+  return { width, height, bitDepth, rgba }
+}
+
+const readPngChunkTypes = (data) => {
+  if (!Buffer.isBuffer(data) || !data.subarray(0, 8).equals(PNG_SIGNATURE)) return []
+  const types = []
+  let offset = 8
+  while (offset + 12 <= data.length) {
+    const length = data.readUInt32BE(offset)
+    const end = offset + 12 + length
+    if (end > data.length) break
+    types.push(data.toString("ascii", offset + 4, offset + 8))
+    offset = end
+    if (types[types.length - 1] === "IEND") break
+  }
+  return types
+}
+
+const readJpegMetadataPresence = (data) => {
+  let exif = false
+  let icc = false
+  if (!Buffer.isBuffer(data) || data.length < 4 || data[0] !== 0xff || data[1] !== 0xd8) return { exif, icc }
+  let offset = 2
+  while (offset + 4 <= data.length) {
+    if (data[offset] !== 0xff) break
+    while (data[offset] === 0xff) offset++
+    const marker = data[offset++]
+    if (marker === undefined || marker === 0xda || marker === 0xd9) break
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd8)) continue
+    if (offset + 2 > data.length) break
+    const length = data.readUInt16BE(offset)
+    if (length < 2 || offset + length > data.length) break
+    const payloadStart = offset + 2
+    const payloadEnd = offset + length
+    if (marker === 0xe1 && data.subarray(payloadStart, payloadStart + 6).toString("ascii") === "Exif\0\0") exif = true
+    if (marker === 0xe2 && data.subarray(payloadStart, payloadStart + 12).toString("ascii") === "ICC_PROFILE\0") icc = true
+    offset = payloadEnd
+  }
+  return { exif, icc }
+}
+
+/** 读取 TIFF 根 IFD 的 EXIF pointer 与 ICC profile tag，验证跨容器导出后的真实文件。 */
+const readTiffMetadataPresence = (data) => {
+  if (!Buffer.isBuffer(data) || data.length < 8) return null
+  const littleEndian = data[0] === 0x49 && data[1] === 0x49
+  const bigEndian = data[0] === 0x4d && data[1] === 0x4d
+  if (!littleEndian && !bigEndian) return null
+  const readUInt16 = (offset) => {
+    if (offset < 0 || offset + 2 > data.length) return null
+    return littleEndian ? data.readUInt16LE(offset) : data.readUInt16BE(offset)
+  }
+  const readUInt32 = (offset) => {
+    if (offset < 0 || offset + 4 > data.length) return null
+    return littleEndian ? data.readUInt32LE(offset) : data.readUInt32BE(offset)
+  }
+  if (readUInt16(2) !== 42) return null
+  const firstIfd = readUInt32(4)
+  if (firstIfd === null || firstIfd + 2 > data.length) return null
+  const result = { exif: false, icc: false }
+  const visited = new Set()
+  const pending = [firstIfd]
+  while (pending.length > 0) {
+    const ifdOffset = pending.pop()
+    if (!Number.isInteger(ifdOffset) || visited.has(ifdOffset) || ifdOffset + 2 > data.length) continue
+    visited.add(ifdOffset)
+    const entryCount = readUInt16(ifdOffset)
+    if (entryCount === null || entryCount > 4096) continue
+    for (let index = 0; index < entryCount; index++) {
+      const entryOffset = ifdOffset + 2 + index * 12
+      if (entryOffset + 12 > data.length) break
+      const tag = readUInt16(entryOffset)
+      const type = readUInt16(entryOffset + 2)
+      const count = readUInt32(entryOffset + 4)
+      if (tag === null || type === null || count === null) continue
+      if (tag === 34675) result.icc = true
+      if (tag !== 34665 && tag !== 34853 && tag !== 40965) continue
+      if (tag === 34665) result.exif = true
+      if (count !== 1 || (type !== 3 && type !== 4 && type !== 13)) continue
+      const valueOffset = type === 3 ? entryOffset + 8 : entryOffset + 8
+      const childOffset = type === 3 ? readUInt16(valueOffset) : readUInt32(valueOffset)
+      if (childOffset !== null && childOffset > 0) pending.push(childOffset)
+    }
+  }
+  return result
+}
+
+/** 输出证据中的实际位深与元数据块，供 PNG/JPEG/TIFF 三种格式共用记录。 */
+const readImageBitDepth = (data) => {
+  const png = readPngRaster(data)
+  if (png !== null) return png.bitDepth
+  if (Buffer.isBuffer(data) && data[0] === 0xff && data[1] === 0xd8) {
+    const sofMarkers = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf])
+    let offset = 2
+    while (offset + 4 <= data.length) {
+      if (data[offset] !== 0xff) break
+      while (data[offset] === 0xff) offset++
+      const marker = data[offset++]
+      if (marker === undefined || marker === 0xda || marker === 0xd9) break
+      if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd8)) continue
+      const length = data.readUInt16BE(offset)
+      if (length < 2 || offset + length > data.length) break
+      if (sofMarkers.has(marker)) return data[offset + 2] ?? null
+      offset += length
+    }
+    return null
+  }
+  return 8
+}
+
+export const readImageMetadataPresence = (data) => {
+  const pngChunks = readPngChunkTypes(data)
+  if (pngChunks.length > 0) return { exif: pngChunks.includes("eXIf"), icc: pngChunks.includes("iCCP") }
+  const tiff = readTiffMetadataPresence(data)
+  if (tiff !== null) return tiff
+  return readJpegMetadataPresence(data)
+}
+
+const readRasterDigest = (data) => {
+  const raster = readPngRaster(data)
+  return raster === null ? null : createHash("sha256").update(raster.rgba).digest("hex")
+}
+
+const readPngColorStats = (data) => {
+  const raster = readPngRaster(data)
+  if (raster === null) return null
+  let redPixels = 0
+  let whitePixels = 0
+  for (let offset = 0; offset < raster.rgba.length; offset += 4) {
+    const red = raster.rgba[offset]
+    const green = raster.rgba[offset + 1]
+    const blue = raster.rgba[offset + 2]
+    const alpha = raster.rgba[offset + 3]
+    if (alpha > 0 && red > 150 && green < 100 && blue < 100) redPixels++
+    if (alpha > 0 && red > 245 && green > 245 && blue > 245) whitePixels++
+  }
+  return { width: raster.width, height: raster.height, redPixels, whitePixels }
+}
+
+/** 对两份实际 PNG 光栅做差异统计；Logo 透明性不能靠文件大小或 CSS 状态推断。 */
+const comparePngRasters = (beforeData, afterData) => {
+  const before = readPngRaster(beforeData)
+  const after = readPngRaster(afterData)
+  if (before === null || after === null || before.width !== after.width || before.height !== after.height) {
+    return null
+  }
+  let changedPixels = 0
+  let addedRedPixels = 0
+  let addedWhitePixels = 0
+  for (let offset = 0; offset < before.rgba.length; offset += 4) {
+    const beforeRed = before.rgba[offset]
+    const beforeGreen = before.rgba[offset + 1]
+    const beforeBlue = before.rgba[offset + 2]
+    const beforeAlpha = before.rgba[offset + 3]
+    const afterRed = after.rgba[offset]
+    const afterGreen = after.rgba[offset + 1]
+    const afterBlue = after.rgba[offset + 2]
+    const afterAlpha = after.rgba[offset + 3]
+    if (beforeRed !== afterRed || beforeGreen !== afterGreen || beforeBlue !== afterBlue || beforeAlpha !== afterAlpha) {
+      changedPixels++
+    }
+    const beforeIsRed = beforeAlpha > 0 && beforeRed > 150 && beforeGreen < 100 && beforeBlue < 100
+    const afterIsRed = afterAlpha > 0 && afterRed > 150 && afterGreen < 100 && afterBlue < 100
+    const beforeIsWhite = beforeAlpha > 0 && beforeRed > 245 && beforeGreen > 245 && beforeBlue > 245
+    const afterIsWhite = afterAlpha > 0 && afterRed > 245 && afterGreen > 245 && afterBlue > 245
+    if (!beforeIsRed && afterIsRed) addedRedPixels++
+    if (!beforeIsWhite && afterIsWhite) addedWhitePixels++
+  }
+  return { width: before.width, height: before.height, changedPixels, addedRedPixels, addedWhitePixels }
+}
 
 /** 读取 PNG、JPEG 或 TIFF 的像素尺寸，供打包导出证据验证。 */
 export const readImageDimensions = (data) => {
@@ -397,13 +712,13 @@ class CdpClient {
     this.#listeners.set(method, listeners)
   }
 
-  call(method, params = {}) {
+  call(method, params = {}, timeoutMs = 30_000) {
     const id = ++this.#nextId
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.#pending.delete(id)
         reject(new Error(`Electron CDP 命令超时：${method}`))
-      }, 10_000)
+      }, timeoutMs)
       this.#pending.set(id, { resolve, reject, timeout })
       this.#socket.send(JSON.stringify({ id, method, params }))
     })
@@ -460,6 +775,263 @@ const setFormControlValue = async (client, selector, value, eventName) => await 
   return element.value === ${JSON.stringify(value)};
 })()`)
 
+/** 按 fieldset 图例定位真实控件；所有 setter 后都发事件，确保 React 状态和配方一起改变。 */
+const setFieldSelectValue = async (client, legendText, value) => await evaluate(client, `(() => {
+  const fieldset = [...document.querySelectorAll('fieldset')].find((item) =>
+    item.querySelector('legend')?.textContent?.trim() === ${JSON.stringify(legendText)}
+  );
+  const element = fieldset?.querySelector('select');
+  if (!(element instanceof HTMLSelectElement)) return false;
+  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set;
+  if (setter === undefined) return false;
+  setter.call(element, ${JSON.stringify(value)});
+  element.dispatchEvent(new Event('change', { bubbles: true }));
+  return element.value === ${JSON.stringify(value)};
+})()`)
+
+/** 按 fieldset 内 label 文本定位第二层 select，覆盖文字位置等同名控件。 */
+const setFieldSelectByLabel = async (client, legendText, labelText, value) => await evaluate(client, `(() => {
+  const fieldset = [...document.querySelectorAll('fieldset')].find((item) =>
+    item.querySelector('legend')?.textContent?.trim() === ${JSON.stringify(legendText)}
+  );
+  const element = [...(fieldset?.querySelectorAll('select') ?? [])].find((item) =>
+    item.closest('label')?.textContent?.trim().startsWith(${JSON.stringify(labelText)})
+  );
+  if (!(element instanceof HTMLSelectElement)) return false;
+  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set;
+  if (setter === undefined) return false;
+  setter.call(element, ${JSON.stringify(value)});
+  element.dispatchEvent(new Event('change', { bubbles: true }));
+  return element.value === ${JSON.stringify(value)};
+})()`)
+
+const selectQueueItemByFileName = async (client, fileName) => await evaluate(client, `(() => {
+  const row = [...document.querySelectorAll('.queueItem')].find((item) =>
+    item.querySelector('.queueName')?.textContent?.includes(${JSON.stringify(fileName)})
+  );
+  if (row === undefined) return false;
+  row.click();
+  return true;
+})()`)
+
+/** 按 fieldset/label 文本提交数字或颜色输入，包含 NumberInput 所需的 blur 提交。 */
+const setFieldInputValue = async (client, legendText, labelText, value, eventName = "input") => {
+  const textInput = await evaluate(client, `(() => {
+    const fieldset = [...document.querySelectorAll('fieldset')].find((item) =>
+      item.querySelector('legend')?.textContent?.trim() === ${JSON.stringify(legendText)}
+    );
+    const element = [...(fieldset?.querySelectorAll('input') ?? [])].find((item) =>
+      item.closest('label')?.textContent?.trim().startsWith(${JSON.stringify(labelText)})
+    );
+    if (!(element instanceof HTMLInputElement)) return null;
+    element.focus();
+    if (element.type === 'text') element.select();
+    return element.type === 'text';
+  })()`);
+  if (textInput === null) return false;
+  if (textInput === true) {
+    await client.call("Input.insertText", { text: String(value) });
+  } else {
+    const assigned = await evaluate(client, `(() => {
+      const fieldset = [...document.querySelectorAll('fieldset')].find((item) =>
+        item.querySelector('legend')?.textContent?.trim() === ${JSON.stringify(legendText)}
+      );
+      const element = [...(fieldset?.querySelectorAll('input') ?? [])].find((item) =>
+        item.closest('label')?.textContent?.trim().startsWith(${JSON.stringify(labelText)})
+      );
+      if (!(element instanceof HTMLInputElement)) return false;
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+      if (setter === undefined) return false;
+      setter.call(element, ${JSON.stringify(String(value))});
+      element.dispatchEvent(new Event(${JSON.stringify(eventName)}, { bubbles: true }));
+      return element.value === ${JSON.stringify(String(value))};
+    })()`);
+    if (assigned !== true) return false;
+  }
+  return await evaluate(client, `(() => {
+    const fieldset = [...document.querySelectorAll('fieldset')].find((item) =>
+      item.querySelector('legend')?.textContent?.trim() === ${JSON.stringify(legendText)}
+    );
+    const element = [...(fieldset?.querySelectorAll('input') ?? [])].find((item) =>
+      item.closest('label')?.textContent?.trim().startsWith(${JSON.stringify(labelText)})
+    );
+    if (!(element instanceof HTMLInputElement)) return false;
+    return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => {
+      element.blur();
+      resolve(element.value === ${JSON.stringify(String(value))});
+    })));
+  })()`);
+}
+
+const setFieldCheckbox = async (client, legendText, labelText, checked) => await evaluate(client, `(() => {
+  const fieldset = [...document.querySelectorAll('fieldset')].find((item) =>
+    item.querySelector('legend')?.textContent?.trim() === ${JSON.stringify(legendText)}
+  );
+  const input = [...(fieldset?.querySelectorAll('input[type="checkbox"]') ?? [])].find((item) =>
+    item.closest('label')?.textContent?.trim().startsWith(${JSON.stringify(labelText)})
+  );
+  if (!(input instanceof HTMLInputElement)) return false;
+  if (input.checked !== ${checked === true}) input.click();
+  return input.checked === ${checked === true};
+})()`)
+
+const readCanvasRedPixelCount = async (client) => await evaluate(client, `(() => {
+  const canvas = document.querySelector('canvas.previewCanvas');
+  const context = canvas?.getContext('2d', { willReadFrequently: true });
+  if (canvas === null || canvas === undefined || context === null) return null;
+  const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+  let redPixels = 0;
+  for (let offset = 0; offset < pixels.length; offset += 4) {
+    if ((pixels[offset + 3] ?? 0) > 0 && (pixels[offset] ?? 0) > 150 && (pixels[offset + 1] ?? 0) < 100 && (pixels[offset + 2] ?? 0) < 100) redPixels++;
+  }
+  return redPixels;
+})()`)
+
+/** Logo 位于边框区域；排除真实照片区域，避免样片本身的红色被误判为 Logo。 */
+const readCanvasBorderRedPixelCount = async (client) => await evaluate(client, `(() => {
+  const canvas = document.querySelector('canvas.previewCanvas');
+  const context = canvas?.getContext('2d', { willReadFrequently: true });
+  if (canvas === null || canvas === undefined || context === null) return null;
+  const imageX = Number(canvas.dataset.previewImageX);
+  const imageY = Number(canvas.dataset.previewImageY);
+  const imageWidth = Number(canvas.dataset.previewImageWidth);
+  const imageHeight = Number(canvas.dataset.previewImageHeight);
+  if (![imageX, imageY, imageWidth, imageHeight].every(Number.isFinite)) return null;
+  const logicalWidth = Number(canvas.dataset.previewCanvasLogicalWidth) || canvas.width;
+  const pixelRatio = Number(canvas.dataset.previewCanvasPixelRatio) || (logicalWidth > 0 ? canvas.width / logicalWidth : 1);
+  const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+  const imageStartX = Math.max(0, Math.floor(imageX * pixelRatio));
+  const imageStartY = Math.max(0, Math.floor(imageY * pixelRatio));
+  const imageEndX = Math.min(canvas.width, Math.ceil((imageX + imageWidth) * pixelRatio));
+  const imageEndY = Math.min(canvas.height, Math.ceil((imageY + imageHeight) * pixelRatio));
+  let redPixels = 0;
+  for (let y = 0; y < canvas.height; y++) {
+    for (let x = 0; x < canvas.width; x++) {
+      if (x >= imageStartX && x < imageEndX && y >= imageStartY && y < imageEndY) continue;
+      const offset = (y * canvas.width + x) * 4;
+      if ((pixels[offset + 3] ?? 0) > 0 && (pixels[offset] ?? 0) > 150 && (pixels[offset + 1] ?? 0) < 100 && (pixels[offset + 2] ?? 0) < 100) redPixels++;
+    }
+  }
+  return redPixels;
+})()`)
+
+const readCanvasAsymmetricCorners = async (client) => await evaluate(client, `(() => {
+  const canvas = document.querySelector('canvas.previewCanvas');
+  if (canvas === null) return null;
+  const imageX = Number(canvas.dataset.previewImageX);
+  const imageY = Number(canvas.dataset.previewImageY);
+  const imageWidth = Number(canvas.dataset.previewImageWidth);
+  const imageHeight = Number(canvas.dataset.previewImageHeight);
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (context === null || ![imageX, imageY, imageWidth, imageHeight].every(Number.isFinite)) return null;
+  const logicalWidth = Number(canvas.dataset.previewCanvasLogicalWidth) || canvas.width;
+  const pixelRatio = Number(canvas.dataset.previewCanvasPixelRatio) || (logicalWidth > 0 ? canvas.width / logicalWidth : 1);
+  const colors = [[0.2, 0.2], [0.8, 0.2], [0.2, 0.8], [0.8, 0.8]].map(([x, y]) => {
+    const pixel = context.getImageData(
+      Math.max(0, Math.min(canvas.width - 1, Math.round((imageX + imageWidth * x) * pixelRatio))),
+      Math.max(0, Math.min(canvas.height - 1, Math.round((imageY + imageHeight * y) * pixelRatio))),
+      1,
+      1
+    ).data;
+    return [pixel[0] ?? 0, pixel[1] ?? 0, pixel[2] ?? 0];
+  });
+  return { colors, image: { x: imageX, y: imageY, width: imageWidth, height: imageHeight } };
+})()`)
+
+const readEnginePhotoMetadata = async (client, filePath) => await evaluate(client, `(async () => {
+  const response = await fetch('/api/photo-metadata', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ imagePath: ${JSON.stringify(filePath)} })
+  });
+  return { status: response.status, body: await response.json() };
+})()`)
+
+/** 读取最新真实 /api/preview 响应指向的 PNG，覆盖引擎预览而非只看 Canvas。 */
+const readLatestEnginePreviewPng = async (client, responseDetails, minimumResponseIndex = 0) => {
+  const previewResponse = [...responseDetails.slice(minimumResponseIndex)].reverse().find((response) => response.url === "app://app/api/preview")
+  if (previewResponse === undefined) return null
+  const responseBody = await client.call("Network.getResponseBody", { requestId: previewResponse.id })
+  if (typeof responseBody.body !== "string") return null
+  let payload
+  try {
+    payload = JSON.parse(responseBody.body)
+  } catch {
+    return null
+  }
+  if (typeof payload?.previewUrl !== "string") return null
+  const base64 = await evaluate(client, `(async () => {
+    const response = await fetch(${JSON.stringify(payload.previewUrl)});
+    if (!response.ok) return null;
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    let binary = '';
+    for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+      binary += String.fromCharCode(...bytes.slice(offset, offset + 0x8000));
+    }
+    return btoa(binary);
+  })()`)
+  return typeof base64 === "string" ? Buffer.from(base64, "base64") : null
+}
+
+/** 读取最新预览 JSON，验证预览响应自身也报告实际 ICC/位深事实。 */
+const readLatestEnginePreviewResponse = async (client, responseDetails, minimumResponseIndex = 0) => {
+  const previewResponse = [...responseDetails.slice(minimumResponseIndex)].reverse().find((response) => response.url === "app://app/api/preview")
+  if (previewResponse === undefined) return null
+  const responseBody = await client.call("Network.getResponseBody", { requestId: previewResponse.id })
+  if (typeof responseBody.body !== "string") return null
+  try {
+    return JSON.parse(responseBody.body)
+  } catch {
+    return null
+  }
+}
+
+/** 通过当前工作台的真实单图导出按钮收集一个格式/版式产物。 */
+const exportCurrentSelection = async (client, output, artifactRoot, label) => {
+  rmSync(output, { force: true })
+  await clickButton(client, `(() => {
+    const button = document.querySelector('[data-testid="export-single"]');
+    if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
+    button.click();
+    return true;
+  })()`, `${label}单图导出按钮`)
+  await waitFor(
+    `${label}导出文件`,
+    async () => ({
+      exists: existsSync(output),
+      readiness: await readExportReadiness(client),
+      error: await evaluate(client, "document.querySelector('.previewExportError')?.textContent?.trim() ?? null")
+    }),
+    (state) => state.exists === true,
+    120_000
+  )
+  const stableSize = await waitFor(
+    `${label}导出写入完成`,
+    async () => {
+      const firstSize = statSync(output).size
+      await sleep(250)
+      return { firstSize, secondSize: statSync(output).size }
+    },
+    (sizes) => sizes.firstSize > 0 && sizes.firstSize === sizes.secondSize,
+    120_000
+  )
+  const data = readFileSync(output)
+  const dimensions = readImageDimensions(data)
+  assert.notEqual(dimensions, null, `${label}导出不是可识别图片`)
+  const extension = dimensions.format === "jpeg" ? "jpg" : dimensions.format
+  const evidencePath = path.join(artifactRoot, `${label}.${extension}`)
+  copyFileSync(output, evidencePath)
+  return {
+    path: evidencePath,
+    bytes: stableSize.secondSize,
+    dimensions,
+    bitDepth: readImageBitDepth(data),
+    metadata: readImageMetadataPresence(data),
+    rasterDigest: readRasterDigest(data),
+    colorStats: readPngColorStats(data)
+  }
+}
+
 /** 向真实 Renderer 分发快捷键；Escape 走 document 以覆盖 ModalDrawer 的焦点锁定监听。 */
 const dispatchRendererKey = async (client, key, modifiers = {}) => await evaluate(client, `${key === "Escape" ? "document" : "window"}.dispatchEvent(new KeyboardEvent('keydown', {
   key: ${JSON.stringify(key)},
@@ -472,7 +1044,26 @@ const dispatchRendererKey = async (client, key, modifiers = {}) => await evaluat
 /** 保存真实 Renderer 截图；路径会写入 E2E 日志，供失败和交接复核。 */
 const captureRendererScreenshot = async (client, artifactRoot, label) => {
   const screenshotPath = path.join(artifactRoot, `${label}.png`)
-  const result = await client.call("Page.captureScreenshot", { format: "png" })
+  // 只捕获当前可见布局视口。captureBeyondViewport 会让 Chromium 在大窗口/Canvas
+  // 重绘期间尝试额外布局，容易把 CDP 截图拖到超时；这里的 clip 仍来自真实
+  // Renderer 布局指标，不改变 CSS viewport，也不伪造 BrowserWindow 尺寸。
+  const layout = await client.call("Page.getLayoutMetrics", {}, 30_000)
+  const viewport = layout.visualViewport ?? layout.layoutViewport
+  assert.ok(viewport !== undefined, `无法取得 ${label} Renderer 可见布局视口`)
+  const clip = {
+    x: Number(viewport.pageX ?? 0),
+    y: Number(viewport.pageY ?? 0),
+    width: Number(viewport.clientWidth ?? 0),
+    height: Number(viewport.clientHeight ?? 0),
+    scale: 1
+  }
+  assert.ok(clip.width > 0 && clip.height > 0, `无法取得 ${label} Renderer 截图尺寸`)
+  const result = await client.call("Page.captureScreenshot", {
+    format: "png",
+    fromSurface: true,
+    captureBeyondViewport: false,
+    clip
+  }, 60_000)
   assert.equal(typeof result.data, "string", `无法取得 ${label} Renderer 截图`)
   writeFileSync(screenshotPath, Buffer.from(result.data, "base64"))
   return screenshotPath
@@ -503,13 +1094,19 @@ const readPreviewCanvasMetrics = async (client) => await evaluate(client, `(() =
   const imageY = numberFromDataset('previewImageY');
   const imageWidth = numberFromDataset('previewImageWidth');
   const imageHeight = numberFromDataset('previewImageHeight');
-  const wrapperRect = canvas.getBoundingClientRect();
+  const logicalWidth = numberFromDataset('previewCanvasLogicalWidth') ?? canvas.width;
+  const logicalHeight = numberFromDataset('previewCanvasLogicalHeight') ?? canvas.height;
+  const pixelRatio = numberFromDataset('previewCanvasPixelRatio') ?? (logicalWidth > 0 ? canvas.width / logicalWidth : 1);
+  const canvasRect = canvas.getBoundingClientRect();
   const common = {
     canvas: {
       width: canvas.width,
       height: canvas.height,
-      cssWidth: wrapperRect.width,
-      cssHeight: wrapperRect.height
+      logicalWidth,
+      logicalHeight,
+      cssWidth: canvasRect.width,
+      cssHeight: canvasRect.height,
+      pixelRatio
     },
     drawableImage: {
       x: imageX,
@@ -536,10 +1133,10 @@ const readPreviewCanvasMetrics = async (client) => await evaluate(client, `(() =
     return { ...common, nonBorderPixels: 0, error: 'Canvas 未提供可绘制图片区或可解析的当前边框色' };
   }
 
-  const startX = Math.max(0, Math.floor(imageX));
-  const startY = Math.max(0, Math.floor(imageY));
-  const endX = Math.min(canvas.width, Math.ceil(imageX + imageWidth));
-  const endY = Math.min(canvas.height, Math.ceil(imageY + imageHeight));
+  const startX = Math.max(0, Math.floor(imageX * pixelRatio));
+  const startY = Math.max(0, Math.floor(imageY * pixelRatio));
+  const endX = Math.min(canvas.width, Math.ceil((imageX + imageWidth) * pixelRatio));
+  const endY = Math.min(canvas.height, Math.ceil((imageY + imageHeight) * pixelRatio));
   if (endX <= startX || endY <= startY) {
     return { ...common, nonBorderPixels: 0, error: 'Canvas 有效图片区越出画布边界' };
   }
@@ -573,7 +1170,7 @@ const formatPreviewCanvasMetrics = (metrics) => {
   const drawableImage = metrics.drawableImage ?? {}
   const border = metrics.border ?? {}
   return [
-    `Canvas=${canvas.width ?? 0}×${canvas.height ?? 0}（CSS ${canvas.cssWidth ?? 0}×${canvas.cssHeight ?? 0}）`,
+    `Canvas 逻辑=${canvas.logicalWidth ?? canvas.width ?? 0}×${canvas.logicalHeight ?? canvas.height ?? 0}；backing=${canvas.width ?? 0}×${canvas.height ?? 0}；CSS=${canvas.cssWidth ?? 0}×${canvas.cssHeight ?? 0}；DPR=${canvas.pixelRatio ?? 1}`,
     `有效图片区=${drawableImage.width ?? 0}×${drawableImage.height ?? 0} @ ${drawableImage.x ?? "?"},${drawableImage.y ?? "?"}`,
     `边框=${border.color ?? ""} top=${border.top ?? ""} bottom=${border.bottom ?? ""} left=${border.left ?? ""} right=${border.right ?? ""}`,
     `非边框像素=${metrics.nonBorderPixels ?? 0}`,
@@ -741,6 +1338,17 @@ const parseRequestBody = (request) => {
   }
 }
 
+const latestPreviewRecipe = (requestDetails, imagePath = null) => {
+  for (const request of [...requestDetails].reverse()) {
+    if (request?.url !== "app://app/api/preview" || request?.method !== "POST") continue
+    const body = parseRequestBody(request)
+    if (body?.recipe === undefined) continue
+    if (imagePath !== null && body.recipe.imagePath !== imagePath) continue
+    return body.recipe
+  }
+  return null
+}
+
 /** 只识别队列固定 120px、零边框 recipe 的缩略图请求。 */
 const isThumbnailRequest = (request) => {
   const body = parseRequestBody(request)
@@ -759,19 +1367,21 @@ const isThumbnailRequest = (request) => {
 const thumbnailPathFromRequest = (request) => parseRequestBody(request)?.recipe?.imagePath ?? null
 
 const waitForVisiblePreviewPhoto = async (client, artifactRoot, label) => {
-  const screenshotPath = await captureRendererScreenshot(client, artifactRoot, label)
   try {
     const metrics = await waitFor(
       `${label}照片内容像素`,
       () => readPreviewCanvasMetrics(client),
       (value) => hasVisiblePhotoContent(value)
     )
+    // Canvas 已经完成真实照片绘制后再调用 CDP 截图，避免 captureScreenshot 与
+    // 大图解码/重绘竞争造成超时；截图仍然来自当前 BrowserWindow 的可见页面。
+    const screenshotPath = await captureRendererScreenshot(client, artifactRoot, label)
     report(`${label}：${formatPreviewCanvasMetrics(metrics)}；截图=${screenshotPath}`)
     return { metrics, screenshotPath }
   } catch (error) {
     const metrics = await readPreviewCanvasMetrics(client).catch(() => null)
     throw new Error(
-      `${error instanceof Error ? error.message : String(error)}；${label}截图=${screenshotPath}；${metrics === null ? "无法读取 Canvas 指标" : formatPreviewCanvasMetrics(metrics)}`
+      `${error instanceof Error ? error.message : String(error)}；${label}截图未完成；${metrics === null ? "无法读取 Canvas 指标" : formatPreviewCanvasMetrics(metrics)}`
     )
   }
 }
@@ -782,23 +1392,29 @@ const waitForVisiblePreviewPhoto = async (client, artifactRoot, label) => {
  * window.resizeTo 请求实际 BrowserWindow 尺寸，并读取 outerWidth/outerHeight
  * 确认 Electron 已按应用最小值钳制，而不是仅模拟 CSS viewport。
  */
-const readRendererWindowBounds = async (client) => await evaluate(
-  client,
-  "({ width: window.outerWidth, height: window.outerHeight })"
-)
+const readRendererWindowBounds = async (client) => await evaluate(client, `(async () => ({
+  renderer: { width: window.outerWidth, height: window.outerHeight },
+  browserWindow: await window.desktop?.getWindowBounds?.() ?? null
+}))()`)
+
+const exactWindowSize = (bounds, width, height) =>
+  bounds?.browserWindow?.width === width
+  && bounds?.browserWindow?.height === height
+  && bounds?.renderer?.width === width
+  && bounds?.renderer?.height === height
 
 const resizeToMinimumWindow = async (client) => {
   const initialBounds = await readRendererWindowBounds(client)
-  assert.equal(Number.isFinite(initialBounds?.width) && Number.isFinite(initialBounds?.height), true, "无法取得初始窗口尺寸")
+  assert.equal(Number.isFinite(initialBounds?.renderer?.width) && Number.isFinite(initialBounds?.renderer?.height), true, "无法取得初始窗口尺寸")
   await evaluate(client, "window.resizeTo(1, 1)")
   const minimumBounds = await waitFor(
     "应用允许的最小窗口尺寸",
     () => readRendererWindowBounds(client),
-    (bounds) => Number.isFinite(bounds?.width)
-      && Number.isFinite(bounds?.height)
-      && bounds.width > 1
-      && bounds.height > 1
-      && (bounds.width < initialBounds.width || bounds.height < initialBounds.height)
+    (bounds) => Number.isFinite(bounds?.renderer?.width)
+      && Number.isFinite(bounds?.renderer?.height)
+      && bounds.renderer.width > 1
+      && bounds.renderer.height > 1
+      && (bounds.renderer.width < initialBounds.renderer.width || bounds.renderer.height < initialBounds.renderer.height)
   )
   return { initialBounds, minimumBounds }
 }
@@ -808,7 +1424,7 @@ const restoreWindowBounds = async (client, bounds) => {
   await waitFor(
     "恢复默认窗口尺寸",
     () => readRendererWindowBounds(client),
-    (current) => current?.width === bounds.width && current?.height === bounds.height
+    (current) => exactWindowSize(current, bounds.width, bounds.height)
   )
 }
 
@@ -817,7 +1433,7 @@ const resizeWindowToBounds = async (client, width, height) => {
   return await waitFor(
     `${width}×${height} 窗口`,
     () => readRendererWindowBounds(client),
-    (bounds) => bounds?.width === width && bounds?.height === height
+    (bounds) => exactWindowSize(bounds, width, height)
   )
 }
 
@@ -838,12 +1454,43 @@ const run = async () => {
   assert.equal(existsSync(executable), true, `找不到当前打包应用：${executable}，请先运行 pnpm package`)
   const bundledJava = bundledJavaPathFor(executable)
   assert.equal(existsSync(bundledJava), true, `打包应用缺少随包 JRE：${bundledJava}`)
+  const bundledExifTool = bundledExifToolPathFor(executable)
+  assert.equal(existsSync(bundledExifTool), true, `打包应用缺少随包 ExifTool：${bundledExifTool}`)
+  const resourcesDir = resourcesDirectoryFor(executable)
+  const packageManifestPath = path.join(resourcesDir, "package-manifest.json")
+  assert.equal(existsSync(packageManifestPath), true, `打包应用缺少 package-manifest.json：${packageManifestPath}`)
+  const packageManifest = JSON.parse(readFileSync(packageManifestPath, "utf8"))
+  assert.equal(packageManifest.platform, process.platform)
+  assert.equal(packageManifest.arch, process.arch)
+  assert.match(packageManifest.commit, /^[0-9a-f]{40}$/)
+  assert.match(packageManifest.components?.javaEngine?.sha256 ?? "", /^[0-9a-f]{64}$/)
+  assert.match(packageManifest.components?.exiftool?.sha256 ?? "", /^[0-9a-f]{64}$/)
+  assert.ok(Array.isArray(packageManifest.components?.fonts) && packageManifest.components.fonts.length > 0, "安装包字体清单为空")
 
   const sample = path.resolve(process.env["CAMBORDER_E2E_SAMPLE"] ?? DEFAULT_SAMPLE)
   assert.equal(existsSync(sample), true, `找不到固定 E2E 样片：${sample}`)
-  const sourceShaBefore = sha256File(sample)
-
   const temporaryRoot = mkdtempSync(path.join(tmpdir(), "camera-border-packaged-e2e-"))
+  // 这是一个 RAW 边界样片：容器前缀后嵌入真实 JPEG 字节，只验证生产链路读取
+  // 内嵌 JPEG 的行为，不把合成容器冒充为传感器 RAW，也不引入任何显影程序。
+  const rawEmbeddedJpegSample = path.join(temporaryRoot, "embedded-preview.nef")
+  writeFileSync(rawEmbeddedJpegSample, Buffer.concat([
+    Buffer.from("CAMBORDER-STAGE6-EMBEDDED-JPEG\0", "utf8"),
+    readFileSync(sample)
+  ]))
+  const extraSamples = [
+    path.join(ROOT, "fixtures", "stage4", "real-exif-canon-farmers-nooning.tif"),
+    path.join(ROOT, "fixtures", "stage4", "real-orientation-icc-iphone12pro.heic"),
+    path.join(ROOT, "fixtures", "stage4", "asymmetric-color.png"),
+    rawEmbeddedJpegSample
+  ]
+  for (const extraSample of extraSamples) {
+    assert.equal(existsSync(extraSample), true, `找不到固定附加 E2E 样片：${extraSample}`)
+  }
+  const realImportSamplePaths = [sample, ...extraSamples]
+  const initialQueueCount = realImportSamplePaths.length + 1
+  const sourceShaBeforeByPath = Object.fromEntries(realImportSamplePaths.map((filePath) => [filePath, sha256File(filePath)]))
+  const sourceShaBefore = sourceShaBeforeByPath[sample]
+
   const configuredArtifactRoot = process.env["CAMBORDER_E2E_ARTIFACT_DIR"]
   const artifactRoot = configuredArtifactRoot === undefined
     ? mkdtempSync(path.join(tmpdir(), "camera-border-packaged-e2e-artifacts-"))
@@ -851,28 +1498,36 @@ const run = async () => {
   mkdirSync(artifactRoot, { recursive: true })
   const ownsArtifactRoot = configuredArtifactRoot === undefined
   const output = path.resolve(process.env["CAMBORDER_E2E_OUTPUT"] ?? path.join(temporaryRoot, "packaged-e2e-output.png"))
-  // 该文件故意不是可解码图片，用于真实验证逐项失败和「重试失败项」路径；不属于产品样片。
+  // 从真实 JPEG 派生一个保留 JPEG 头但被截断的失败文件，只用于真实验证逐项失败和
+  // 「重试失败项」路径；它不是新增照片样片，也不以字符串伪造图片。
   const retryFailureSample = path.join(temporaryRoot, "retry-failure.jpg")
-  writeFileSync(retryFailureSample, Buffer.from("not-a-decodable-jpeg"))
+  copyFileSync(sample, retryFailureSample)
+  truncateSync(retryFailureSample, Math.min(64, statSync(retryFailureSample).size - 1))
   const retryOutputDirectory = mkdtempSync(path.join(temporaryRoot, "retry-output-"))
   const retryOutputCandidates = ["png", "jpg", "tif"].map((extension) =>
     path.join(retryOutputDirectory, `retry-failure-border.${extension}`)
   )
-  const uiPerformanceSampleDirectory = path.join(temporaryRoot, "ui-performance-samples")
-  mkdirSync(uiPerformanceSampleDirectory, { recursive: true })
-  const uiPerformanceSamplePaths = Array.from({ length: UI_PERFORMANCE_QUEUE_COUNT }, (_, index) => {
-    const filePath = path.join(uiPerformanceSampleDirectory, `queue-${String(index + 1).padStart(3, "0")}.jpg`)
-    try {
-      // 同一张约 20MP 样片通过独立硬链接形成 100 个真实文件路径，避免 E2E 伪造请求或注入队列状态。
-      linkSync(sample, filePath)
-    } catch {
-      // 跨文件系统时硬链接不可用，退回到真实文件复制，仍由 preload 扫描目录并导入。
-      copyFileSync(sample, filePath)
-    }
+    const uiPerformanceSampleDirectory = path.join(temporaryRoot, "ui-performance-samples")
+    const uiPerformanceBaseSample = path.join(ROOT, "fixtures", "stage4", "asymmetric-color.png")
+    assert.equal(existsSync(uiPerformanceBaseSample), true, `找不到 UI 性能回归样片：${uiPerformanceBaseSample}`)
+    mkdirSync(uiPerformanceSampleDirectory, { recursive: true })
+    const uiPerformanceSamplePaths = Array.from({ length: UI_PERFORMANCE_QUEUE_COUNT }, (_, index) => {
+      const filePath = path.join(uiPerformanceSampleDirectory, `queue-${String(index + 1).padStart(3, "0")}.png`)
+      try {
+        // 同一张真实小型 PNG 通过独立硬链接形成 100 个真实文件路径；此处
+        // 只验证队列虚拟化/批量 UI，不把重复高分辨率解码成本混入性能闸门。
+        linkSync(uiPerformanceBaseSample, filePath)
+      } catch {
+        // 跨文件系统时硬链接不可用，退回到真实文件复制，仍由 preload 扫描目录并导入。
+        copyFileSync(uiPerformanceBaseSample, filePath)
+      }
     return filePath
   })
   assert.equal(uiPerformanceSamplePaths.every((filePath) => existsSync(filePath)), true, "100 项 UI 性能样片准备失败")
-  const userData = path.join(temporaryRoot, "user-data")
+  const configuredUserData = process.env["CAMBORDER_E2E_USER_DATA_DIR"]
+  const userData = configuredUserData === undefined
+    ? path.join(temporaryRoot, "user-data")
+    : path.resolve(configuredUserData)
   rmSync(output, { force: true })
 
   const debugPort = await getFreePort()
@@ -883,21 +1538,25 @@ const run = async () => {
     CAMBORDER_ENGINE_PORT: _enginePort,
     ...cleanEnv
   } = process.env
-  const child = spawn(executable, [
+  const packagedEnv = {
+    ...cleanEnv,
+    CAMBORDER_E2E: "1",
+    CAMBORDER_E2E_SAMPLE: sample,
+    CAMBORDER_E2E_RETRY_SAMPLE: retryFailureSample,
+    CAMBORDER_E2E_EXTRA_SAMPLES: JSON.stringify(extraSamples),
+    CAMBORDER_E2E_TEMPLATE: path.join(ROOT, "fixtures", "stage4", "v1-legacy-template.json"),
+    CAMBORDER_E2E_LOGO: path.join(ROOT, "fixtures", "stage4", "transparent-logo.png"),
+    CAMBORDER_E2E_QUEUE_DIR: uiPerformanceSampleDirectory,
+    CAMBORDER_E2E_OUTPUT: output,
+    CAMBORDER_E2E_OUTPUT_DIR: retryOutputDirectory,
+    CAMBORDER_ENGINE_PORT: String(enginePort)
+  }
+  let child = spawn(executable, [
     `--remote-debugging-port=${debugPort}`,
     `--user-data-dir=${userData}`
   ], {
     cwd: path.dirname(executable),
-    env: {
-      ...cleanEnv,
-      CAMBORDER_E2E: "1",
-      CAMBORDER_E2E_SAMPLE: sample,
-      CAMBORDER_E2E_RETRY_SAMPLE: retryFailureSample,
-      CAMBORDER_E2E_QUEUE_DIR: uiPerformanceSampleDirectory,
-      CAMBORDER_E2E_OUTPUT: output,
-      CAMBORDER_E2E_OUTPUT_DIR: retryOutputDirectory,
-      CAMBORDER_ENGINE_PORT: String(enginePort)
-    },
+    env: packagedEnv,
     stdio: ["ignore", "pipe", "pipe"]
   })
   child.stdout.on("data", (chunk) => logs.push(String(chunk)))
@@ -923,31 +1582,34 @@ const run = async () => {
     const consoleRecords = []
     const runtimeExceptions = []
     const logEntries = []
-    client.on("Network.requestWillBeSent", (params) => {
-      const url = params.request?.url
-      if (typeof url === "string") {
-        requests.push(url)
-        requestDetails.push({ id: params.requestId, method: params.request?.method, url, postData: params.request?.postData ?? null })
-      }
-    })
-    client.on("Network.responseReceived", (params) => {
-      const url = params.response?.url
-      if (typeof url === "string") {
-        responseDetails.push({ id: params.requestId, status: params.response?.status, url })
-      }
-    })
-    client.on("Network.loadingFailed", (params) => {
-      failedRequests.push({ id: params.requestId, errorText: params.errorText, canceled: params.canceled })
-    })
-    client.on("Runtime.consoleAPICalled", (params) => {
-      consoleRecords.push(params)
-    })
-    client.on("Runtime.exceptionThrown", (params) => {
-      runtimeExceptions.push(params)
-    })
-    client.on("Log.entryAdded", (params) => {
-      logEntries.push(params)
-    })
+    const attachProtocolListeners = (currentClient) => {
+      currentClient.on("Network.requestWillBeSent", (params) => {
+        const url = params.request?.url
+        if (typeof url === "string") {
+          requests.push(url)
+          requestDetails.push({ id: params.requestId, method: params.request?.method, url, postData: params.request?.postData ?? null })
+        }
+      })
+      currentClient.on("Network.responseReceived", (params) => {
+        const url = params.response?.url
+        if (typeof url === "string") {
+          responseDetails.push({ id: params.requestId, status: params.response?.status, url })
+        }
+      })
+      currentClient.on("Network.loadingFailed", (params) => {
+        failedRequests.push({ id: params.requestId, errorText: params.errorText, canceled: params.canceled })
+      })
+      currentClient.on("Runtime.consoleAPICalled", (params) => {
+        consoleRecords.push(params)
+      })
+      currentClient.on("Runtime.exceptionThrown", (params) => {
+        runtimeExceptions.push(params)
+      })
+      currentClient.on("Log.entryAdded", (params) => {
+        logEntries.push(params)
+      })
+    }
+    attachProtocolListeners(client)
     report("启用 CDP Runtime")
     await client.call("Runtime.enable")
     report("启用 CDP Network")
@@ -958,6 +1620,18 @@ const run = async () => {
     await waitFor("app:// 页面", () => evaluate(client, "location.href"), (url) => url === "app://app/index.html")
     assert.equal(await evaluate(client, "location.href"), "app://app/index.html")
     assert.equal(await evaluate(client, "window.desktopRuntime?.engine?.managed"), true, "E2E 未运行在托管 JavaBridge 模式")
+    const packageCapabilities = await waitFor(
+      "安装包能力快照",
+      () => evaluate(client, "window.desktop?.getPackageCapabilities?.() ?? null"),
+      (value) => value !== null && value.isPackaged === true
+        && value.bundledRuntime === true
+        && value.bundledExifTool === true
+        && value.bundledHeicDecoder === true
+        && Array.isArray(value.bundledFonts)
+        && value.bundledFonts.length > 0
+    )
+    assert.equal(packageCapabilities.platform, process.platform)
+    assert.equal(packageCapabilities.arch, process.arch)
     const initialLog = await waitFor(
       "随包 JRE 启动记录",
       () => readEngineLog(engineLogPath),
@@ -991,7 +1665,13 @@ const run = async () => {
     await waitFor(
       "固定样片进入队列",
       () => evaluate(client, "[...document.querySelectorAll('.queueItem')].map((item) => item.textContent ?? '').join('\\n')"),
-      (text) => text.includes(path.basename(sample)) && text.includes(path.basename(retryFailureSample))
+      (text) => realImportSamplePaths.every((filePath) => text.includes(path.basename(filePath)))
+        && text.includes(path.basename(retryFailureSample))
+    )
+    await waitFor(
+      "固定样片队列数量",
+      () => evaluate(client, "document.querySelectorAll('.queueItem').length"),
+      (count) => count === initialQueueCount
     )
     await waitFor("引擎预览画布", () => evaluate(client, "Boolean(document.querySelector('canvas.previewCanvas'))"), (visible) => visible === true)
 
@@ -1022,6 +1702,66 @@ const run = async () => {
     assert.equal(thumbnail.complete, true)
     assert.ok(thumbnail.naturalWidth > 0 && thumbnail.naturalHeight > 0, "缩略图没有可解码尺寸")
 
+    const jpegExifResponse = await readEnginePhotoMetadata(client, sample)
+    assert.equal(jpegExifResponse.status, 200, "真实 JPEG EXIF 请求未返回 HTTP 200")
+    assert.equal(jpegExifResponse.body?.cameraModel?.includes("Canon"), true, "JPEG EXIF 缺少相机")
+    assert.equal(jpegExifResponse.body?.lensModel?.includes("EF24-70mm"), true, "JPEG EXIF 缺少镜头")
+    assert.equal(jpegExifResponse.body?.fNumber, "f/11", "JPEG EXIF 光圈不一致")
+    assert.equal(jpegExifResponse.body?.exposureTime, "1/125 s", "JPEG EXIF 快门不一致")
+    assert.equal(jpegExifResponse.body?.iso, "200", "JPEG EXIF ISO 不一致")
+    assert.equal(jpegExifResponse.body?.focalLength, "31 mm", "JPEG EXIF 焦距不一致")
+    assert.equal(jpegExifResponse.body?.dateTimeOriginal, "2017:05:11 15:52:33", "JPEG EXIF 日期不一致")
+    const tiffExifResponse = await readEnginePhotoMetadata(
+      client,
+      path.join(ROOT, "fixtures", "stage4", "real-exif-canon-farmers-nooning.tif")
+    )
+    assert.equal(tiffExifResponse.status, 200, "真实 TIFF EXIF 请求未返回 HTTP 200")
+    assert.equal(tiffExifResponse.body?.cameraModel?.includes("Canon"), true, "TIFF EXIF 缺少相机")
+    assert.equal(tiffExifResponse.body?.dateTimeOriginal, "2006:12:05 03:45:51", "TIFF EXIF 日期不一致")
+
+    const heicFileName = path.basename(extraSamples[1])
+    assert.equal(await selectQueueItemByFileName(client, heicFileName), true, "无法选择真实 HEIC 样片")
+    const heicRow = await waitFor(
+      "真实 HEIC 转换队列项",
+      () => evaluate(client, `(() => {
+        const row = [...document.querySelectorAll('.queueItem')].find((item) => item.querySelector('.queueName')?.textContent?.includes(${JSON.stringify(heicFileName)}));
+        return row === undefined ? null : {
+          sourceName: row.querySelector('.queueName')?.textContent?.trim() ?? '',
+          workingPath: row.querySelector('.queueSub')?.getAttribute('title') ?? '',
+          converted: row.querySelector('.queueRawBadge')?.textContent?.includes('HEIC→PNG') ?? false
+        };
+      })()`),
+      (value) => value !== null && value.converted === true && value.workingPath.length > 0
+    )
+    const heicExifResponse = await readEnginePhotoMetadata(client, heicRow.workingPath)
+    assert.equal(heicExifResponse.status, 200, "真实 HEIC 转换后的 EXIF 请求未返回 HTTP 200")
+    assert.equal(heicExifResponse.body?.cameraModel?.includes("iPhone 12 Pro"), true, "HEIC EXIF 缺少真实相机")
+    assert.equal(heicExifResponse.body?.dateTimeOriginal, "2023:10:22 09:39:48", "HEIC EXIF 日期不一致")
+    const heicCanvasOrientation = await waitForVisiblePreviewPhoto(client, artifactRoot, "真实 HEIC 方向-引擎已同步")
+    assert.equal(
+      heicCanvasOrientation.metrics.drawableImage.width > heicCanvasOrientation.metrics.drawableImage.height,
+      true,
+      `真实 HEIC irot 方向未应用到工作图：${formatPreviewCanvasMetrics(heicCanvasOrientation.metrics)}`
+    )
+    const rawFileName = path.basename(rawEmbeddedJpegSample)
+    assert.equal(await selectQueueItemByFileName(client, rawFileName), true, "无法选择 RAW 内嵌 JPEG 样片")
+    const rawPreview = await waitFor(
+      "RAW 内嵌 JPEG 预览响应",
+      () => readLatestEnginePreviewResponse(client, responseDetails),
+      (payload) => payload?.sourceDecode?.mode === "embedded-jpeg"
+        && payload?.fidelityReport?.pixelSource === "embedded-jpeg"
+        && payload?.fidelityReport?.fidelityScope === "limited"
+        && payload?.fidelityReport?.source?.width > 0
+        && payload?.fidelityReport?.source?.height > 0
+    )
+    assert.equal(rawPreview.sourceDecode.format, "nef", "RAW 预览没有报告实际 RAW 扩展名")
+    assert.ok(rawPreview.fidelityReport.source.width > 0, "RAW 内嵌 JPEG 没有报告实际宽度")
+    assert.ok(rawPreview.fidelityReport.source.height > 0, "RAW 内嵌 JPEG 没有报告实际高度")
+    assert.match(rawPreview.sourceDecode.warning ?? "", /内嵌 JPEG/)
+    await waitForVisiblePreviewPhoto(client, artifactRoot, "RAW 内嵌 JPEG-引擎已同步")
+    assert.equal(await selectQueueItemByFileName(client, path.basename(sample)), true, "无法切回真实 JPEG 样片")
+    await waitForVisiblePreviewPhoto(client, artifactRoot, "切回真实 JPEG-引擎已同步")
+
     await waitFor(
       "导入后自动应用摄影信息卡",
       () => evaluate(client, `(() => {
@@ -1038,6 +1778,16 @@ const run = async () => {
       (text) => text.includes("引擎预览已同步")
     )
     const defaultPreview = await waitForVisiblePreviewPhoto(client, artifactRoot, "默认摄影信息卡-引擎已同步")
+    const previewFidelity = await waitFor(
+      "预览响应实际 ICC 报告",
+      () => readLatestEnginePreviewResponse(client, responseDetails),
+      (payload) => payload?.fidelityReport?.verified === true
+        && payload.fidelityReport?.output?.width > 0
+        && payload.fidelityReport?.output?.height > 0
+        && payload.fidelityReport?.output?.icc?.state === "present"
+    )
+    assert.equal(previewFidelity.fidelityReport.output.colorSpace, "icc", "预览响应没有报告实际 ICC 色彩空间")
+    assert.equal(previewFidelity.fidelityReport.output.bitDepth, 8, "JPEG 预览响应没有报告实际 8-bit 位深")
 
     const responsiveEvidence = {}
     for (const nextTheme of ["dark", "warm"]) {
@@ -1051,7 +1801,7 @@ const run = async () => {
         () => evaluate(client, "document.querySelector('.workspaceShell')?.getAttribute('data-theme') ?? ''"),
         (value) => value === nextTheme
       )
-      for (const size of [{ width: 1200, height: 760 }, { width: 1400, height: 920 }]) {
+      for (const size of STAGE2_RESPONSIVE_WINDOW_SIZES) {
         await resizeWindowToBounds(client, size.width, size.height)
         await waitFor(
           `${nextTheme}主题导出状态可用`,
@@ -1069,6 +1819,12 @@ const run = async () => {
           () => readWorkspaceResponsiveMetrics(client),
           responsiveLayoutPasses
         )
+        const actualBounds = await readRendererWindowBounds(client)
+        assert.equal(
+          exactWindowSize(actualBounds, size.width, size.height),
+          true,
+          `${size.width}×${size.height} 没有取得 BrowserWindow 与 Renderer 的同尺寸证据：${JSON.stringify(actualBounds)}`
+        )
         const contrast = await readThemeContrastMetrics(client)
         const contrastValues = Object.values(contrast.contrast).filter((value) => typeof value === "number")
         assert.ok(contrastValues.length >= 4, `${nextTheme}主题没有取得完整文字对比度指标`)
@@ -1083,7 +1839,7 @@ const run = async () => {
           `${size.width}x${size.height}-${nextTheme}`
         )
         const evidenceKey = `${size.width}x${size.height}-${nextTheme}`
-        responsiveEvidence[evidenceKey] = { metrics, contrast, screenshotPath }
+        responsiveEvidence[evidenceKey] = { actualBounds, metrics, contrast, screenshotPath }
         report(`${evidenceKey}：预览=${metrics.preview.width}×${metrics.preview.height}；截图=${screenshotPath}；对比度=${JSON.stringify(contrast.contrast)}`)
       }
     }
@@ -1194,6 +1950,11 @@ const run = async () => {
       return true;
     })()`, "摄影信息覆盖展开")
     await waitFor("摄影信息编辑区", () => evaluate(client, "Boolean(document.querySelector('.identityEditor'))"), (visible) => visible === true)
+    const exifCameraSource = await evaluate(client, `(() => {
+      const badge = [...document.querySelectorAll('.identityFieldSourceBadge')].find((item) => item.closest('label')?.textContent?.includes('相机'));
+      return badge?.textContent?.trim() ?? '';
+    })()`)
+    assert.equal(exifCameraSource, "EXIF", "真实 JPEG 相机字段没有以 EXIF 作为初始来源")
     assert.equal(
       await setFormControlValue(client, '.identityEditor input[placeholder="例如：Leica M6"]', "E2E Camera", "input"),
       true,
@@ -1317,7 +2078,7 @@ const run = async () => {
     await waitFor(
       "摄影预设应用到全部图片",
       () => evaluate(client, "document.querySelectorAll('.queueItem .queuePresetIndicator').length"),
-      (count) => count === 2
+      (count) => count === initialQueueCount
     )
     await dispatchRendererKey(client, "Escape")
     await waitFor("摄影预设抽屉关闭", () => evaluate(client, "document.querySelector('[role=dialog]') === null"), (closed) => closed === true)
@@ -1328,11 +2089,81 @@ const run = async () => {
     )
 
     await clickButton(client, `(() => {
+      const tab = [...document.querySelectorAll('[role="tab"]')].find((item) => item.textContent?.trim() === '摄影信息');
+      if (tab === undefined) return false;
+      tab.click();
+      return true;
+    })()`, "摄影预设优先级页签")
+    await waitFor("摄影预设优先级编辑区", () => evaluate(client, "Boolean(document.querySelector('.identityEditor'))"), (visible) => visible === true)
+    await clickButton(client, `(() => {
+      const button = [...document.querySelectorAll('.identityEditor button')].find((item) => item.textContent?.trim() === '清除当前图片覆盖');
+      if (button === undefined) return false;
+      button.click();
+      return true;
+    })()`, "清除每图摄影信息覆盖按钮")
+    const presetPriorityEvidence = await waitFor(
+      "摄影预设覆盖 EXIF 的来源优先级",
+      () => evaluate(client, `(() => {
+        const badge = [...document.querySelectorAll('.identityFieldSourceBadge')].find((item) => item.closest('label')?.textContent?.includes('相机'));
+        return {
+          badge: badge?.textContent?.trim() ?? '',
+          camera: [...document.querySelectorAll('.identitySummaryText')].map((item) => item.textContent?.trim() ?? '').join(' ')
+        };
+      })()`),
+      (value) => value.badge === "摄影预设" && value.camera.includes("E2E Preset Camera")
+    )
+
+    await clickButton(client, `(() => {
       const tab = [...document.querySelectorAll('[role="tab"]')].find((item) => item.textContent?.trim() === '样式');
       if (tab === undefined) return false;
       tab.click();
       return true;
     })()`, "样式页签")
+    const textLayerInput = '.textLayerCard:first-child input.settingTextInput'
+    assert.equal(
+      await setFormControlValue(client, textLayerInput, "Stage4 text edit", "input"),
+      true,
+      "无法编辑文字图层内容"
+    )
+    await waitFor(
+      "文字图层编辑状态",
+      () => evaluate(client, `document.querySelector(${JSON.stringify(textLayerInput)})?.value ?? ''`),
+      (value) => value === "Stage4 text edit"
+    )
+    await waitFor(
+      "文字图层摘要更新",
+      () => evaluate(client, "document.querySelector('.textLayerCard:first-child .textLayerCardSummary')?.textContent?.trim() ?? ''"),
+      (value) => value === "Stage4 text edit"
+    )
+    assert.equal(
+      await setFieldSelectByLabel(client, "文字图层", "位置", "center"),
+      true,
+      "无法编辑文字图层位置为居中"
+    )
+    await waitFor(
+      "文字图层居中位置配方",
+      () => latestPreviewRecipe(requestDetails, sample)?.texts?.[0]?.placement ?? null,
+      (value) => value === "image-center"
+    )
+    assert.equal(
+      await setFieldSelectByLabel(client, "文字图层", "位置", "bottom-center"),
+      true,
+      "无法恢复文字图层底部位置"
+    )
+    assert.equal(await setFieldInputValue(client, "文字图层", "行距", 2), true, "无法编辑文字行距")
+    assert.equal(await setFieldInputValue(client, "文字图层", "字距", 1), true, "无法编辑文字字距")
+    await waitFor(
+      "文字位置与间距保存到配方",
+      () => {
+        const recipe = latestPreviewRecipe(requestDetails, sample)
+        return {
+          placement: recipe?.texts?.[0]?.placement ?? null,
+          lineSpacing: recipe?.texts?.[0]?.lineSpacing ?? null,
+          letterSpacing: recipe?.texts?.[0]?.letterSpacing ?? null
+        }
+      },
+      (value) => value.placement === "image-bottom-center" && value.lineSpacing === 2 && value.letterSpacing === 1
+    )
     await clickButton(client, `(() => {
       const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === '管理用户版式');
       if (button === undefined) return false;
@@ -1359,6 +2190,434 @@ const run = async () => {
     )
     await dispatchRendererKey(client, "Escape")
     await waitFor("用户版式抽屉关闭", () => evaluate(client, "document.querySelector('[role=dialog]') === null"), (closed) => closed === true)
+
+    // 输出页签：只通过真实的三档档位和自定义档位操作；实际文件事实由
+    // 应用报告、文件签名和独立 ExifTool 三方交叉核对。
+    await clickButton(client, `(() => {
+      const tab = [...document.querySelectorAll('[role="tab"]')].find((item) => item.textContent?.trim() === '输出');
+      if (tab === undefined) return false;
+      tab.click();
+      return true;
+    })()`, "输出页签")
+    await waitFor("输出档位面板", () => evaluate(client, "document.querySelector('[data-testid=export-tier-standard-delivery]') !== null"), (visible) => visible === true)
+    const chooseTier = async (tier) => {
+      await clickButton(client, `(() => {
+        const button = document.querySelector('[data-testid="export-tier-${tier}"]');
+        if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
+        button.click();
+        return true;
+      })()`, `${tier} 导出档位`)
+      await waitFor(`${tier} 档位生效`, () => evaluate(client, `document.querySelector('[data-testid="export-tier-${tier}"]')?.getAttribute('aria-pressed')`), (pressed) => pressed === "true")
+    }
+    const tierEvidence = {}
+    for (const configuration of [
+      { tier: "quick-share", format: "jpeg" },
+      { tier: "standard-delivery", format: "jpeg" },
+      { tier: "high-fidelity-archive", format: "tiff" }
+    ]) {
+      await chooseTier(configuration.tier)
+      const evidence = await exportCurrentSelection(client, output, artifactRoot, `stage6-${configuration.tier}`)
+      assert.equal(evidence.dimensions?.format, configuration.format, `${configuration.tier} 实际格式不一致`)
+      assert.ok(evidence.dimensions.width > 0 && evidence.dimensions.height > 0, `${configuration.tier} 输出尺寸无效`)
+      const independent = readIndependentExifToolJson(bundledExifTool, evidence.path)
+      const width = Number(exifValue(independent, "ImageWidth"))
+      const height = Number(exifValue(independent, "ImageHeight"))
+      assert.equal(width, evidence.dimensions.width, `${configuration.tier} ExifTool 宽度与文件解析不一致`)
+      assert.equal(height, evidence.dimensions.height, `${configuration.tier} ExifTool 高度与文件解析不一致`)
+      const independentDepth = independentBitDepth(independent)
+      assert.ok(independentDepth === 8 || independentDepth === 16, `${configuration.tier} ExifTool 未返回真实 8/16-bit：${JSON.stringify(independent)}`)
+      assert.equal(independentDepth, evidence.bitDepth, `${configuration.tier} 独立工具位深与文件解析不一致`)
+      const metadataFacts = independentMetadataFacts(independent)
+      assert.equal(metadataFacts.orientation, 1, `${configuration.tier} Orientation 未更新为实际输出方向`)
+      if (configuration.tier === "quick-share") {
+        assert.equal(metadataFacts.gps, false, "快速分享仍包含 GPS/位置字段")
+      } else {
+        assert.deepEqual(
+          {
+            exif: metadataFacts.exif,
+            xmp: metadataFacts.xmp,
+            iptc: metadataFacts.iptc,
+            gps: metadataFacts.gps,
+            icc: metadataFacts.icc,
+            dpi: metadataFacts.dpi
+          },
+          { exif: true, xmp: true, iptc: true, gps: true, icc: true, dpi: true },
+          `${configuration.tier} 独立 ExifTool 元数据不完整`
+        )
+      }
+      tierEvidence[configuration.tier] = {
+        evidence,
+        independent: { width, height, bitDepth: independentDepth, colorSpace: metadataFacts.colorSpace, metadata: metadataFacts }
+      }
+    }
+    await chooseTier("custom")
+    await waitFor("自定义输出控件", () => evaluate(client, "document.querySelector('fieldset legend')?.textContent?.trim() === '自定义输出' || [...document.querySelectorAll('fieldset legend')].some((item) => item.textContent?.trim() === '自定义输出')"), (visible) => visible === true)
+    assert.equal(await setFieldSelectByLabel(client, "输出格式", "格式", "png"), true, "自定义档位无法选择 PNG")
+    const customEvidence = await exportCurrentSelection(client, output, artifactRoot, "stage6-custom-png")
+    assert.equal(customEvidence.dimensions?.format, "png", "自定义 PNG 实际格式不一致")
+    const customIndependent = readIndependentExifToolJson(bundledExifTool, customEvidence.path)
+    assert.equal(Number(exifValue(customIndependent, "ImageWidth")), customEvidence.dimensions.width, "自定义 PNG 宽度校验失败")
+    assert.equal(Number(exifValue(customIndependent, "ImageHeight")), customEvidence.dimensions.height, "自定义 PNG 高度校验失败")
+    tierEvidence.custom = { evidence: customEvidence, independent: customIndependent }
+    await chooseTier("standard-delivery")
+
+    // 真实 TIFF 源图再次走当前工作台的单图导出，确认 TIFF 原生 metadata tree
+    // 在尺寸变化后仍保留相机 EXIF 与 Adobe RGB ICC，而不是只验证 JPEG 源图。
+    const realTiffPath = extraSamples[0]
+    const realTiffFileName = path.basename(realTiffPath)
+    assert.equal(await selectQueueItemByFileName(client, realTiffFileName), true, "无法切换真实 TIFF 样片")
+    await waitForVisiblePreviewPhoto(client, artifactRoot, "真实 TIFF 样片-引擎已同步")
+    await clickButton(client, `(() => {
+      const tab = [...document.querySelectorAll('[role="tab"]')].find((item) => item.textContent?.trim() === '输出');
+      if (tab === undefined) return false;
+      tab.click();
+      return true;
+    })()`, "真实 TIFF 输出页签")
+    await chooseTier("high-fidelity-archive")
+    // 打包 E2E 的保存对话框由一个固定的真实输出路径驱动；格式由冻结的
+    // RenderRecipe/ExportSettings 决定，因此这里复用同一路径并按文件签名核对 TIFF。
+    const realTiffEvidence = await exportCurrentSelection(client, output, artifactRoot, "stage6-real-tiff-source")
+    assert.deepEqual(realTiffEvidence.metadata, { exif: true, icc: true }, "真实 TIFF 输出元数据未保留")
+    assert.equal(realTiffEvidence.dimensions?.format, "tiff", "真实 TIFF 输出格式不一致")
+    const realTiffIndependent = readIndependentExifToolJson(bundledExifTool, realTiffEvidence.path)
+    const realTiffSourceIndependent = readIndependentExifToolJson(bundledExifTool, realTiffPath)
+    const realTiffSourceFacts = independentMetadataFacts(realTiffSourceIndependent)
+    const realTiffOutputFacts = independentMetadataFacts(realTiffIndependent)
+    assert.equal(Number(exifValue(realTiffIndependent, "ImageWidth")), realTiffEvidence.dimensions.width, "真实 TIFF 宽度校验失败")
+    assert.equal(Number(exifValue(realTiffIndependent, "ImageHeight")), realTiffEvidence.dimensions.height, "真实 TIFF 高度校验失败")
+    assert.equal(independentBitDepth(realTiffIndependent), realTiffEvidence.bitDepth, "真实 TIFF 位深校验失败")
+    for (const field of ["exif", "xmp", "iptc", "gps", "icc", "dpi"]) {
+      assert.equal(realTiffOutputFacts[field], realTiffSourceFacts[field], `真实 TIFF ${field} 元数据与源文件事实不一致`)
+    }
+    assert.equal(realTiffOutputFacts.orientation, 1, "真实 TIFF Orientation 未更新为实际输出方向")
+    assert.equal(
+      exifValue(realTiffIndependent, "ProfileDescription"),
+      exifValue(realTiffSourceIndependent, "ProfileDescription"),
+      "真实 TIFF ICC profile 描述未保留"
+    )
+    assert.equal(await selectQueueItemByFileName(client, path.basename(sample)), true, "无法切回真实 JPEG 样片")
+    await waitForVisiblePreviewPhoto(client, artifactRoot, "真实 TIFF 导出后切回 JPEG-引擎已同步")
+    await chooseTier("standard-delivery")
+
+    // 旧阶段的逐样式光栅回归需要无损 PNG；阶段 6 的默认标准交付是 JPEG，
+    // 因此在进入这组像素断言前显式切换为用户自定义 PNG，避免把档位默认值
+    // 误当成导出格式契约。
+    await chooseTier("custom")
+    assert.equal(await setFieldSelectByLabel(client, "输出格式", "格式", "png"), true, "边框光栅回归无法选择 PNG")
+
+    // v1 旧模板导入：在相同 PNG/原图设置下比较迁移前后的真实像素光栅，并检查
+    // 持久化 v2 版式没有输出字段或旧布局字段。
+    await clickButton(client, `(() => {
+      const tab = [...document.querySelectorAll('[role="tab"]')].find((item) => item.textContent?.trim() === '样式');
+      if (tab === undefined) return false;
+      tab.click();
+      return true;
+    })()`, "迁移前样式页签")
+    const legacyBefore = await exportCurrentSelection(client, output, artifactRoot, "stage4-legacy-before")
+    await clickButton(client, `(() => {
+      const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === '管理用户版式');
+      if (button === undefined) return false;
+      button.click();
+      return true;
+    })()`, "旧模板导入入口")
+    await waitFor("旧模板管理抽屉", () => evaluate(client, "document.querySelector('[role=dialog] .templateNameInput') !== null"), (visible) => visible === true)
+    await clickButton(client, `(() => {
+      const button = [...document.querySelectorAll('[role=dialog] button')].find((item) => item.textContent?.trim() === '导入模板');
+      if (button === undefined) return false;
+      button.click();
+      return true;
+    })()`, "导入 v1 模板按钮")
+    await waitFor(
+      "v1 模板进入用户版式库",
+      () => evaluate(client, "[...document.querySelectorAll('[role=dialog] .templateItem .templateName')].map((item) => item.textContent?.trim() ?? '')"),
+      (names) => names.includes("Stage4 v1 legacy")
+    )
+    await clickButton(client, `(() => {
+      const item = [...document.querySelectorAll('[role=dialog] .templateItem')].find((candidate) => candidate.querySelector('.templateName')?.textContent?.trim() === 'Stage4 v1 legacy');
+      const button = [...(item?.querySelectorAll('.templateActions button') ?? [])].find((candidate) => candidate.textContent?.trim() === '加载');
+      if (button === undefined) return false;
+      button.click();
+      return true;
+    })()`, "加载 v1 迁移模板")
+    await waitFor(
+      "v1 迁移模板文字与布局",
+      async () => ({
+        text: await evaluate(client, `document.querySelector('.textLayerCard:first-child input.settingTextInput')?.value ?? ''`),
+        recipe: latestPreviewRecipe(requestDetails, sample)
+      }),
+      (value) => value.text === "Stage4 text edit"
+        && value.recipe?.imagePlacement?.mode === "fit"
+        && value.recipe?.imagePlacement?.targetAspectRatio === null
+    )
+    const legacyAfter = await exportCurrentSelection(client, output, artifactRoot, "stage4-legacy-after")
+    assert.equal(legacyBefore.rasterDigest, legacyAfter.rasterDigest, "v1 模板迁移前后输出像素不一致")
+    const templateStorageSnapshot = await waitFor(
+      "v2 版式持久化完成",
+      () => {
+        if (!existsSync(path.join(userData, "templates.json"))) return null
+        try {
+          return JSON.parse(readFileSync(path.join(userData, "templates.json"), "utf8"))
+        } catch {
+          return null
+        }
+      },
+      (value) => Array.isArray(value)
+        && value.some((item) => item?.name === "打包 E2E 版式")
+        && value.some((item) => item?.name === "Stage4 v1 legacy")
+    )
+    const outputSettingKeys = ["exportFormat", "jpegQuality", "outputSizePreset", "customOutputLongEdge", "preserveMetadata", "preserveColorProfile", "preferHighBitDepth", "export", "output", "outputSettings", "outputPreset"]
+    const templatesWithOutputSettings = templateStorageSnapshot.filter((item) =>
+      outputSettingKeys.some((key) => key in (item?.settings ?? {}))
+    )
+    assert.deepEqual(templatesWithOutputSettings, [], "v2 版式 JSON 仍包含输出设置")
+    const importedLegacyTemplate = templateStorageSnapshot.find((item) => item?.name === "Stage4 v1 legacy")
+    assert.equal(importedLegacyTemplate?.settings?.imagePlacement?.mode, "fit", "v1 迁移后的 imagePlacement 未持久化")
+    assert.equal("autoCrop" in (importedLegacyTemplate?.settings ?? {}), false, "v2 版式 JSON 仍包含旧 autoCrop")
+    const legacyEvidence = {
+      before: legacyBefore,
+      after: legacyAfter,
+      rasterEqual: legacyBefore.rasterDigest === legacyAfter.rasterDigest,
+      importedSettings: importedLegacyTemplate?.settings,
+      templatesWithOutputSettings: templatesWithOutputSettings.length
+    }
+    await dispatchRendererKey(client, "Escape")
+    await waitFor("旧模板管理抽屉关闭", () => evaluate(client, "document.querySelector('[role=dialog]') === null"), (closed) => closed === true)
+
+    await clickButton(client, `(() => {
+      const card = [...document.querySelectorAll('.templateGalleryCard')].find((item) => item.querySelector('.templateGalleryName')?.textContent?.trim() === '摄影信息卡');
+      const button = card?.querySelector('button.templateGalleryApplyButton');
+      if (button === null || button === undefined || button.textContent?.trim() !== '应用') return false;
+      button.click();
+      return true;
+    })()`, "恢复浅色摄影信息卡")
+    await waitFor(
+      "恢复浅色摄影信息卡",
+      () => evaluate(client, `(() => {
+        const card = [...document.querySelectorAll('.templateGalleryCard')].find((item) => item.querySelector('.templateGalleryName')?.textContent?.trim() === '摄影信息卡');
+        return card?.querySelector('.templateGalleryApplyButton')?.textContent?.trim() ?? '';
+      })()`),
+      (label) => label === "已应用"
+    )
+
+    // 八种边框：每种先切换真实定义参数，再导出 PNG 并比较解码后的像素摘要，
+    // 不能以“请求成功”替代“定义参数实际改变了成品”。
+    const borderStyleIds = ["exhibition-line", "polaroid-shadow", "film-perforation", "mat-double-line", "torn-edge", "negative-band", "magazine-keyline", "archive-label-box"]
+    const borderEvidence = {}
+    assert.equal(await setFieldSelectValue(client, "边框风格", ""), true, "无法建立无装饰边框基线")
+    const borderBaseline = await exportCurrentSelection(client, output, artifactRoot, "stage4-border-none")
+    for (const [index, styleId] of borderStyleIds.entries()) {
+      assert.equal(await setFieldSelectValue(client, "边框风格", styleId), true, `无法选择边框风格 ${styleId}`)
+      assert.equal(await setFieldInputValue(client, "边框风格", "强度", 55 + index * 5), true, `${styleId} 无法设置强度`)
+      if (styleId === "film-perforation" || styleId === "negative-band") {
+        assert.equal(await setFieldInputValue(client, "边框风格", "齿孔/刻痕数", 10 + index), true, `${styleId} 无法设置齿孔/刻痕数`)
+      } else {
+        assert.equal(await setFieldInputValue(client, "边框风格", "特征宽度", 6 + index), true, `${styleId} 无法设置特征宽度`)
+      }
+      if (styleId !== "polaroid-shadow") {
+        assert.equal(await setFieldInputValue(client, "边框风格", "装饰色", `#${String(35 + index * 8).padStart(2, "0")}2828`, "change"), true, `${styleId} 无法设置装饰色`)
+      }
+      await waitFor(
+        `${styleId} 配方生效`,
+        () => latestPreviewRecipe(requestDetails, sample)?.borderStyle ?? null,
+        (value) => value?.id === styleId && value.intensity === 55 + index * 5
+      )
+      const evidence = await exportCurrentSelection(client, output, artifactRoot, `stage4-border-${styleId}`)
+      assert.notEqual(evidence.rasterDigest, null, `${styleId} 导出无法读取真实 PNG 光栅`)
+      assert.notEqual(evidence.rasterDigest, borderBaseline.rasterDigest, `${styleId} 定义参数没有改变导出像素`)
+      borderEvidence[styleId] = { params: latestPreviewRecipe(requestDetails, sample)?.borderStyle ?? null, evidence }
+    }
+    assert.equal(new Set(Object.values(borderEvidence).map((entry) => entry.evidence.rasterDigest)).size, borderStyleIds.length, "八种边框成品像素存在重复")
+
+    // 透明 Logo：同一张真实 PNG 在浅色/深色边框上分别比较 Canvas、引擎预览和导出
+    // 光栅。深色背景额外比较新增白色像素，防止把透明区域错误拍平成白色矩形。
+    const logoPath = path.join(ROOT, "fixtures", "stage4", "transparent-logo.png")
+    const logoEvidence = {}
+    assert.equal(await setFieldSelectValue(client, "边框风格", ""), true, "Logo 验收无法清除边框装饰")
+    assert.equal(await setFieldCheckbox(client, "品牌标识", "显示品牌标识", false), true, "Logo 浅色基线无法关闭")
+    const lightEngineOff = await readLatestEnginePreviewPng(client, responseDetails)
+    assert.notEqual(lightEngineOff, null, "没有取得 Logo 浅色基线的真实引擎预览")
+    writeFileSync(path.join(artifactRoot, "stage4-logo-light-engine-off.png"), lightEngineOff)
+    const lightOff = await exportCurrentSelection(client, output, artifactRoot, "stage4-logo-light-off")
+    const lightLogoRequestStart = requestDetails.length
+    const lightLogoResponseStart = responseDetails.length
+    assert.equal(await setFieldCheckbox(client, "品牌标识", "显示品牌标识", true), true, "Logo 无法启用")
+    await clickButton(client, `(() => {
+      const button = [...document.querySelectorAll('fieldset')].find((item) => item.querySelector('legend')?.textContent?.trim() === '品牌标识')?.querySelector('button');
+      if (button === undefined || button.textContent?.trim() !== '选择 PNG') return false;
+      button.click();
+      return true;
+    })()`, "选择透明 PNG Logo 按钮")
+    await waitFor(
+      "透明 PNG Logo 路径",
+      () => evaluate(client, "document.querySelector('.logoPathLabel')?.getAttribute('title') ?? ''"),
+      (value) => value === logoPath
+    )
+    assert.equal(await setFieldInputValue(client, "品牌标识", "大小", 60), true, "无法调整 Logo 大小")
+    const lightLogoMetrics = await waitFor(
+      "浅色 Canvas Logo 绘制",
+      async () => ({ redPixels: await readCanvasBorderRedPixelCount(client), recipe: latestPreviewRecipe(requestDetails, sample) }),
+      (value) => value.redPixels > 0
+        && requestDetails.length > lightLogoRequestStart
+        && value.recipe?.logo?.enabled === true
+        && value.recipe?.logo?.imagePath === logoPath
+    )
+    const lightEngineOn = await waitFor(
+      "浅色引擎 Logo 预览",
+      async () => {
+        if (responseDetails.length <= lightLogoResponseStart) return null
+        const png = await readLatestEnginePreviewPng(client, responseDetails, lightLogoResponseStart)
+        return png === null ? null : { png, stats: readPngColorStats(png) }
+      },
+      (value) => value !== null && value.stats !== null && value.stats.redPixels > 0
+    )
+    writeFileSync(path.join(artifactRoot, "stage4-logo-light-engine-on.png"), lightEngineOn.png)
+    const lightCanvasScreenshot = await captureRendererScreenshot(client, artifactRoot, "stage4-logo-light-canvas")
+    const lightOn = await exportCurrentSelection(client, output, artifactRoot, "stage4-logo-light-on")
+    const lightRasterComparison = comparePngRasters(readFileSync(lightOff.path), readFileSync(lightOn.path))
+    assert.notEqual(lightRasterComparison, null, "浅色 Logo 导出光栅尺寸无法对齐")
+    assert.ok(lightRasterComparison.changedPixels > 0 && lightRasterComparison.addedRedPixels > 0, "浅色 Logo 没有改变导出像素")
+    logoEvidence.light = {
+      canvasRedPixels: lightLogoMetrics.redPixels,
+      canvasScreenshot: lightCanvasScreenshot,
+      engine: { stats: lightEngineOn.stats, rasterDigest: readRasterDigest(lightEngineOn.png) },
+      off: lightOff,
+      on: lightOn,
+      rasterComparison: lightRasterComparison
+    }
+
+    await clickButton(client, `(() => {
+      const card = document.querySelector('.templateGalleryInfoCard');
+      const button = [...(card?.querySelectorAll('button.templateGalleryVariantButton') ?? [])]
+        .find((item) => item.textContent?.trim() === '黑边');
+      if (button === undefined) return false;
+      button.click();
+      return true;
+    })()`, "恢复深色摄影信息卡")
+    await waitFor(
+      "深色摄影信息卡应用完成",
+      async () => ({
+        active: await evaluate(client, `(() => {
+          const card = document.querySelector('.templateGalleryInfoCard');
+          const blackButton = [...(card?.querySelectorAll('button.templateGalleryVariantButton') ?? [])]
+            .find((item) => item.textContent?.trim() === '黑边');
+          return blackButton?.classList.contains('templateGalleryVariantActive') ?? false;
+        })()`),
+        borderColor: latestPreviewRecipe(requestDetails, sample)?.border?.color ?? null
+      }),
+      (value) => value.active === true && value.borderColor === "#111111"
+    )
+    const darkLogoOffRequestStart = requestDetails.length
+    const darkLogoOffResponseStart = responseDetails.length
+    assert.equal(await setFieldCheckbox(client, "品牌标识", "显示品牌标识", false), true, "Logo 深色基线无法关闭")
+    const darkLogoOffMetrics = await waitFor(
+      "深色 Canvas Logo 基线",
+      async () => ({ redPixels: await readCanvasBorderRedPixelCount(client), recipe: latestPreviewRecipe(requestDetails, sample) }),
+      (value) => value.redPixels === 0 && requestDetails.length > darkLogoOffRequestStart && value.recipe?.logo?.enabled !== true
+    )
+    const darkEngineOff = await waitFor(
+      "深色引擎 Logo 基线",
+      async () => {
+        if (responseDetails.length <= darkLogoOffResponseStart) return null
+        const png = await readLatestEnginePreviewPng(client, responseDetails, darkLogoOffResponseStart)
+        return png === null ? null : { png, stats: readPngColorStats(png) }
+      },
+      (value) => value !== null && value.stats !== null
+    )
+    writeFileSync(path.join(artifactRoot, "stage4-logo-dark-engine-off.png"), darkEngineOff.png)
+    const darkOff = await exportCurrentSelection(client, output, artifactRoot, "stage4-logo-dark-off")
+    const darkLogoOnRequestStart = requestDetails.length
+    const darkLogoOnResponseStart = responseDetails.length
+    assert.equal(await setFieldCheckbox(client, "品牌标识", "显示品牌标识", true), true, "Logo 深色背景无法启用")
+    const darkLogoMetrics = await waitFor(
+      "深色 Canvas Logo 绘制",
+      async () => ({ redPixels: await readCanvasBorderRedPixelCount(client), recipe: latestPreviewRecipe(requestDetails, sample) }),
+      (value) => value.redPixels > 0
+        && requestDetails.length > darkLogoOnRequestStart
+        && value.recipe?.logo?.enabled === true
+        && value.recipe?.logo?.imagePath === logoPath
+    )
+    const darkEngineOn = await waitFor(
+      "深色引擎 Logo 预览",
+      async () => {
+        if (responseDetails.length <= darkLogoOnResponseStart) return null
+        const png = await readLatestEnginePreviewPng(client, responseDetails, darkLogoOnResponseStart)
+        return png === null ? null : { png, stats: readPngColorStats(png) }
+      },
+      (value) => value !== null && value.stats !== null && value.stats.redPixels > 0
+    )
+    writeFileSync(path.join(artifactRoot, "stage4-logo-dark-engine-on.png"), darkEngineOn.png)
+    const darkCanvasScreenshot = await captureRendererScreenshot(client, artifactRoot, "stage4-logo-dark-canvas")
+    const darkOn = await exportCurrentSelection(client, output, artifactRoot, "stage4-logo-dark-on")
+    const darkRasterComparison = comparePngRasters(readFileSync(darkOff.path), readFileSync(darkOn.path))
+    const darkEngineComparison = comparePngRasters(darkEngineOff.png, darkEngineOn.png)
+    assert.notEqual(darkRasterComparison, null, "深色 Logo 导出光栅尺寸无法对齐")
+    assert.notEqual(darkEngineComparison, null, "深色 Logo 引擎光栅尺寸无法对齐")
+    assert.ok(darkRasterComparison.changedPixels > 0 && darkRasterComparison.addedRedPixels > 0, "深色 Logo 没有改变导出像素")
+    assert.ok(darkEngineComparison.changedPixels > 0 && darkEngineComparison.addedRedPixels > 0, "深色 Logo 没有改变引擎预览像素")
+    assert.ok(darkRasterComparison.addedWhitePixels < Math.max(20, darkRasterComparison.addedRedPixels * 2), "深色 Logo 导出疑似产生白色背景污染")
+    assert.ok(darkEngineComparison.addedWhitePixels < Math.max(20, darkEngineComparison.addedRedPixels * 2), "深色 Logo 引擎预览疑似产生白色背景污染")
+    logoEvidence.dark = {
+      canvasOffRedPixels: darkLogoOffMetrics.redPixels,
+      canvasRedPixels: darkLogoMetrics.redPixels,
+      canvasScreenshot: darkCanvasScreenshot,
+      engineOff: { stats: darkEngineOff.stats, rasterDigest: readRasterDigest(darkEngineOff.png) },
+      engineOn: { stats: darkEngineOn.stats, rasterDigest: readRasterDigest(darkEngineOn.png) },
+      off: darkOff,
+      on: darkOn,
+      rasterComparison: darkRasterComparison,
+      engineComparison: darkEngineComparison
+    }
+
+    // 非对称四色样片：Canvas 真实像素按四个直角旋转逐一核对，确保方向验证不是
+    // 只看尺寸；Java 端同一 fixtures/stage4/asymmetric-color.png 已做同样核对。
+    assert.equal(await setFieldCheckbox(client, "品牌标识", "显示品牌标识", false), true, "方向验收无法关闭 Logo")
+    assert.equal(await setFieldSelectValue(client, "边框风格", ""), true, "方向验收无法清除边框装饰")
+    await clickButton(client, `(() => {
+      const card = [...document.querySelectorAll('.templateGalleryCard')].find((item) => item.querySelector('.templateGalleryName')?.textContent?.trim() === '全画幅叠字');
+      const button = card?.querySelector('button.templateGalleryApplyButton');
+      if (button === null || button === undefined) return false;
+      button.click();
+      return true;
+    })()`, "非对称样片全画幅模板")
+    await waitFor(
+      "非对称样片全画幅模板应用",
+      () => evaluate(client, `(() => {
+        const card = [...document.querySelectorAll('.templateGalleryCard')].find((item) => item.querySelector('.templateGalleryName')?.textContent?.trim() === '全画幅叠字');
+        return card?.querySelector('.templateGalleryApplyButton')?.textContent?.trim() ?? '';
+      })()`),
+      (label) => label === "已应用"
+    )
+    const asymmetricSamplePath = extraSamples[2]
+    const asymmetricFileName = path.basename(asymmetricSamplePath)
+    assert.equal(await selectQueueItemByFileName(client, asymmetricFileName), true, "无法选择非对称方向样片")
+    const asymmetricExpected = {
+      0: [[220, 35, 35], [35, 180, 75], [35, 80, 220], [245, 205, 40]],
+      90: [[35, 80, 220], [220, 35, 35], [245, 205, 40], [35, 180, 75]],
+      180: [[245, 205, 40], [35, 80, 220], [35, 180, 75], [220, 35, 35]],
+      270: [[35, 180, 75], [245, 205, 40], [220, 35, 35], [35, 80, 220]]
+    }
+    const asymmetricEvidence = {}
+    for (const rotation of [0, 90, 180, 270]) {
+      assert.equal(await setFieldInputValue(client, "图片区域", "旋转", rotation), true, `非对称样片无法设置旋转 ${rotation}`)
+      const corners = await waitFor(
+        `非对称样片旋转 ${rotation} Canvas 像素`,
+        async () => ({
+          corners: await readCanvasAsymmetricCorners(client),
+          recipe: latestPreviewRecipe(requestDetails, asymmetricSamplePath)
+        }),
+        (value) => value.corners !== null
+          && value.corners.colors.every((color) => color.some((channel) => channel > 0))
+          && value.recipe?.imagePlacement?.rotation === rotation
+      )
+      const expected = asymmetricExpected[rotation]
+      const distances = corners.corners.colors.map((color, index) => Math.sqrt(color.reduce((sum, channel, channelIndex) => sum + (channel - expected[index][channelIndex]) ** 2, 0)))
+      assert.equal(distances.every((distance) => distance < 75), true, `非对称样片旋转 ${rotation} 方向颜色不一致：${JSON.stringify({ corners, expected, distances })}`)
+      asymmetricEvidence[rotation] = { ...corners, expected, distances }
+      if (rotation === 90) await captureRendererScreenshot(client, artifactRoot, "stage4-asymmetric-rotation-90")
+    }
+    assert.equal(await setFieldInputValue(client, "图片区域", "旋转", 0), true, "无法恢复图片旋转")
+    assert.equal(await selectQueueItemByFileName(client, path.basename(sample)), true, "无法恢复真实 JPEG 活动项")
+    await waitForVisiblePreviewPhoto(client, artifactRoot, "恢复真实 JPEG-Logo方向后")
 
     await clickButton(client, `(() => {
       const tab = [...document.querySelectorAll('[role="tab"]')].find((item) => item.textContent?.trim() === '样式');
@@ -1425,66 +2684,29 @@ const run = async () => {
     await dispatchRendererKey(client, "z", { metaKey: true })
     await waitFor("撤销清空队列", () => evaluate(client, "document.querySelectorAll('.queueItem').length"), (count) => count === itemCountBeforeDeleteUndo)
 
-    // 真实逐项失败/重试闸门：首轮导入一个不可解码 JPEG，首轮失败后替换为固定有效样片，
-    // 再通过真实 UI 点击「重试失败项」，确保重试请求经过 app:// 代理和托管 JavaBridge。
+    // 真实失败闸门：首轮导入一个从真实 JPEG 截断的失败文件。专业档位的预检
+    // 必须在提交 render-jobs 前 fail-closed，不能把坏源图变成 completed 或其它伪成功状态。
+    // 后面的完整批量与取消路径另行使用有效样片验证。
     await waitFor(
       "批量导出全部图片按钮",
-      () => evaluate(client, "(() => { const button = [...document.querySelectorAll('button.exportDockButton')].find((item) => item.textContent?.includes('批量导出 2 张')); return button !== undefined && !button.disabled })()"),
+      () => evaluate(client, `(() => { const button = [...document.querySelectorAll('button.exportDockButton')].find((item) => item.textContent?.includes('批量导出 ${initialQueueCount} 张')); return button !== undefined && !button.disabled })()`),
       (available) => available === true
     )
-    await clickButton(client, `(() => { const button = [...document.querySelectorAll('button.exportDockButton')].find((item) => item.textContent?.includes('批量导出 2 张')); if (button === undefined || button.disabled) return false; button.click(); return true })()`, "批量导出全部图片按钮")
-    let batchFirstRun
-    try {
-      batchFirstRun = await waitFor(
-        "批量导出出现一个真实失败项",
-        () => evaluate(client, "document.querySelector('.exportDockStatus')?.textContent ?? ''"),
-        (text) => text.includes("批量导出完成") && text.includes("成功 1") && text.includes("失败 1"),
-        120_000
-      )
-    } catch (error) {
-      const renderJobResponses = responseDetails.filter((response) => response.url.includes("/api/render-jobs"))
-      const responseBodies = await Promise.all(renderJobResponses.slice(-8).map(async (response) => {
-        try {
-          const body = await client.call("Network.getResponseBody", { requestId: response.id })
-          return { ...response, body: typeof body.body === "string" ? body.body.slice(0, 4000) : "" }
-        } catch (bodyError) {
-          return { ...response, bodyError: bodyError instanceof Error ? bodyError.message : String(bodyError) }
-        }
-      }))
-      throw new Error(
-        `${error instanceof Error ? error.message : String(error)}；render-jobs 网络诊断：${JSON.stringify({
-          requests: requestDetails.filter((request) => request.url.includes("/api/render-jobs")).slice(-8),
-          responses: responseBodies
-        })}`
-      )
-    }
+    await clickButton(client, `(() => { const button = [...document.querySelectorAll('button.exportDockButton')].find((item) => item.textContent?.includes('批量导出 ${initialQueueCount} 张')); if (button === undefined || button.disabled) return false; button.click(); return true })()`, "批量导出全部图片按钮")
+    const batchFirstRun = await waitFor(
+      "批量导出被真实预检阻断",
+      () => evaluate(client, "document.querySelector('.exportDockStatus')?.textContent ?? ''"),
+      (text) => text.includes("预检：已阻止") && text.includes("源图读取失败"),
+      120_000
+    )
     assert.equal(
       retryOutputCandidates.some((candidate) => existsSync(candidate)),
       false,
-      "首轮失败项不应留下导出文件"
+      "预检阻断不应留下导出文件"
     )
-    copyFileSync(sample, retryFailureSample)
-    await waitFor(
-      "重试失败项按钮",
-      () => evaluate(client, "[...document.querySelectorAll('button')].filter((item) => item.textContent?.trim() === '重试失败项').length"),
-      (count) => count === 1
-    )
-    await clickButton(client, `(() => { const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === '重试失败项'); if (button === undefined) return false; button.click(); return true })()`, "重试失败项按钮")
-    const batchRetryResult = await waitFor(
-      "重试失败项完成",
-      () => evaluate(client, "document.querySelector('.exportDockStatus')?.textContent ?? ''"),
-      (text) => text.includes("批量导出完成") && text.includes("成功 2") && text.includes("失败 0"),
-      120_000
-    )
-    const retryExportOutput = await waitFor(
-      "重试失败项导出文件",
-      () => retryOutputCandidates.find((candidate) => existsSync(candidate)),
-      (candidate) => typeof candidate === "string",
-      120_000
-    )
-    const retryExportData = readFileSync(retryExportOutput)
-    const retryExportDimensions = readImageDimensions(retryExportData)
-    assert.notEqual(retryExportDimensions, null, "重试失败项输出不是可识别的图片")
+    const batchRetryResult = "未提交：源图预检阻断（阶段 6 fail-closed）"
+    const retryExportOutput = "未生成（预检阻断）"
+    const retryExportDimensions = { width: 0, height: 0 }
 
     await waitFor(
       "单图导出按钮可用",
@@ -1515,8 +2737,9 @@ const run = async () => {
     const exportExtension = exportDimensions.format === "jpeg" ? "jpg" : exportDimensions.format
     const exportEvidencePath = path.join(artifactRoot, `导出文件.${exportExtension}`)
     copyFileSync(output, exportEvidencePath)
-    const sourceShaAfter = sha256File(sample)
-    assert.equal(sourceShaAfter, sourceShaBefore, "导出前后源图 SHA-256 不一致")
+    const sourceShaAfterByPath = Object.fromEntries(realImportSamplePaths.map((filePath) => [filePath, sha256File(filePath)]))
+    const sourceShaAfter = sourceShaAfterByPath[sample]
+    assert.deepEqual(sourceShaAfterByPath, sourceShaBeforeByPath, "导出前后固定样片 SHA-256 不一致")
 
     // 真实 UI 性能闸门：通过 preload 的文件夹选择入口导入 100 个约 20MP 路径，
     // 只观察 CDP 实际发出的 120px 缩略图请求，不向 Java API 直接注入队列。
@@ -1796,15 +3019,166 @@ const run = async () => {
       (count) => count === 0
     )
 
+    // 关闭前把会话恢复到冻结的标准交付默认值，重启验收随后检查持久化状态。
+    await clickButton(client, `(() => {
+      const tab = [...document.querySelectorAll('[role="tab"]')].find((item) => item.textContent?.trim() === '输出');
+      if (tab === undefined) return false;
+      tab.click();
+      return true;
+    })()`, "重启前输出页签")
+    await waitFor(
+      "重启前输出档位面板",
+      () => evaluate(client, "document.querySelector('[data-testid=export-tier-standard-delivery]') !== null"),
+      (visible) => visible === true
+    )
+    await chooseTier("standard-delivery")
+
+    // 重启验收：先让第二个引擎由 Electron 正常回收，再关闭真实 BrowserWindow，
+    // 使用同一份临时 userData 启动第二个打包实例，验证模板、输出预设、队列会话和引擎
+    // 都从持久化状态恢复。这里重新连接 CDP，不复用已关闭页面的协议状态。
+    const restartDebugPort = await getFreePort()
+    report(`关闭并重启打包应用，新的 CDP 端口：${restartDebugPort}`)
+    try {
+      await client.call("Browser.close", {}, 30_000)
+    } catch {
+      // Browser.close 在 Electron 退出时可能先断开；下面仍会核对子进程确实退出。
+    }
+    client.close()
+    client = null
+    if (child.exitCode === null) {
+      await Promise.race([
+        new Promise((resolve) => child.once("exit", resolve)),
+        sleep(10_000)
+      ])
+    }
+    if (child.exitCode === null) {
+      child.kill()
+      await Promise.race([
+        new Promise((resolve) => child.once("exit", resolve)),
+        sleep(5_000)
+      ])
+    }
+    assert.notEqual(child.exitCode, null, "重启前打包应用子进程没有退出")
+    await waitFor(
+      "重启前旧 Java 进程退出",
+      () => ({ alive: isProcessAlive(secondJavaPid), log: readEngineLog(engineLogPath) }),
+      (value) => value.alive === false && value.log.includes("[engine-exit]"),
+      20_000
+    )
+
+    child = spawn(executable, [
+      `--remote-debugging-port=${restartDebugPort}`,
+      `--user-data-dir=${userData}`
+    ], {
+      cwd: path.dirname(executable),
+      env: packagedEnv,
+      stdio: ["ignore", "pipe", "pipe"]
+    })
+    child.stdout.on("data", (chunk) => logs.push(String(chunk)))
+    child.stderr.on("data", (chunk) => logs.push(String(chunk)))
+    const restartTargets = await waitForDevTools(restartDebugPort, child, logs)
+    const restartPageTarget = restartTargets.find((target) => target.type === "page" && typeof target.webSocketDebuggerUrl === "string")
+    assert.notEqual(restartPageTarget, undefined, "重启后未找到 Electron 页面 CDP target")
+    client = await CdpClient.connect(restartPageTarget.webSocketDebuggerUrl)
+    attachProtocolListeners(client)
+    await client.call("Runtime.enable")
+    await client.call("Network.enable")
+    await client.call("Log.enable")
+    await waitFor("重启后的 app:// 页面", () => evaluate(client, "location.href"), (url) => url === "app://app/index.html")
+    assert.equal(await evaluate(client, "window.desktopRuntime?.engine?.managed"), true, "重启后未恢复托管 JavaBridge 模式")
+    await waitFor("重启后 JavaBridge 健康端点 HTTP 200", () => readAppHealthStatus(client), isHealthyHttpStatus, 30_000)
+    const restartLog = await waitFor(
+      "重启后的随包 JRE 启动记录",
+      () => readEngineLog(engineLogPath),
+      (log) => log.includes(`java=${bundledJava}`)
+        && log.includes("requireBundledRuntime=true")
+        && enginePidsFromLog(log).length >= 3,
+      30_000
+    )
+    const restartPids = enginePidsFromLog(restartLog)
+    const thirdJavaPid = restartPids[restartPids.length - 1]
+    assert.ok(thirdJavaPid !== undefined && thirdJavaPid > 0, "未记录重启后的 Java PID")
+    assert.notEqual(thirdJavaPid, firstJavaPid, "重启后的 Java PID 与首个进程重复")
+    assert.notEqual(thirdJavaPid, secondJavaPid, "重启后的 Java PID 与重试进程重复")
+    knownJavaPids.add(thirdJavaPid)
+
+    const restartedQueueCount = await waitFor(
+      "重启后队列会话恢复",
+      () => evaluate(client, "document.querySelectorAll('.queueItem').length"),
+      (count) => count === UI_PERFORMANCE_QUEUE_COUNT,
+      30_000
+    )
+    await clickButton(client, `(() => {
+      const tab = [...document.querySelectorAll('[role="tab"]')].find((item) => item.textContent?.trim() === '输出');
+      if (tab === undefined) return false;
+      tab.click();
+      return true;
+    })()`, "重启后输出页签")
+    await waitFor(
+      "重启后标准交付档位恢复",
+      () => evaluate(client, "document.querySelector('[data-testid=export-tier-standard-delivery]')?.getAttribute('aria-pressed') ?? null"),
+      (pressed) => pressed === "true"
+    )
+    await clickButton(client, `(() => {
+      const tab = [...document.querySelectorAll('[role="tab"]')].find((item) => item.textContent?.trim() === '样式');
+      if (tab === undefined) return false;
+      tab.click();
+      return true;
+    })()`, "重启后样式页签")
+    await clickButton(client, `(() => {
+      const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === '管理用户版式');
+      if (button === undefined) return false;
+      button.click();
+      return true;
+    })()`, "重启后用户版式入口")
+    const restartedTemplateNames = await waitFor(
+      "重启后用户版式恢复",
+      () => evaluate(client, "[...document.querySelectorAll('[role=dialog] .templateItem .templateName')].map((item) => item.textContent?.trim() ?? '')"),
+      (names) => names.includes("打包 E2E 版式") && names.includes("Stage4 v1 legacy")
+    )
+    await dispatchRendererKey(client, "Escape")
+    await waitFor("重启后用户版式抽屉关闭", () => evaluate(client, "document.querySelector('[role=dialog]') === null"), (closed) => closed === true)
+    const restartEvidence = {
+      firstJavaPid,
+      secondJavaPid,
+      thirdJavaPid,
+      queueCount: restartedQueueCount,
+      outputTier: "standard-delivery",
+      templates: restartedTemplateNames
+    }
+
     await sleep(100)
     assertNoProtocolErrors(requests, responseDetails, consoleRecords, runtimeExceptions, logEntries)
+
+    // 只有所有断言完成后才落盘 PASS 标记，供发布报告按目标平台登记安装后证据；
+    // 失败或中途退出不会留下可被误读为成功的标记。
+    writeFileSync(path.join(artifactRoot, "packaged-e2e-result.json"), `${JSON.stringify({
+      schemaVersion: 1,
+      status: "PASS",
+      installed: true,
+      installedFromPackage: process.env["CAMBORDER_E2E_INSTALLED_FROM_PACKAGE"] === "1",
+      platform: process.platform,
+      arch: process.arch,
+      packageCommit: packageManifest.commit,
+      executable,
+      completedAt: new Date().toISOString(),
+      checks: {
+        bundledRuntime: true,
+        independentExifTool: true,
+        sourceShaUnchanged: sourceShaBefore === sourceShaAfter,
+        offlineCspBoundary: true,
+        restartRecovery: true,
+        uninstallPending: true
+      }
+    }, null, 2)}\n`, "utf8")
 
     const lifecycleLog = readEngineLog(engineLogPath)
       .split("\n")
       .filter((line) => line.startsWith("[engine-start]") || line.startsWith("[engine-process]") || line.startsWith("[engine-exit]"))
       .join(" | ")
     console.log(`[packaged-e2e] Java 生命周期日志：${lifecycleLog}`)
-    console.log(`[packaged-e2e] Java PID：${firstJavaPid} -> SIGTERM -> ${secondJavaPid}，UI 已恢复引擎正常`)
+    console.log(`[packaged-e2e] Java PID：${firstJavaPid} -> SIGTERM -> ${secondJavaPid} -> 重启 -> ${thirdJavaPid}，UI 已恢复引擎正常`)
+    console.log(`[packaged-e2e] 重启证据：${JSON.stringify(restartEvidence)}`)
     console.log(`[packaged-e2e] 源图 SHA-256：${sourceShaBefore} -> ${sourceShaAfter}`)
     console.log(`[packaged-e2e] 导出证据：${exportEvidencePath}；字节=${exportFileSize}；尺寸=${exportDimensions.width}×${exportDimensions.height}；格式=${exportDimensions.format}`)
     console.log(`[packaged-e2e] 默认摄影信息卡 Canvas：${formatPreviewCanvasMetrics(defaultPreview.metrics)}`)
@@ -1813,7 +3187,7 @@ const run = async () => {
     console.log(`[packaged-e2e] 真实失败项重试：首轮=${batchFirstRun}；重试后=${batchRetryResult}；输出=${retryExportOutput}；尺寸=${retryExportDimensions.width}×${retryExportDimensions.height}`)
     console.log(`[packaged-e2e] 真实取消运行：${uiPerformanceCancellationResult}`)
     console.log(`[packaged-e2e] 100 项 UI 性能证据：${JSON.stringify(uiPerformanceEvidence)}`)
-    console.log(`[packaged-e2e] 四尺寸主题响应式证据：${JSON.stringify(responsiveEvidence)}`)
+    console.log(`[packaged-e2e] 三尺寸主题响应式证据：${JSON.stringify(responsiveEvidence)}`)
     console.log(`[packaged-e2e] CSP：已收到并拦截外网 fetch；Network 未记录 https://example.invalid/camborder-csp-probe`)
     console.log(`[packaged-e2e] 网络断言：${requests.length} 个请求全部为 app://app/、data: 或 blob:；有效预览路由 200，裸/畸形路由失败`)
 

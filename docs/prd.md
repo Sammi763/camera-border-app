@@ -14,18 +14,21 @@
 - **本计划目标**：本节冻结的最终目标；在样片矩阵和平台验收完成前，不得写成“当前支持”。
 - **未验收**：代码存在但未完成目标平台、格式、位深、ICC 或元数据验证时，只能标记为未验收。
 
-### 0.1 最终平台
+### 0.1 发布平台与冻结范围
 
-最终发行平台只有以下三种：
+正式发布目标仅为 macOS arm64。macOS x64 和 Windows x64 保留候选包与模拟验收字段，
+不参与正式发布阻塞；Windows 的发布状态固定为 `SIMULATED`，不能写成平台验收 `PASS`。
+机器可读的唯一范围配置见 [`docs/release-scope.json`](release-scope.json)，报告生成器默认
+读取该配置，`--scope` 可用于显式复核其它配置。
 
-| 平台 | 架构 | 交付形态 | 口径 |
-|---|---|---|---|
-| macOS | arm64 | `.dmg` | 最终支持 |
-| macOS | x64 | `.dmg` | 最终支持 |
-| Windows | x64 | `.exe`（NSIS） | 最终支持 |
+| 目标 | 架构 | 交付形态 | 角色 | 验收口径 |
+|---|---|---|---|---|
+| macOS | arm64 | `.dmg` | `FORMAL` | 原生验收；正式发布阻塞 |
+| macOS | x64 | `.dmg` | `CANDIDATE` | 可选候选证据；不阻塞正式发布 |
+| Windows | x64 | `.exe`（NSIS） | `CANDIDATE` | `SIMULATED`；不等同于原生平台验收 |
 
-Linux、Windows arm64 和移动端不属于最终发行范围。跨平台交叉构建只能证明资源或配置
-正确，不能替代对应平台的安装、启动和照片流程验收。
+Linux、Windows arm64 和移动端不属于发行范围。跨平台交叉构建只能证明资源或配置
+正确，不能替代对应平台的原生安装、启动和照片流程验收；候选包也不能反向扩大正式发布范围。
 
 ### 0.2 输入格式
 
@@ -75,12 +78,25 @@ PNG 变体沿用所选档位的尺寸、色彩和 GPS/位置策略；JPEG 质量
 格式生效。目标容器无法承载的源元数据不得静默丢弃，必须明确标记不支持或使导出失败。
 
 “全部元数据”至少包括可读取的 EXIF、XMP、IPTC 和 GPS/位置字段，以及目标容器能够
-承载的其他源元数据。源图没有 ICC 或某类元数据时不凭空创建；结果必须明确标注“源无此项”。
+承载的其他源元数据。源图没有 ICC 时按 sRGB 处理并写入实际输出，`FidelityReport` 必须
+标记 `sRGB-assumed`；源图没有某类元数据时不得伪造该类源数据，结果应标注源事实缺失。
 源位深不是 8-bit 或 16-bit 时，不能静默伪装成“源位深保留”，必须在导出前给出明确的
 降级或不支持结果。
 
 快速分享必须移除 GPS/位置；标准交付和高保真归档必须保留 GPS/位置。三档都不得覆盖
 原图，导出结果必须写入用户明确选择的新路径。
+
+### 0.3.1 阶段五专业保真约束
+
+- `GET /api/capabilities` 只报告随包、固定版本且可实际执行的组件能力；组件缺失时对应
+  能力为 `false`，UI 不显示不可用的专业控件。
+- `POST /api/export-preflight` 在提交任务前验证源事实、档位/格式组合、路径冲突、ICC、
+  元数据和位深要求。固定档位无法满足时必须阻断；用户修改参数后进入 `custom`，结果可
+  明确报告 `UNSUPPORTED` 或 `DOWNGRADED`。
+- ExifTool 负责受控复制 EXIF/XMP/IPTC/GPS/ICC/DPI，并独立读取输出验证尺寸、方向、位深、
+  色彩空间和缩略图策略。超时、非零退出或输出无效均为导出失败，不允许 `completed + SKIPPED`。
+- JPEG 只输出 8-bit；PNG/TIFF 真实输出 8/16-bit；8-bit 源不得报告为有效 16-bit。RAW 的
+  像素来源固定为内嵌 JPEG，归档报告必须说明实际来源、尺寸和受限保真范围。
 
 ### 0.4 统一术语
 
@@ -105,16 +121,17 @@ PNG 变体沿用所选档位的尺寸、色彩和 GPS/位置策略；JPEG 质量
 ### 0.6 验收入口
 
 格式、位深、ICC 和元数据的样片矩阵见 [`docs/test-samples.md`](test-samples.md)。每个
-最终平台都必须完成安装/启动/离线导入/预览/三档导出回归；任何一项未完成，只能称为
-“当前已实现”或“未验收”，不能称为“最终支持”。
+正式目标 macOS arm64 必须完成安装/启动/离线导入/预览/三档导出回归；候选目标只作为
+独立的可选证据记录。正式目标任一项未完成，只能称为“当前已实现”或“未验收”，不能称为
+“正式发布就绪”。
 
 ## 1. 产品定位
 
 ### 1.1 产品一句话
 
 面向数码与胶片摄影用户的本地桌面图片边框工具，支持读取数码 EXIF、用拍摄信息预设
-补充拍摄信息、添加高质量边框与版式，并批量导出成品。应用最终只以 macOS arm64、
-macOS x64 的 `.dmg` 和 Windows x64 的 `.exe` 交付，不要求登录。
+补充拍摄信息、添加高质量边框与版式，并批量导出成品。应用正式发布只以 macOS arm64
+的 `.dmg` 交付；macOS x64 与 Windows x64 的包作为候选交付物保留，不要求登录。
 
 ### 1.2 目标用户
 
@@ -136,7 +153,8 @@ macOS x64 的 `.dmg` 和 Windows x64 的 `.exe` 交付，不要求登录。
 
 最终产品不做修图、登录、云同步、自动更新、真实 RAW 显影、移动端和在线版式商店。
 也不做 Roll、冲洗、扫描、实验室或暗房工作流。项目重点是“边框、文字、拍摄信息、
-版式、批量、高质量导出”，并保证在 macOS arm64、macOS x64 和 Windows x64 上可安装运行。
+版式、批量、高质量导出”，并优先保证 macOS arm64 正式目标可安装运行；其它目标按
+发布范围配置记录候选证据。
 
 ## 2. 竞品与参考项目分析
 
@@ -318,9 +336,37 @@ macOS x64 的 `.dmg` 和 Windows x64 的 `.exe` 交付，不要求登录。
 
 - 队列右键菜单：关闭当前、关闭其他、关闭左侧、关闭右侧、全部关闭。
 
-HEIC/HEIF 和 RAW 的“代码路径存在”不等于“最终支持”。只有在 macOS arm64、macOS x64
-和 Windows x64 上通过 [`docs/test-samples.md`](test-samples.md) 的样片矩阵，才可以对外
-宣称正式支持。WebP、BMP 不纳入最终输入格式。
+HEIC/HEIF 和 RAW 的“代码路径存在”不等于“正式发布就绪”。macOS arm64 正式目标必须
+通过 [`docs/test-samples.md`](test-samples.md) 的样片矩阵；macOS x64 和 Windows x64 的
+结果作为候选证据单独登记，不能把 Windows 的 `SIMULATED` 写成平台验收 `PASS`。WebP、BMP
+不纳入最终输入格式。
+
+### 3.3.1 方向与统一几何契约（阶段 1）
+
+- EXIF Orientation 1–8 只在解码边界处理一次，并与用户手动旋转分开；真实 ARW 的
+  Orientation=8 必须显示为竖图。
+- Canvas 即时预览、Java 引擎预览、单图导出和批量导出必须使用同一份 `RenderRecipe`、
+  有向尺寸和图片区域几何；预览缩略或截图不得把容器尺寸冒充源像素尺寸。
+- 默认「适应画布」保持原图比例并显示完整图片；只有图片区域为 `fill` 且界面明确显示裁切
+  状态时才允许裁切。
+- 预览缩放固定为「适应画布」↔「1:1 像素查看」两态。1:1 的 Canvas 使用自然合成像素尺寸，
+  溢出时可滚动/拖拽，未溢出的轴必须居中；CSS 尺寸、Canvas backing store 和导出像素尺寸
+  分开记录。
+- 阶段 1 验收固定覆盖 `DSC04875.ARW`、`DSC04876.ARW`、`DSC04877.ARW`、
+  `DSC04881.ARW`、`DSC04882.ARW`、`DSC04883.ARW`，并补充合成 2:3 竖图回归测试。
+
+### 3.3.2 图片区域、统一布局与 Polaroid（阶段 2）
+
+- 图片区域单独提供方向（自动、横屏、竖屏、方形）、比例（原图、1:1、4:5、3:4、2:3、
+  3:2、9:16）和显示模式（完整显示、填满裁切）；裁切只在明确选择填满图片区域时发生。
+- 页面必须分开展示图片区域、预览 CSS 尺寸和导出像素尺寸；预览尺寸只能改变预览框，不能
+  改变导出像素或 RenderRecipe 的输出语义。
+- 中央预览在适应画布、1:1、竖图、Polaroid 和 1200×760、1400×863、1920×1080 窗口下均保持
+  居中；不使用 CSS 拉伸图片或 Canvas。
+- Polaroid 必须明确划分图片区、内边距、底部文字区和视觉分隔线；编辑态辅助线不得进入
+  导出结果。
+- 固定输出档位均提供其支持的 PNG 变体；选择 PNG 只改变格式，不得静默切换为 custom。
+- 图片区域、版式、输出档位和水印持久化；预览缩放状态仅属于临时工作台状态。
 
 ### 3.4 边框与背景
 
@@ -692,17 +738,19 @@ AI 使用边界：
   根据拍摄画幅提供边框布局建议。
 - EXIF 基础读取、每图文字覆盖、版式保存/加载/导入/导出、文本变量和批量队列工作流。
 - 拍摄信息预设与本地资产相关的工程代码路径，以及当前的统一渐进式工作台入口；这些路径仍需按
-  §0.6 样片矩阵和三平台验收，不能等同于最终平台支持。
+  §0.6 样片矩阵和正式目标验收，不能等同于正式发布支持。
 - HEIC/HEIF 统一通过随包解码助手在隔离 worker 中转换；转换结果会物理应用方向，并尽力保留
   可读取的 EXIF/ICC。RAW 的产品边界仍是内嵌 JPEG 预览，任何真实显影分支都不属于产品承诺。
-- 当前导出代码路径可生成 PNG/JPEG，并保留部分 TIFF 路径；EXIF/ICC/高位深是否真正写入由
-  导出结果逐项报告 `APPLIED` 或 `DOWNGRADED`，不能把降级结果当作能力已应用。
-- Electron 打包链路、随包运行时和引擎故障诊断已存在，但各最终平台的干净机器验收仍以
-  [发布清单](release-checklist.md) 为准。
+- 当前导出代码路径可生成 PNG/JPEG/TIFF；JPEG/PNG 的 EXIF/ICC payload 与 TIFF 原生
+  metadata tree 均由编码器写回，EXIF/ICC/高位深是否真正写入仍由导出结果逐项报告
+  `APPLIED` 或 `DOWNGRADED`，不能把降级结果当作能力已应用。
+- Electron 打包链路、随包运行时和引擎故障诊断已存在，但正式目标的干净机器验收仍以
+  [发布清单](release-checklist.md) 为准；候选目标单独记录，不改变正式门。
 
 ### 4.2 本计划目标（当前未全部实现）
 
-- 在 macOS arm64、macOS x64、Windows x64 三个平台正式支持 §0.2 的全部输入格式。
+- 在 macOS arm64 正式目标完成 §0.2 的输入格式验收；macOS x64 与 Windows x64 只作为候选目标
+  记录结果，Windows 固定为 `SIMULATED`。
 - 只把 RAW 的内嵌 JPEG 预览作为图像来源，不提供真实 RAW 显影。
 - 完成 JPEG 8-bit、PNG 8/16-bit、TIFF 8/16-bit 输出，以及快速分享、标准交付、
   高保真归档三个固定导出档位。
@@ -886,29 +934,44 @@ Java Engine：
 
 ```json
 {
+  "phase": "completed",
+  "tier": "standard-delivery",
+  "format": "jpeg",
+  "verified": true,
+  "fidelityScope": "full",
+  "pixelSource": "decoded-file",
+  "metadataSource": "/path/to/photo.tif",
   "source": {
-    "format": "tiff",
     "width": 6000,
     "height": 4000,
     "bitDepth": 16,
-    "iccProfile": true,
-    "exif": true,
-    "xmp": true,
-    "iptc": false,
-    "gps": true
+    "colorSpace": "icc",
+    "orientation": 1,
+    "icc": { "state": "present", "profileName": "Adobe RGB", "sha256": "..." },
+    "metadata": { "exif": true, "xmp": true, "iptc": true, "gps": true, "dpi": true, "thumbnail": false }
   },
   "output": {
-    "format": "jpeg",
     "width": 6000,
     "height": 4000,
     "bitDepth": 8,
-    "iccProfile": true,
-    "exif": true,
-    "xmp": false,
-    "iptc": false,
-    "gps": true
+    "colorSpace": "sRGB",
+    "orientation": 1,
+    "icc": { "state": "present", "profileName": "sRGB IEC61966-2.1" },
+    "metadata": { "exif": true, "xmp": true, "iptc": true, "gps": true, "dpi": true, "thumbnail": false }
   },
-  "warnings": ["XMP 未保留", "输出为 JPEG 8-bit"]
+  "transformations": {
+    "colorConverted": true,
+    "resized": false,
+    "orientationNormalized": true,
+    "locationPolicy": "preserve",
+    "thumbnailPolicy": "regenerated-or-removed"
+  },
+  "features": {
+    "colorProfile": { "status": "APPLIED", "message": "输出 ICC 已独立验证" },
+    "metadata": { "status": "APPLIED", "message": "元数据已按策略写回" },
+    "bitDepth": { "status": "APPLIED", "message": "JPEG 输出 8-bit" }
+  },
+  "warnings": []
 }
 ```
 
@@ -941,7 +1004,7 @@ Java Engine：
 
 版式只描述视觉布局；输出格式、尺寸、质量和元数据策略由独立
 `OutputPreset` 保存，不得写入 `settings` 或版式 JSON。读取早期 `settings` 中的
-`filmFormat`、`autoCrop` 及扁平/嵌套输出字段时，应用会迁移到 v2 结构、剥离输出字段后再保存。
+早期画幅、布局兼容字段及扁平/嵌套输出字段时，应用会迁移到 v2 结构、剥离输出字段后再保存。
 
 ## 7. API 规划
 
@@ -952,7 +1015,9 @@ Java Engine：
 - `GET /api/health`
 - `GET /api/dev/photos`（样片浏览器，扫描仓库根 `photos/`）
 - `POST /api/preview`
+- `GET /api/capabilities`（随包专业组件、格式、位深和导出档位的真实能力）
 - `GET /previews/{id}`
+- `POST /api/export-preflight`（导出前检查源事实、档位、路径和能力）
 - `POST /api/render-jobs`（提交 1–100 个冻结快照，返回 `202 + jobId`；不等待渲染完成）
 - `GET /api/render-jobs/{jobId}`（查询总进度、当前项、逐项结果和失败原因）
 - `DELETE /api/render-jobs/{jobId}`（取消尚未执行的项；正在执行的项自然收尾）
@@ -977,9 +1042,9 @@ Java Engine：
 
 ### 阶段 1：可安装的摄影师 MVP（本计划目标）
 
-目标：让用户在 macOS arm64、macOS x64 和 Windows x64 上无需登录、无需安装 Java，即可
-完成“导入 → 识别/补充拍摄信息 → 套版式 → 预览 → 批量导出”。输入、输出和导出档位
-必须遵守 §0，不以本阶段的代码完成度倒推产品支持。
+目标：让用户在 macOS arm64 正式目标上无需登录、无需安装 Java，即可完成“导入 → 识别/补充
+拍摄信息 → 套版式 → 预览 → 批量导出”。macOS x64 与 Windows x64 的候选包继续保留，
+输入、输出和导出档位必须遵守 §0，不以本阶段的代码完成度倒推产品支持。
 
 任务：
 
@@ -991,13 +1056,15 @@ Java Engine：
 - 收敛版式与拍摄信息预设的边界，版式只负责排版，拍摄信息预设只负责拍摄身份。
 - 完善拖拽导入、队列删除、单图预览、单图导出和批量导出。
 - 保证 Canvas 预览、引擎预览、单图导出、批量导出共用同一套 RenderRecipe。
+- 完成 Orientation 1–8 的解码边界归一化、真实 ARW Orientation=8 竖图和统一有向几何；预览
+  缩放固定为「适应画布」与「1:1 像素查看」两态。
 - 记录导出失败原因，支持失败项重试和导出后打开目录。
 - 完成 Electron 托管 Java Engine、运行时路径、日志和异常恢复。
-- 使用 electron-builder 产出 macOS arm64、macOS x64 的 `.dmg` 和 Windows x64 的 `.exe`，内置 Java Runtime 和 Java Engine。
+- 使用 electron-builder 产出 macOS arm64 正式包，并保留 macOS x64 候选包和 Windows x64 候选包，内置 Java Runtime 和 Java Engine。
 
 验收：
 
-- 新用户在三种最终平台的干净环境安装后可以直接启动，不要求登录、不要求安装 Java。
+- 新用户在 macOS arm64 正式目标的干净环境安装后可以直接启动，不要求登录、不要求安装 Java；候选平台另行记录。
 - 数码图片导入后可直接看到 EXIF 信息；胶片图片可通过分类拍摄信息预设补齐信息。
 - 拍摄画幅覆盖产品清单，且不会默认裁剪或改变原图尺寸；只产生边框布局建议。
 - 预览与导出在文字、边框、渐变、拍摄信息上保持一致。
@@ -1071,7 +1138,7 @@ Java Engine：
 
 ### P0
 
-- macOS arm64、macOS x64 的 `.dmg` 与 Windows x64 的 `.exe` 可安装运行，用户无需安装 Java、无需登录。
+- macOS arm64 正式 `.dmg` 可安装运行，用户无需安装 Java、无需登录；x64 与 Windows 包为候选交付物。
 - 本地优先：图片、资产库、拍摄信息预设和版式不上传云端。
 - 数码 EXIF 读取、标准化和字段优先级。
 - 数码与胶片统一拍摄画幅模型。
@@ -1130,7 +1197,7 @@ Java Engine：
 
 ### 阶段 0 / 最终产品契约验收
 
-- 最终平台仅为 macOS arm64、macOS x64、Windows x64。
+- 正式发布目标仅为 macOS arm64；macOS x64 与 Windows x64 是不阻塞正式发布的候选目标，Windows 状态为 `SIMULATED`。
 - 输入覆盖 JPEG、PNG、TIFF、HEIC/HEIF，以及只读取内嵌 JPEG 预览的 RAW；RAW 不做真实显影。
 - 输出覆盖 JPEG 8-bit、PNG 8/16-bit、TIFF 8/16-bit。
 - 快速分享、标准交付、高保真归档三个导出档位严格符合 §0.3。
@@ -1149,7 +1216,7 @@ Java Engine：
 - 支持相机、镜头、胶片三类资产库。
 - 字段优先级为每图覆盖 > 拍摄信息预设 > EXIF > 空。
 - 覆盖半格、135、645、6x6、6x7、6x8、6x9、6x10、6x12 以及 M43、APS-C、135 全画幅、4433 中画幅。
-- 三种最终平台的安装包可在无 Java 环境下启动。
+- macOS arm64 正式安装包可在无 Java 环境下启动；候选平台结果不计入正式发布门。
 - 不要求登录，图片和本地资产不离开用户电脑。
 - 预览与导出整体一致。
 - Electron 模式可日常使用，导出失败有明确反馈且不会覆盖原图。

@@ -8,6 +8,7 @@
 
 import type { Template } from "../types"
 import { toLayoutSettings } from "./templateSettings"
+import { migrateLegacyTemplateLayout } from "./legacyTemplateMigration"
 
 // ---- 导出格式 ---------------------------------------------------------------
 
@@ -123,17 +124,18 @@ export const decodeTemplateJson = (json: string): ImportResult => {
     }
   }
 
+  const migratedSettings = migrateLegacyTemplateLayout(settings)
   // textLayers 为可选字段：旧模板可能不包含，导入时默认为空数组
-  if (!("textLayers" in settings)) {
-    (settings as Record<string, unknown>)["textLayers"] = []
-  }
+  const settingsWithLayers = "textLayers" in migratedSettings
+    ? migratedSettings
+    : { ...migratedSettings, textLayers: [] }
 
   // 生成新 id 和 createdAt。
   // 走 normalizeTemplateSettings 确保旧模板的 textContent 等字段迁移到 textLayers。
   const template: Template = {
     id: crypto.randomUUID(),
     name: (tpl["name"] as string).trim(),
-    settings: toLayoutSettings(tpl["settings"] as Record<string, unknown>),
+    settings: toLayoutSettings(settingsWithLayers),
     createdAt: Date.now(),
   }
 

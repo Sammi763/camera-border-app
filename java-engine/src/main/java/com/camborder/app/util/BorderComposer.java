@@ -58,8 +58,9 @@ public final class BorderComposer {
 
         int width = scaled.getWidth() + left + right;
         int height = scaled.getHeight() + top + bottom;
-        // 边框画布使用不透明 RGB
-        BufferedImage canvas = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+        // 画布明确使用 sRGB 工作空间，同时保留源图 8/16-bit sample model，避免 Java2D
+        // 把已经转换的像素继续标成源 ICC 或偷偷降位深。
+        BufferedImage canvas = PixelBufferFactory.createLikeInSrgb(scaled, width, height);
         Graphics2D graphics = canvas.createGraphics();
         try {
             if (isGradientEnabled(gradient)) {

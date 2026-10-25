@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import type { NumberSettingKey, RenderSettings, SettingsController, TextLayerSettings } from "../types"
+import type { NumberSettingKey, RenderSettings, SettingsController, SettingsUpdateOptions, TextLayerSettings } from "../types"
 import { createDefaultTextLayers } from "../utils/defaultTextLayers"
 import { BUILTIN_FONTS, loadFontOptions, isBuiltinFont, type FontOption } from "../../../services/desktop/fontsApi"
+import {
+  DEFAULT_IMAGE_AREA_SETTINGS,
+  imagePlacementFromArea,
+  normalizeImageAreaSettings
+} from "../utils/imageArea"
 
 /**
  * 内置字体选项列表（向后兼容导出）。
@@ -48,7 +53,7 @@ export const useSystemFonts = (): {
  */
 const createDefaultTextLayersLocal = createDefaultTextLayers
 
-const DEFAULT_SETTINGS: RenderSettings = {
+export const DEFAULT_SETTINGS: RenderSettings = {
   borderColor: "#ffffff",
   borderTop: 20,
   borderBottom: 20,
@@ -68,6 +73,7 @@ const DEFAULT_SETTINGS: RenderSettings = {
     rotation: 0,
     targetAspectRatio: null
   },
+  imageArea: DEFAULT_IMAGE_AREA_SETTINGS,
   layoutPresetId: null,
   gradient: {
     enabled: false,
@@ -79,13 +85,17 @@ const DEFAULT_SETTINGS: RenderSettings = {
     ]
   },
   borderStyle: null,
-  exportFormat: "png",
+  exportFormat: "jpeg",
   jpegQuality: 95,
   outputSizePreset: "original",
   customOutputLongEdge: 2048,
-  preserveMetadata: false,
-  preserveColorProfile: false,
+  preserveMetadata: true,
+  preserveColorProfile: true,
   preferHighBitDepth: false,
+  tier: "standard-delivery",
+  colorProfilePolicy: "source",
+  metadataPolicy: "preserve",
+  bitDepthPolicy: "8",
   logo: {
     enabled: false,
     mode: "auto-brand",
@@ -102,6 +112,91 @@ const DEFAULT_SETTINGS: RenderSettings = {
 /** 设置含嵌套图层/渐变对象；历史快照必须深复制，不能保留可变引用。 */
 const cloneSettings = (settings: RenderSettings): RenderSettings =>
   JSON.parse(JSON.stringify(settings)) as RenderSettings
+
+const SETTINGS_STORAGE_KEY = "camborder-workspace-settings.v1"
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value)
+
+const isValidExportFormat = (value: unknown): value is RenderSettings["exportFormat"] =>
+  value === "png" || value === "jpeg" || value === "tiff"
+
+const isValidOutputSizePreset = (value: unknown): value is RenderSettings["outputSizePreset"] =>
+  value === "original" || value === "1080p" || value === "2k" || value === "4k" || value === "custom"
+
+type PersistedSettingsState = {
+  readonly settings: RenderSettings
+  readonly restored: boolean
+}
+
+const defaultPersistedSettings = (): PersistedSettingsState => ({
+  settings: cloneSettings(DEFAULT_SETTINGS),
+  restored: false
+})
+
+const readPersistedSettings = (): PersistedSettingsState => {
+  try {
+    const raw = localStorage.getItem(SETTINGS_STORAGE_KEY)
+    if (raw === null) return defaultPersistedSettings()
+    const parsed = JSON.parse(raw) as unknown
+    if (!isRecord(parsed)) return defaultPersistedSettings()
+    const payload = parsed["schemaVersion"] === 1 && isRecord(parsed["settings"])
+      ? parsed["settings"]
+      : parsed
+    if (!isRecord(payload)) return defaultPersistedSettings()
+    if (!isValidExportFormat(payload["exportFormat"]) || !isValidOutputSizePreset(payload["outputSizePreset"])) {
+      return defaultPersistedSettings()
+    }
+
+    const placement = isRecord(payload["imagePlacement"])
+      ? { ...DEFAULT_SETTINGS.imagePlacement, ...payload["imagePlacement"] }
+      : DEFAULT_SETTINGS.imagePlacement
+    const area = normalizeImageAreaSettings(
+      isRecord(payload["imageArea"])
+        ? payload["imageArea"]
+        : undefined,
+      placement
+    )
+    const logo = isRecord(payload["logo"])
+      ? { ...DEFAULT_SETTINGS.logo, ...payload["logo"] }
+      : DEFAULT_SETTINGS.logo
+    const gradient = isRecord(payload["gradient"])
+      ? {
+          ...DEFAULT_SETTINGS.gradient,
+          ...payload["gradient"],
+          stops: Array.isArray(payload["gradient"]["stops"])
+            ? payload["gradient"]["stops"]
+            : DEFAULT_SETTINGS.gradient.stops
+        }
+      : DEFAULT_SETTINGS.gradient
+    const textLayers = Array.isArray(payload["textLayers"])
+      ? payload["textLayers"]
+      : DEFAULT_SETTINGS.textLayers
+    const restored = {
+      ...DEFAULT_SETTINGS,
+      ...payload,
+      imageArea: area,
+      imagePlacement: imagePlacementFromArea(area, placement),
+      logo,
+      gradient,
+      textLayers
+    }
+    return { settings: restored as RenderSettings, restored: true }
+  } catch {
+    return defaultPersistedSettings()
+  }
+}
+
+const writePersistedSettings = (settings: RenderSettings): void => {
+  try {
+    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify({
+      schemaVersion: 1,
+      settings
+    }))
+  } catch {
+    // 存储空间不足或浏览器禁用存储时不影响当前编辑会话。
+  }
+}
 
 const SETTINGS_HISTORY_LIMIT = 50
 
@@ -136,14 +231,22 @@ const clampNumber = (value: number, fallback: number, min: number, max: number):
  * - textLayers 变化也触发防抖预览
  */
 export const useSettings = (): SettingsController => {
-  const settingsRef = useRef<RenderSettings>(cloneSettings(DEFAULT_SETTINGS))
+  const [initialPersistence] = useState<PersistedSettingsState>(() => readPersistedSettings())
+  const settingsRef = useRef<RenderSettings>(initialPersistence.settings)
   const undoStackRef = useRef<RenderSettings[]>([])
   const redoStackRef = useRef<RenderSettings[]>([])
-  const [settings, setSettings] = useState<RenderSettings>(() => settingsRef.current)
+  /** 最近一次提交的合并标签；相邻同标签的手势类更新共用一条撤销历史。 */
+  const lastHistoryTagRef = useRef<string | null>(null)
+  const [settings, setSettings] = useState<RenderSettings>(() => initialPersistence.settings)
   const [settingsVersion, setSettingsVersion] = useState(0)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // 历史本体存 ref；revision 只用于让 canUndo/canRedo 及时刷新。
   const [, setHistoryRevision] = useState(0)
+
+  // 当前稳定设置持久化；视口缩放、滚动位置和 Canvas 尺寸不在 RenderSettings 中。
+  useEffect(() => {
+    writePersistedSettings(settings)
+  }, [settings])
 
   const scheduleVersionBump = useCallback(() => {
     if (debounceRef.current !== null) {
@@ -163,14 +266,23 @@ export const useSettings = (): SettingsController => {
     }
   }, [])
 
-  /** 记录一次内容变更并切断嵌套对象引用。 */
-  const commitSettings = useCallback((mutate: (current: RenderSettings) => RenderSettings): void => {
+  /**
+   * 记录一次内容变更并切断嵌套对象引用。
+   *
+   * historyTag 用于连续手势（如裁切构图拖动）：相邻提交携带相同标签时不重复压栈，
+   * 撤销栈顶保留的是手势开始前的快照，一次撤销即可回到拖动前状态。
+   */
+  const commitSettings = useCallback((mutate: (current: RenderSettings) => RenderSettings, historyTag?: string): void => {
     const previous = settingsRef.current
     const next = mutate(previous)
     if (next === previous) {
       return
     }
-    undoStackRef.current = [...undoStackRef.current, cloneSettings(previous)].slice(-SETTINGS_HISTORY_LIMIT)
+    const coalesceWithLast = historyTag !== undefined && historyTag === lastHistoryTagRef.current
+    if (!coalesceWithLast) {
+      undoStackRef.current = [...undoStackRef.current, cloneSettings(previous)].slice(-SETTINGS_HISTORY_LIMIT)
+    }
+    lastHistoryTagRef.current = historyTag ?? null
     redoStackRef.current = []
     const frozenNext = cloneSettings(next)
     settingsRef.current = frozenNext
@@ -179,8 +291,8 @@ export const useSettings = (): SettingsController => {
     scheduleVersionBump()
   }, [scheduleVersionBump])
 
-  const update = useCallback((patch: Partial<RenderSettings>): void => {
-    commitSettings((previous) => ({ ...previous, ...patch }))
+  const update = useCallback((patch: Partial<RenderSettings>, options?: SettingsUpdateOptions): void => {
+    commitSettings((previous) => ({ ...previous, ...patch }), options?.historyTag)
   }, [commitSettings])
 
   const updateNumber = useCallback(
@@ -229,6 +341,8 @@ export const useSettings = (): SettingsController => {
     const previous = undoStackRef.current.at(-1)
     if (previous === undefined) return
     undoStackRef.current = undoStackRef.current.slice(0, -1)
+    // 撤销后下一条更新不应与已结束的手势合并，重置合并标签。
+    lastHistoryTagRef.current = null
     redoStackRef.current = [...redoStackRef.current, cloneSettings(settingsRef.current)].slice(-SETTINGS_HISTORY_LIMIT)
     const restored = cloneSettings(previous)
     settingsRef.current = restored
@@ -241,6 +355,7 @@ export const useSettings = (): SettingsController => {
     const next = redoStackRef.current.at(-1)
     if (next === undefined) return
     redoStackRef.current = redoStackRef.current.slice(0, -1)
+    lastHistoryTagRef.current = null
     undoStackRef.current = [...undoStackRef.current, cloneSettings(settingsRef.current)].slice(-SETTINGS_HISTORY_LIMIT)
     const restored = cloneSettings(next)
     settingsRef.current = restored
@@ -251,6 +366,7 @@ export const useSettings = (): SettingsController => {
 
   return {
     settings,
+    restoredFromStorage: initialPersistence.restored,
     settingsVersion,
     update,
     updateNumber,

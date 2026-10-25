@@ -15,20 +15,19 @@
  */
 
 import type { RenderSettings, RenderSettingsInput, TextLayerSettings } from "../../settings/types"
+import {
+  imagePlacementFromArea,
+  normalizeImageAreaSettings
+} from "../../settings/utils/imageArea"
 import { normalizeImagePlacement } from "../../preview/canvas/imagePlacementGeometry"
 
-/** 旧画幅 id 到 v2 目标比例的迁移表。 */
-const legacyAspectRatio = (id: string): number | null => ({
-  "half-frame": 3 / 4,
-  "135": 3 / 2,
-  "645": 4 / 3,
-  "6x6": 1,
-  "6x7": 5 / 4,
-  "6x8": 10 / 7,
-  "6x9": 45 / 28,
-  "6x10": 25 / 14,
-  "6x12": 15 / 7
-}[id] ?? null)
+/** 已移除或未随包分发的历史字体统一迁移到真实可用字体，避免 UI 继续展示伪能力。 */
+export const normalizeBundledFontFamily = (fontFamily: string | undefined): string => {
+  if (fontFamily === "851 Tegaki Zatsu" || fontFamily === "Maoken YingBi Kaishu") {
+    return "LXGW WenKai"
+  }
+  return fontFamily ?? "sans-serif"
+}
 
 /**
  * 从旧单段文字字段生成 textLayers 数组。
@@ -104,19 +103,6 @@ const migrateLegacyToLayers = (
 export const normalizeTemplatePatch = (
   patch: RenderSettingsInput
 ): Partial<RenderSettings> => {
-  const legacyFilmFormat = patch.filmFormat
-  const legacyAutoCrop = patch.autoCrop
-  const { filmFormat: _filmFormat, autoCrop: _autoCrop, ...withoutLegacyLayout } = patch
-  const layoutPatch: Partial<RenderSettings> = patch.imagePlacement === undefined && (legacyFilmFormat !== undefined || legacyAutoCrop !== undefined)
-    ? {
-        layoutPresetId: legacyFilmFormat ?? null,
-        imagePlacement: normalizeImagePlacement({
-          mode: legacyAutoCrop === true ? "fill" : "fit",
-          targetAspectRatio: legacyFilmFormat === undefined || legacyFilmFormat === null ? null : legacyAspectRatio(legacyFilmFormat)
-        })
-      }
-    : {}
-
   // 不含任何旧文字字段 → 不迁移（patch 可能只改边框等非文字字段）
   if (
     patch.textContent === undefined &&
@@ -126,20 +112,19 @@ export const normalizeTemplatePatch = (
     patch.textArea === undefined &&
     patch.fontFamily === undefined
   ) {
-    return { ...withoutLegacyLayout, ...layoutPatch }
+    return { ...patch }
   }
 
   // 从旧字段生成 textLayers
   const textContent = patch.textContent ?? ""
-  const fontFamily = patch.fontFamily ?? "sans-serif"
+  const fontFamily = normalizeBundledFontFamily(patch.fontFamily)
   const fontSize = patch.textFontSize ?? 16
   const color = patch.textColor ?? "#000000"
   const placement = patch.textPlacement ?? "bottom-center"
   const textArea = patch.textArea ?? "border"
 
   return {
-    ...withoutLegacyLayout,
-    ...layoutPatch,
+    ...patch,
     textLayers: migrateLegacyToLayers(textContent, fontFamily, fontSize, color, placement, textArea),
   }
 }
@@ -162,56 +147,54 @@ export const normalizeTemplateSettings = (
   const layers = settings.textLayers !== undefined && settings.textLayers.length > 0
     ? settings.textLayers.map((layer) => ({
         ...layer,
+        fontFamily: normalizeBundledFontFamily(layer.fontFamily),
         lineSpacing: layer.lineSpacing ?? 0,
         letterSpacing: layer.letterSpacing ?? 0
       }))
     : migrateLegacyToLayers(
         settings.textContent ?? "",
-        settings.fontFamily ?? "sans-serif",
+        normalizeBundledFontFamily(settings.fontFamily),
         settings.textFontSize ?? 24,
         settings.textColor ?? "#000000",
         settings.textPlacement ?? "bottom-center",
         settings.textArea ?? "image"
       )
 
-  const legacyFilmFormat = settings.filmFormat
-  const legacyAutoCrop = settings.autoCrop
-  const { filmFormat: _filmFormat, autoCrop: _autoCrop, ...withoutLegacyLayout } = settings
-  const currentPlacement = normalizeImagePlacement(
-    settings.imagePlacement ?? {
-      mode: legacyAutoCrop === true ? "fill" : "fit",
-      targetAspectRatio: legacyFilmFormat === null || legacyFilmFormat === undefined ? null : legacyAspectRatio(legacyFilmFormat)
-    }
-  )
+  const currentPlacement = normalizeImagePlacement(settings.imagePlacement)
+  const imageArea = normalizeImageAreaSettings(settings.imageArea, currentPlacement)
 
   return {
-    ...withoutLegacyLayout,
-    borderColor: withoutLegacyLayout.borderColor ?? "#ffffff",
-    borderTop: withoutLegacyLayout.borderTop ?? 20,
-    borderBottom: withoutLegacyLayout.borderBottom ?? 20,
-    borderLeft: withoutLegacyLayout.borderLeft ?? 20,
-    borderRight: withoutLegacyLayout.borderRight ?? 20,
-    textContent: withoutLegacyLayout.textContent ?? "",
-    textFontSize: withoutLegacyLayout.textFontSize ?? 24,
-    textColor: withoutLegacyLayout.textColor ?? "#000000",
-    textPlacement: withoutLegacyLayout.textPlacement ?? "bottom-center",
-    textArea: withoutLegacyLayout.textArea ?? "border",
-    fontFamily: withoutLegacyLayout.fontFamily ?? "sans-serif",
-    gradient: withoutLegacyLayout.gradient ?? {
+    ...settings,
+    borderColor: settings.borderColor ?? "#ffffff",
+    borderTop: settings.borderTop ?? 20,
+    borderBottom: settings.borderBottom ?? 20,
+    borderLeft: settings.borderLeft ?? 20,
+    borderRight: settings.borderRight ?? 20,
+    textContent: settings.textContent ?? "",
+    textFontSize: settings.textFontSize ?? 24,
+    textColor: settings.textColor ?? "#000000",
+    textPlacement: settings.textPlacement ?? "bottom-center",
+    textArea: settings.textArea ?? "border",
+    fontFamily: normalizeBundledFontFamily(settings.fontFamily),
+    gradient: settings.gradient ?? {
       enabled: false,
       type: "linear",
       angle: 0,
       stops: [{ offset: 0, color: "#000000" }, { offset: 1, color: "#ffffff" }]
     },
-    borderStyle: withoutLegacyLayout.borderStyle ?? null,
-    exportFormat: withoutLegacyLayout.exportFormat ?? "png",
-    jpegQuality: withoutLegacyLayout.jpegQuality ?? 95,
-    outputSizePreset: withoutLegacyLayout.outputSizePreset ?? "original",
-    customOutputLongEdge: withoutLegacyLayout.customOutputLongEdge ?? 2048,
-    preserveMetadata: withoutLegacyLayout.preserveMetadata ?? false,
-    preserveColorProfile: withoutLegacyLayout.preserveColorProfile ?? false,
-    preferHighBitDepth: withoutLegacyLayout.preferHighBitDepth ?? false,
-    logo: withoutLegacyLayout.logo ?? {
+    borderStyle: settings.borderStyle ?? null,
+    exportFormat: settings.exportFormat ?? "jpeg",
+    jpegQuality: settings.jpegQuality ?? 95,
+    outputSizePreset: settings.outputSizePreset ?? "original",
+    customOutputLongEdge: settings.customOutputLongEdge ?? 2048,
+    preserveMetadata: settings.preserveMetadata ?? true,
+    preserveColorProfile: settings.preserveColorProfile ?? true,
+    preferHighBitDepth: settings.preferHighBitDepth ?? false,
+    tier: settings.tier ?? "standard-delivery",
+    colorProfilePolicy: settings.colorProfilePolicy ?? "source",
+    metadataPolicy: settings.metadataPolicy ?? "preserve",
+    bitDepthPolicy: settings.bitDepthPolicy ?? "8",
+    logo: settings.logo ?? {
       enabled: false,
       mode: "auto-brand",
       brand: null,
@@ -223,8 +206,9 @@ export const normalizeTemplateSettings = (
       autoContrast: true
     },
     textLayers: layers,
-    imagePlacement: currentPlacement,
-    layoutPresetId: settings.layoutPresetId ?? legacyFilmFormat ?? null
+    imageArea,
+    imagePlacement: imagePlacementFromArea(imageArea, currentPlacement),
+    layoutPresetId: settings.layoutPresetId ?? null
   }
 }
 

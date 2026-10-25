@@ -18,6 +18,12 @@ param(
   [string] $InstallerDirectory = (Join-Path $PSScriptRoot "..\electron\release\win-x64"),
 
   [Parameter(Mandatory = $false)]
+  [string] $InstallDirectory,
+
+  [Parameter(Mandatory = $false)]
+  [switch] $RequireNoSystemDependencies,
+
+  [Parameter(Mandatory = $false)]
   [switch] $KeepInstalled
 )
 
@@ -83,6 +89,33 @@ function Get-JavaEngineProcesses {
     Where-Object { $_.CommandLine -like "*camera-border-engine.jar*" }
 }
 
+function Assert-NoSystemDependencies {
+  # 这个检查只在真实干净验收机启用；构建机本身可以安装 JDK，但不能被安装后的应用依赖。
+  $commands = @(
+    "java.exe",
+    "exiftool.exe",
+    "node.exe",
+    "pnpm.cmd",
+    "mvn.cmd",
+    "python.exe"
+  )
+  foreach ($command in $commands) {
+    if (Get-Command $command -ErrorAction SilentlyContinue) {
+      Fail "干净机验收发现系统开发/元数据工具：$command；请在没有该工具的系统上重复安装后验收"
+    }
+  }
+  # Windows 的 HEIC 扩展通常由 Microsoft Store 管理；干净机门禁不能把系统扩展
+  # 当作随包能力。当前用户和所有用户任一存在 HEIF/HEIC 包都应阻断清洁系统记录。
+  $heicPackages = @(
+    (@(Get-AppxPackage -ErrorAction SilentlyContinue) + @(Get-AppxPackage -AllUsers -ErrorAction SilentlyContinue)) |
+      Where-Object { $_.Name -match "HEIF|HEIC" }
+  )
+  if ($heicPackages.Count -gt 0) {
+    Fail "干净机验收发现系统 HEIC/HEIF 扩展：$($heicPackages.Name -join ', ')"
+  }
+  Write-Host "[windows-smoke] 系统 Java/ExifTool/Node/pnpm/Maven/Python 均不存在；HEIC 使用随包 worker"
+}
+
 function Stop-JavaEngineProcesses {
   foreach ($process in @(Get-JavaEngineProcesses)) {
     Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
@@ -90,8 +123,17 @@ function Stop-JavaEngineProcesses {
 }
 
 $installer = $null
-$smokeRoot = Join-Path $env:TEMP "Camera-Border-Smoke-$PID"
-$installDir = Join-Path $smokeRoot "Camera Border"
+$ownsSmokeRoot = [string]::IsNullOrWhiteSpace($InstallDirectory)
+$smokeRoot = if ($ownsSmokeRoot) {
+  Join-Path $env:TEMP "Camera-Border-Smoke-$PID"
+} else {
+  Split-Path -Parent ([System.IO.Path]::GetFullPath($InstallDirectory))
+}
+$installDir = if ($ownsSmokeRoot) {
+  Join-Path $smokeRoot "Camera Border"
+} else {
+  [System.IO.Path]::GetFullPath($InstallDirectory)
+}
 $userDataRoot = Join-Path $env:APPDATA "Camera Border"
 $desktopRoot = [Environment]::GetFolderPath("Desktop")
 $startMenuRoot = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs"
@@ -118,6 +160,29 @@ try {
   if (-not (Test-Path -LiteralPath (Join-Path $installDir "resources\java-engine\camera-border-engine.jar") -PathType Leaf)) { Fail "安装后缺少 Java Engine JAR" }
   $javaExe = Join-Path $installDir "resources\java-runtime\bin\java.exe"
   if (-not (Test-Path -LiteralPath $javaExe -PathType Leaf)) { Fail "安装后缺少随包 java.exe" }
+  $resourcesRoot = Join-Path $installDir "resources"
+  $requiredResources = @(
+    (Join-Path $resourcesRoot "package-manifest.json"),
+    (Join-Path $resourcesRoot "professional-tools\components.json"),
+    (Join-Path $resourcesRoot "professional-tools\heic-components.json"),
+    (Join-Path $resourcesRoot "professional-tools\exiftool\win-x64\exiftool.exe"),
+    (Join-Path $resourcesRoot "professional-tools\fonts\fonts.json"),
+    (Join-Path $resourcesRoot "professional-tools\licenses\THIRD-PARTY-NOTICES.md"),
+    (Join-Path $resourcesRoot "app.asar.unpacked\dist\ipc\heicWorker.js")
+  )
+  foreach ($requiredResource in $requiredResources) {
+    if (-not (Test-Path -LiteralPath $requiredResource -PathType Leaf)) {
+      Fail "安装后缺少随包发布资源：$requiredResource"
+    }
+  }
+  $manifest = Get-Content -LiteralPath (Join-Path $resourcesRoot "package-manifest.json") -Raw | ConvertFrom-Json
+  if ($manifest.platform -ne "win32" -or $manifest.arch -ne "x64") { Fail "安装包 manifest 平台/架构不匹配" }
+  if ($manifest.version -ne $versionMatch.Groups["version"].Value) { Fail "安装包 manifest 版本不匹配" }
+  if ($manifest.components.exiftool.sha256 -notmatch "^[0-9a-f]{64}$") { Fail "安装包 ExifTool 清单缺少 SHA-256" }
+
+  if ($RequireNoSystemDependencies) {
+    Assert-NoSystemDependencies
+  }
 
   $desktopShortcut = Find-Shortcut $desktopRoot
   $startMenuShortcut = Find-Shortcut $startMenuRoot
@@ -184,7 +249,7 @@ try {
     # 安装、启动、健康检查或卸载任一步失败时，清理本次冒烟残留的 Java 引擎。
     Stop-JavaEngineProcesses
   }
-  if (-not $KeepInstalled -and (Test-Path -LiteralPath $smokeRoot)) {
+  if ($ownsSmokeRoot -and -not $KeepInstalled -and (Test-Path -LiteralPath $smokeRoot)) {
     Remove-Item -LiteralPath $smokeRoot -Recurse -Force -ErrorAction SilentlyContinue
   }
 }

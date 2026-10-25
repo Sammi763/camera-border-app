@@ -10,6 +10,17 @@ export type DesktopRuntime = {
   }
 }
 
+/** 安装包能力快照；不包含资源绝对路径。 */
+export type PackageCapabilities = {
+  readonly isPackaged: boolean
+  readonly platform: string
+  readonly arch: string
+  readonly bundledRuntime: boolean
+  readonly bundledExifTool: boolean
+  readonly bundledHeicDecoder: boolean
+  readonly bundledFonts: readonly string[]
+}
+
 /**
  * 图片来源选择结果。
  * 与 Electron 端 ImageSourceResult 保持一致，但前端独立维护类型副本。
@@ -42,6 +53,7 @@ export type EngineDiagnostics = {
  * 文件系统（ARCHITECTURE.md §1）。
  */
 export type DesktopBridge = {
+  readonly getPackageCapabilities?: () => Promise<PackageCapabilities>
   readonly selectImages: () => Promise<string[]>
   /**
    * 打开系统对话框，允许选择图片文件或文件夹。

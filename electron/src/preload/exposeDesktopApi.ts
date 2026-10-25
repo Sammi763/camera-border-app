@@ -3,10 +3,15 @@ import { APP_NAME } from "../config/appConfig.js"
 import { engineManaged } from "../config/devMode.js"
 import {
   IPC_CHANNELS,
+  type AiGatewayRequestPayload,
+  type AiGatewayRequestResult,
+  type AiGatewayStatus,
   type DesktopApi,
   type DesktopRuntime,
   type EngineDiagnostics,
-  type ImageSourceResult
+  type ImageSourceResult,
+  type PackageCapabilities,
+  type WindowBounds
 } from "../types/desktopApi.js"
 
 /**
@@ -28,6 +33,10 @@ export const exposeDesktopApi = (): void => {
   }
 
   const api: DesktopApi = {
+    getPackageCapabilities: (): Promise<PackageCapabilities> =>
+      ipcRenderer.invoke(IPC_CHANNELS.GET_PACKAGE_CAPABILITIES),
+    getWindowBounds: (): Promise<WindowBounds | null> =>
+      ipcRenderer.invoke(IPC_CHANNELS.GET_WINDOW_BOUNDS),
     selectImages: (): Promise<string[]> =>
       ipcRenderer.invoke(IPC_CHANNELS.SELECT_IMAGES),
     selectImageSources: (): Promise<ImageSourceResult | null> =>
@@ -87,7 +96,16 @@ export const exposeDesktopApi = (): void => {
     getImageFileVersions: (paths: readonly string[]): Promise<readonly (import("../types/desktopApi.js").ImageFileVersion | null)[]> =>
       ipcRenderer.invoke(IPC_CHANNELS.GET_IMAGE_FILE_VERSIONS, paths),
     openLogFile: (logPath: string): Promise<boolean> =>
-      ipcRenderer.invoke(IPC_CHANNELS.OPEN_LOG_FILE, logPath)
+      ipcRenderer.invoke(IPC_CHANNELS.OPEN_LOG_FILE, logPath),
+    // AI 网关（Uni Token）预留能力：密钥只在主进程处理，渲染进程只见脱敏状态。
+    getAiGatewayStatus: (): Promise<AiGatewayStatus> =>
+      ipcRenderer.invoke(IPC_CHANNELS.AI_GATEWAY_GET_STATUS),
+    saveAiGatewayApiKey: (apiKey: string): Promise<boolean> =>
+      ipcRenderer.invoke(IPC_CHANNELS.AI_GATEWAY_SAVE_API_KEY, apiKey),
+    deleteAiGatewayApiKey: (): Promise<boolean> =>
+      ipcRenderer.invoke(IPC_CHANNELS.AI_GATEWAY_DELETE_API_KEY),
+    aiGatewayRequest: (payload: AiGatewayRequestPayload): Promise<AiGatewayRequestResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.AI_GATEWAY_REQUEST, payload)
   }
 
   contextBridge.exposeInMainWorld("desktopRuntime", runtime)

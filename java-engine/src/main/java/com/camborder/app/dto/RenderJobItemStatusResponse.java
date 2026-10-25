@@ -18,6 +18,7 @@ public final class RenderJobItemStatusResponse {
     private ImageEncoder.FeatureResult colorProfilePreservation;
     private ImageEncoder.FeatureResult highBitDepth;
     private SourceDecode sourceDecode;
+    private FidelityReport fidelityReport;
 
     public RenderJobItemStatusResponse() {
     }
@@ -37,6 +38,7 @@ public final class RenderJobItemStatusResponse {
         copy.colorProfilePreservation = colorProfilePreservation;
         copy.highBitDepth = highBitDepth;
         copy.sourceDecode = sourceDecode;
+        copy.fidelityReport = fidelityReport;
         return copy;
     }
 
@@ -69,4 +71,7 @@ public final class RenderJobItemStatusResponse {
 
     public SourceDecode getSourceDecode() { return sourceDecode; }
     public void setSourceDecode(final SourceDecode value) { this.sourceDecode = value; }
+
+    public FidelityReport getFidelityReport() { return fidelityReport; }
+    public void setFidelityReport(final FidelityReport value) { this.fidelityReport = value; }
 }

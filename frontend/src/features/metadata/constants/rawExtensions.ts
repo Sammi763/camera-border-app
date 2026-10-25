@@ -5,8 +5,8 @@
  * 与 Electron fileDialog.ts 和 Java engine RawDecoder 保持一致。
  *
  * RAW 支持能力分级：
- * - preview-supported：能稳定读取嵌入预览，可用于预览和导出
- * - preview-only：尝试读取嵌入预览，但不保证成功
+ * - preview-supported：该扩展名通常能稳定读取内嵌 JPEG，但像素来源仍是内嵌预览
+ * - preview-only：尝试读取内嵌 JPEG，但不保证每个文件都成功
  * - unsupported：当前不支持
  */
 
@@ -46,8 +46,8 @@ const RAW_TIERS: Readonly<Record<string, RawTier>> = {
 
 /** RAW 能力分级的中文说明。 */
 export const RAW_TIER_LABELS: Readonly<Record<RawTier, string>> = {
-  "preview-supported": "可预览（嵌入预览稳定）",
-  "preview-only": "仅预览（尝试读取嵌入预览）",
+  "preview-supported": "受限预览（使用内嵌 JPEG，不是真实 RAW 显影）",
+  "preview-only": "受限预览（尝试读取内嵌 JPEG，不是真实 RAW 显影）",
   "unsupported": "不支持"
 }
 

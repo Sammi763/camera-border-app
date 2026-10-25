@@ -1,6 +1,7 @@
 import type { ExportController } from "../hooks/useExportController"
 import type { PreviewState } from "../types"
 import type { OperationScope } from "../../queue/types"
+import type { FidelityReport } from "../../../types/preview"
 
 type ExportDockProps = {
   readonly state: PreviewState
@@ -25,6 +26,23 @@ const scopeLabel = (scope: OperationScope, checkedCount: number, queueCount: num
     case "all":
       return `全部 ${queueCount} 张`
   }
+}
+
+const displayFileName = (filePath: string): string => {
+  const normalized = filePath.replaceAll("\\", "/")
+  return normalized.slice(normalized.lastIndexOf("/") + 1) || "输出文件"
+}
+
+const formatFidelityReport = (report: FidelityReport): string => {
+  const output = report.output
+  const facts = output === null || output === undefined
+    ? []
+    : [`${output.width}×${output.height}`, `${output.bitDepth}-bit`, output.colorSpace ?? "色彩空间未标注"]
+  const source = report.pixelSource === null || report.pixelSource === undefined
+    ? null
+    : `像素来源：${report.pixelSource}`
+  const scope = report.fidelityScope === "limited" ? "受限保真" : "已核验"
+  return [`${scope}${facts.length > 0 ? `；输出 ${facts.join("，")}` : ""}`, ...(source === null ? [] : [source])].join("；")
 }
 
 /**
@@ -53,7 +71,8 @@ export const ExportDock = ({
     startBatchExport,
     retryFailed,
     cancelActiveExport,
-    openExportDirectory
+    openExportDirectory,
+    lastPreflight = null
   } = exportController
   const canExport = state.kind === "active" && state.currentImage !== null
   // 工作台的 active 范围由单图按钮负责；独立挂载 PreviewPanel 时未传范围，
@@ -65,7 +84,7 @@ export const ExportDock = ({
   const batchIsTerminal = batchExport.kind === "completed" || batchExport.kind === "cancelled"
 
   return (
-    <div className={`exportDock${compact ? " exportDockCompact" : ""}`} role="group" aria-label="导出">
+    <div className={`exportDock${compact ? " exportDockCompact" : ""}`} role="group" aria-label="导出" data-testid="export-dock">
       {operationScope !== undefined && onOperationScopeChange !== undefined && (
         <div className="exportScope" role="group" aria-label="导出范围">
           {(["active", "checked", "all"] as const).map((scope) => (
@@ -73,6 +92,7 @@ export const ExportDock = ({
               key={scope}
               type="button"
               className={`exportScopeButton${operationScope === scope ? " exportScopeButtonActive" : ""}`}
+              data-testid={`export-scope-${scope}`}
               disabled={scope === "checked" && checkedCount === 0}
               aria-pressed={operationScope === scope}
               onClick={() => onOperationScopeChange(scope)}
@@ -86,6 +106,7 @@ export const ExportDock = ({
       <button
         type="button"
         className="primaryButton exportDockButton"
+        data-testid="export-single"
         disabled={!canExport || isExporting || isBatchExporting || !engineAvailable}
         title={exportDisabledReason ?? undefined}
         onClick={() => void startSingleExport()}
@@ -96,6 +117,7 @@ export const ExportDock = ({
         <button
           type="button"
           className="ghostButton exportDockButton"
+          data-testid="export-batch"
           disabled={isBatchExporting || isExporting || !engineAvailable}
           title={exportDisabledReason ?? undefined}
           onClick={() => void startBatchExport()}
@@ -106,12 +128,12 @@ export const ExportDock = ({
         </button>
       )}
       {(isExporting || isBatchExporting) && (
-        <button type="button" className="ghostButton exportDockButton" onClick={() => void cancelActiveExport()}>
+        <button type="button" className="ghostButton exportDockButton" data-testid="export-cancel" onClick={() => void cancelActiveExport()}>
           取消导出
         </button>
       )}
 
-      <span className="exportDockStatus" aria-live="polite">
+      <span className="exportDockStatus" aria-live="polite" data-testid="export-status">
         {!hasSelectedImage && "请先选择一张图片"}
         {(exportJob.kind === "preparing" || exportJob.kind === "submitting") && (
           <span className="previewExportPhase" role="progressbar" aria-label="单图导出进度" aria-valuetext={exportJob.kind === "preparing" ? "正在读取 EXIF…" : "正在渲染…"}>
@@ -125,9 +147,20 @@ export const ExportDock = ({
         {hasSelectedImage && exportJob.kind === "idle" && batchExport.kind === "idle" && engineAvailable && (
           window.desktop === undefined ? "浏览器降级模式：导出能力受限，建议启动桌面应用。" : "导出使用原图尺寸，由引擎渲染。"
         )}
+        {lastPreflight !== null && (
+          <span className={lastPreflight.status === "ready" ? "previewExportHint" : "previewExportError"}>
+            预检：{lastPreflight.status === "ready" ? "已通过" : "已阻止"}
+            {lastPreflight.items[0]?.report?.source !== undefined && lastPreflight.items[0].report.source !== null
+              ? `；源图 ${lastPreflight.items[0].report.source.width}×${lastPreflight.items[0].report.source.height}，${lastPreflight.items[0].report.source.bitDepth}-bit`
+              : ""}
+          </span>
+        )}
         {exportJob.kind === "completed" && (
-          <span className="previewExportSuccess">导出完成（{exportJob.actualFormat.toUpperCase()}）：{exportJob.outputPath}
+          <span className="previewExportSuccess">导出完成（{exportJob.actualFormat.toUpperCase()}）：{displayFileName(exportJob.outputPath)}
             {exportJob.summary.length > 0 && <span className="previewExportWarnings">　⚠ {exportJob.summary.join("；")}</span>}
+            {exportJob.report !== undefined && exportJob.report !== null && (
+              <span className="previewExportHint" data-testid="fidelity-report">　保真报告：{formatFidelityReport(exportJob.report)}</span>
+            )}
           </span>
         )}
         {exportJob.kind === "cancelled" && <span className="previewExportError">{exportJob.message}</span>}

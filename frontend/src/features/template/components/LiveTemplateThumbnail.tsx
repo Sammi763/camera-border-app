@@ -12,7 +12,8 @@
 import { useEffect, useRef } from "react"
 import type { RenderSettings } from "../../settings/types"
 import { drawPreviewToCanvas, type CanvasDrawableSource } from "../../preview/canvas/canvasRenderer"
-import { calculateImagePlacementGeometry, normalizeImagePlacement } from "../../preview/canvas/imagePlacementGeometry"
+import { calculateImagePlacementGeometry } from "../../preview/canvas/imagePlacementGeometry"
+import { imagePlacementFromSettings } from "../../settings/utils/imageArea"
 
 /** 缩略图内部渲染的最长边上限（性能保护）。 */
 const MAX_RENDER_DIM = 900
@@ -57,7 +58,7 @@ export const LiveTemplateThumbnail = ({ image, settings }: LiveTemplateThumbnail
     const placement = calculateImagePlacementGeometry(
       sourceWidth,
       sourceHeight,
-      normalizeImagePlacement(settings.imagePlacement)
+      imagePlacementFromSettings(settings)
     )
     if (placement === null) {
       return

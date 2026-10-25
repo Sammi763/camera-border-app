@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 
@@ -8,10 +8,13 @@ import {
   collectProtocolDiagnostics,
   findPackagedExecutable,
   hasVisiblePhotoContent,
+  independentMetadataFacts,
   isHealthyHttpStatus,
   PHOTO_CONTENT_PIXEL_THRESHOLD,
   readImageDimensions,
-  responsiveLayoutPasses
+  readImageMetadataPresence,
+  responsiveLayoutPasses,
+  STAGE2_RESPONSIVE_WINDOW_SIZES
 } from "./packaged-e2e.mjs"
 
 const makeExecutable = (filePath) => {
@@ -34,7 +37,7 @@ test("macOS 有旧产物时只选择本次构建的 macos-arch/mac-arch 产物",
 
     assert.equal(
       findPackagedExecutable({ root, platform: "darwin", arch: "arm64" }),
-      currentExecutable
+      realpathSync(currentExecutable)
     )
   } finally {
     rmSync(root, { recursive: true, force: true })
@@ -69,7 +72,7 @@ test("显式覆盖路径必须是当前平台存在的可执行文件", () => {
     makeExecutable(windowsExecutable)
     assert.equal(
       findPackagedExecutable({ root, platform: "darwin", arch: "arm64", override: macApp }),
-      macExecutable
+      realpathSync(macExecutable)
     )
     assert.throws(
       () => findPackagedExecutable({ root, platform: "darwin", arch: "arm64", override: unrelatedExecutable }),
@@ -82,6 +85,12 @@ test("显式覆盖路径必须是当前平台存在的可执行文件", () => {
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+test("阶段 6 只有显式安装包来源标记才计入安装后 E2E", () => {
+  const source = readFileSync(path.join(process.cwd(), "scripts", "packaged-e2e.mjs"), "utf8")
+  assert.match(source, /CAMBORDER_E2E_INSTALLED_FROM_PACKAGE/)
+  assert.match(source, /installedFromPackage:/)
 })
 
 test("Canvas 像素闸门只接受实际照片区域中的超过阈值非边框像素", () => {
@@ -128,6 +137,14 @@ test("响应式闸门拒绝预览不足、水平溢出或操作区被裁切", ()
   assert.equal(responsiveLayoutPasses({ ...passingMetrics, primaryButtonCount: 2 }), false)
 })
 
+test("阶段 2 响应式验收固定覆盖三个工作台窗口尺寸", () => {
+  assert.deepEqual(STAGE2_RESPONSIVE_WINDOW_SIZES, [
+    { width: 1200, height: 760 },
+    { width: 1400, height: 863 },
+    { width: 1920, height: 1080 }
+  ])
+})
+
 test("导出证据能读取 PNG、JPEG 和 TIFF 的像素尺寸", () => {
   const png = Buffer.alloc(24)
   Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(png)
@@ -162,4 +179,42 @@ test("导出证据能读取 PNG、JPEG 和 TIFF 的像素尺寸", () => {
   assert.deepEqual(readImageDimensions(png), { format: "png", width: 1600, height: 1200 })
   assert.deepEqual(readImageDimensions(jpeg), { format: "jpeg", width: 1600, height: 1200 })
   assert.deepEqual(readImageDimensions(tiff), { format: "tiff", width: 1600, height: 1200 })
+})
+
+test("真实 Stage4 TIFF 导出证据能读取 EXIF pointer 与 ICC profile tag", () => {
+  const fixture = path.join(process.cwd(), "fixtures", "stage4", "real-exif-canon-farmers-nooning.tif")
+  assert.deepEqual(readImageMetadataPresence(readFileSync(fixture)), { exif: true, icc: true })
+})
+
+test("独立 ExifTool 元数据事实区分分享档位置移除与交付档保留", () => {
+  const preserved = independentMetadataFacts({
+    "IFD0:Orientation": 1,
+    "IFD0:XResolution": 72,
+    "IFD0:YResolution": 72,
+    "ExifIFD:ColorSpace": 1,
+    "XMP-dc:Format": "image/jpeg",
+    "IPTC:ApplicationRecordVersion": 2,
+    "GPS:GPSLatitude": 44.5,
+    "ICC-header:ProfileDescription": "sRGB"
+  })
+  assert.deepEqual(preserved, {
+    exif: true,
+    xmp: true,
+    iptc: true,
+    gps: true,
+    icc: true,
+    dpi: true,
+    orientation: 1,
+    colorSpace: 1
+  })
+  const share = independentMetadataFacts({
+    "IFD0:Orientation": 1,
+    "IFD0:XResolution": 72,
+    "IFD0:YResolution": 72,
+    "ExifIFD:ColorSpace": 1,
+    "XMP-dc:Format": "image/jpeg",
+    "IPTC:ApplicationRecordVersion": 2,
+    "ICC-header:ProfileDescription": "sRGB"
+  })
+  assert.equal(share.gps, false)
 })

@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "formalTargets": [
+    "darwin-arm64"
+  ],
+  "candidateTargets": [
+    "darwin-x64",
+    "win32-x64"
+  ],
+  "targetPolicies": {
+    "darwin-arm64": {
+      "role": "FORMAL",
+      "releaseBlocking": true,
+      "acceptanceMode": "NATIVE"
+    },
+    "darwin-x64": {
+      "role": "CANDIDATE",
+      "releaseBlocking": false,
+      "acceptanceMode": "OPTIONAL"
+    },
+    "win32-x64": {
+      "role": "CANDIDATE",
+      "releaseBlocking": false,
+      "acceptanceMode": "SIMULATED",
+      "releaseStatus": "SIMULATED"
+    }
+  }
+}

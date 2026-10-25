@@ -21,8 +21,9 @@ public final class RenderJobStatusResponse {
     private ImageEncoder.FeatureResult metadataPreservation;
     private ImageEncoder.FeatureResult colorProfilePreservation;
     private ImageEncoder.FeatureResult highBitDepth;
-    /** 解码来源状态（standard / raw-developed / embedded-preview-fallback），可为 null。 */
+    /** 解码来源状态（standard / embedded-jpeg），可为 null。 */
     private com.camborder.app.dto.SourceDecode sourceDecode;
+    private FidelityReport fidelityReport;
     private int total;
     private int processed;
     private int completed;
@@ -88,6 +89,9 @@ public final class RenderJobStatusResponse {
 
     public com.camborder.app.dto.SourceDecode getSourceDecode() { return sourceDecode; }
     public void setSourceDecode(final com.camborder.app.dto.SourceDecode v) { this.sourceDecode = v; }
+
+    public FidelityReport getFidelityReport() { return fidelityReport; }
+    public void setFidelityReport(final FidelityReport v) { this.fidelityReport = v; }
 
     public int getTotal() { return total; }
     public void setTotal(final int total) { this.total = total; }

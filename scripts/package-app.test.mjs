@@ -11,6 +11,20 @@ test("Windows manifest 使用完整 HEAD commit，并拒绝无法核对的版本
   assert.doesNotMatch(script, /\$\{COMMIT\}-dirty/)
 })
 
-test("正式打包脚本不复制或注入 LibRaw", () => {
-  assert.doesNotMatch(script, /LibRaw|libraw|CAMBORDER_LIBRAW_PATH|dist-libraw/)
+test("正式打包脚本携带锁定的专业组件目录", () => {
+  assert.match(script, /professional-tools/)
+  assert.match(script, /fetch-professional-tools\.sh/)
+})
+
+test("正式打包脚本在构建前后都运行跨平台资源清单校验", () => {
+  assert.match(script, /validate-package\.mjs/)
+  assert.match(script, /--platform "\$TARGET_PLATFORM"/)
+  assert.match(script, /--arch "\$ARCH"/)
+  assert.match(script, /fetch-fonts\.sh/)
+  assert.match(script, /prepare-package-resources\.mjs/)
+})
+
+test("正式打包脚本保留 JRE release 元数据供安装包校验", () => {
+  assert.match(script, /release 是阶段 6 的随包运行时/)
+  assert.doesNotMatch(script, /rm -f .*java-runtime.*release/)
 })

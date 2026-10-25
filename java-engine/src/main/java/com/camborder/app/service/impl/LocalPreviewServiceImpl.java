@@ -2,12 +2,15 @@ package com.camborder.app.service.impl;
 
 import com.camborder.app.dto.PreviewRequest;
 import com.camborder.app.dto.PreviewResponse;
+import com.camborder.app.dto.FidelityReport;
 import com.camborder.app.repository.PreviewStore;
 import com.camborder.app.service.ImageRenderService;
 import com.camborder.app.service.PreviewService;
 import org.springframework.stereotype.Service;
 
+import java.awt.color.ICC_ColorSpace;
 import java.awt.image.BufferedImage;
+import java.security.MessageDigest;
 
 /**
  * 本地单图预览服务实现（service.impl 层）。
@@ -46,8 +49,54 @@ public final class LocalPreviewServiceImpl implements PreviewService {
                 true,
                 "/previews/" + previewId
         );
-        // 解码来源随响应返回：界面据此展示「RAW 已真实显影」或降级原因
+        // 解码来源随响应返回：RAW 只展示内嵌 JPEG 的受限像素来源说明。
         response.setSourceDecode(outcome.getSourceDecode());
+        final FidelityReport report = FidelityReport.completed("preview", "png");
+        report.setPixelSource(outcome.getSourceInfo() == null
+                ? "decoded-file" : outcome.getSourceInfo().getPixelSource());
+        report.setMetadataSource(outcome.getSourceInfo() == null
+                ? request.getRecipe().getImagePath() : outcome.getSourceInfo().getMetadataSource());
+        if (outcome.getSourceInfo() != null) {
+            report.setSource(outcome.getSourceInfo().toFacts());
+            if ("embedded-jpeg".equals(outcome.getSourceInfo().getPixelSource())) {
+                report.setFidelityScope("limited");
+                report.getWarnings().add("RAW 仅使用内嵌 JPEG 像素");
+            }
+        }
+        final FidelityReport.Facts output = new FidelityReport.Facts();
+        output.setWidth(outcome.getImage().getWidth());
+        output.setHeight(outcome.getImage().getHeight());
+        output.setDecodedWidth(outcome.getImage().getWidth());
+        output.setDecodedHeight(outcome.getImage().getHeight());
+        output.setOrientedWidth(outcome.getImage().getWidth());
+        output.setOrientedHeight(outcome.getImage().getHeight());
+        output.setBitDepth(com.camborder.app.util.PixelBufferFactory.bitDepth(outcome.getImage()));
+        output.setColorSpace(outcome.getImage().getColorModel().getColorSpace() instanceof ICC_ColorSpace
+                ? "icc" : "sRGB");
+        output.setOrientation(1);
+        output.setOrientationApplied(true);
+        final FidelityReport.IccFacts icc = new FidelityReport.IccFacts();
+        final byte[] outputIcc = com.camborder.app.util.ImageEncoder.actualIccProfile(outcome.getImage());
+        icc.setState("present");
+        icc.setByteLength(outputIcc.length);
+        icc.setSha256(sha256(outputIcc));
+        output.setIcc(icc);
+        report.setOutput(output);
+        report.getTransformations().setResized(true);
+        report.getTransformations().setOrientationNormalized(true);
+        report.getTransformations().setThumbnailPolicy("not-present");
+        response.setFidelityReport(report);
         return response;
+    }
+
+    private static String sha256(final byte[] value) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(value);
+            StringBuilder result = new StringBuilder(digest.length * 2);
+            for (byte datum : digest) result.append(String.format("%02x", datum));
+            return result.toString();
+        } catch (Exception exception) {
+            return null;
+        }
     }
 }

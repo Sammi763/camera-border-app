@@ -46,6 +46,10 @@ describe("templateSettings", () => {
     expect(layout).not.toHaveProperty("jpegQuality")
     expect(layout).not.toHaveProperty("outputSizePreset")
     expect(layout).not.toHaveProperty("preserveMetadata")
+    expect(layout).not.toHaveProperty("tier")
+    expect(layout).not.toHaveProperty("colorProfilePolicy")
+    expect(layout).not.toHaveProperty("metadataPolicy")
+    expect(layout).not.toHaveProperty("bitDepthPolicy")
     expect(isLayoutSettings(layout)).toBe(true)
   })
 

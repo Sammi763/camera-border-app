@@ -791,13 +791,31 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  overflow: hidden;
+  overflow: auto;
 }
 
 .previewCanvas {
   display: block;
-  width: 100%;
-  height: 100%;
+}
+
+/* Polaroid 编辑态辅助线是 DOM overlay，不进入 Canvas 和导出文件。 */
+.polaroidImageGuide {
+  position: absolute;
+  z-index: 2;
+  border: 1px dashed rgba(222, 178, 112, 0.9);
+  pointer-events: none;
+  color: rgba(255, 226, 178, 0.95);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  line-height: 1;
+}
+
+.polaroidImageGuide span {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  padding: 2px 4px;
+  background: rgba(25, 22, 18, 0.72);
 }
 
 /* 空间不足时不能把纯边框伪装成已完成的照片预览。 */
@@ -827,11 +845,43 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-wrap: wrap;
   gap: var(--space-3);
   width: 100%;
   padding: var(--space-2) var(--space-4);
   background: var(--surface-dark);
   flex: 0 0 auto;
+}
+
+.previewMetaDetails {
+  display: flex;
+  flex: 1 1 360px;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2) var(--space-3);
+  min-width: 0;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  line-height: 1.4;
+}
+
+.previewMetaDetails span {
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.previewPlacementStatus {
+  color: var(--text-secondary);
+  font-size: 0.6875rem;
+  white-space: nowrap;
+}
+
+/* 1200×760 是正式工作台的最小宽屏场景；摘要换行时只收紧纵向留白，保留可读性。 */
+@media (max-width: 1200px) {
+  .previewMetaBar {
+    padding-block: 6px;
+  }
 }
 
 .previewMetaFileName {
@@ -3246,4 +3296,231 @@ body {
     scroll-behavior: auto !important;
     transition-duration: 0.001ms !important;
   }
+}
+
+/* ---- 队列右键菜单（自绘受控菜单） ---------------------------------------- */
+
+.queueContextMenu {
+  position: fixed;
+  z-index: 130;
+  min-width: 148px;
+  padding: var(--space-1);
+  border: 1px solid var(--border-default);
+  border-radius: var(--studio-radius-sm);
+  background: var(--surface-primary);
+  box-shadow: 0 8px 24px var(--studio-overlay);
+  display: flex;
+  flex-direction: column;
+}
+
+.queueContextMenuItem {
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--studio-radius-sm);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.75rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.queueContextMenuItem:hover,
+.queueContextMenuItem:focus-visible {
+  background: var(--studio-accent-soft, rgba(255, 255, 255, 0.08));
+  color: var(--accent-primary);
+}
+
+/* ---- 快捷键速查面板 ------------------------------------------------------ */
+
+.shortcutOverlayBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--studio-overlay);
+}
+
+.shortcutOverlay {
+  width: min(680px, 92vw);
+  max-height: 84vh;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-default);
+  border-radius: var(--studio-radius-sm);
+  background: var(--surface-primary);
+  box-shadow: 0 16px 48px var(--studio-overlay);
+  outline: none;
+}
+
+.shortcutOverlayHeader {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-default);
+}
+
+.shortcutOverlayTitle {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 0.9375rem;
+}
+
+.shortcutOverlayBody {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-4);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--space-4);
+}
+
+.shortcutGroupTitle {
+  margin: 0 0 var(--space-2);
+  color: var(--text-secondary);
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.shortcutGroupList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.shortcutEntry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.shortcutKeys {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+}
+
+.shortcutKey {
+  padding: 1px var(--space-1);
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  background: var(--studio-elevated, rgba(255, 255, 255, 0.04));
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.6875rem;
+  line-height: 1.4;
+}
+
+.shortcutDescription {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  text-align: right;
+}
+
+/* ---- 帮助抽屉 ------------------------------------------------------------ */
+
+.helpPanel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.helpPanelSectionTitle {
+  margin: 0 0 var(--space-2);
+  color: var(--text-secondary);
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.helpPanelSteps {
+  margin: 0;
+  padding-left: 1.25em;
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+  line-height: 1.7;
+}
+
+.helpPanelDefinitionList {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.helpPanelDefinitionRow dt {
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.helpPanelDefinitionRow dd {
+  margin: 2px 0 0;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  line-height: 1.6;
+}
+
+/* ---- 预览：原图叠加 / 网格开关 ------------------------------------------- */
+
+.previewOriginalOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.92);
+}
+
+.previewOriginalImage {
+  max-width: 96%;
+  max-height: 96%;
+  object-fit: contain;
+}
+
+.previewOriginalBadge {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  padding: 2px var(--space-2);
+  border: 1px solid var(--border-default);
+  border-radius: var(--studio-radius-sm);
+  background: rgba(0, 0, 0, 0.6);
+  color: var(--text-secondary);
+  font-size: 0.6875rem;
+}
+
+.previewViewportBtnActive {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}
+
+/* ---- 欢迎页快捷键提示 ---------------------------------------------------- */
+
+.workspaceWelcomeShortcutHint {
+  margin: var(--space-2) 0 0;
+  color: var(--text-tertiary);
+  font-size: 0.75rem;
+}
+
+.workspaceWelcomeKbd {
+  padding: 1px 6px;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  background: var(--studio-elevated, rgba(255, 255, 255, 0.04));
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.6875rem;
 }

@@ -9,8 +9,9 @@ public final class PreviewResponse {
     private String message;
     private boolean previewAvailable;
     private String previewUrl;
-    /** 解码来源状态（standard / raw-developed / embedded-preview-fallback），可为 null。 */
+    /** 解码来源状态（standard / embedded-jpeg），可为 null。 */
     private SourceDecode sourceDecode;
+    private FidelityReport fidelityReport;
 
     public PreviewResponse() {
     }
@@ -61,5 +62,13 @@ public final class PreviewResponse {
 
     public void setSourceDecode(final SourceDecode sourceDecode) {
         this.sourceDecode = sourceDecode;
+    }
+
+    public FidelityReport getFidelityReport() {
+        return fidelityReport;
+    }
+
+    public void setFidelityReport(final FidelityReport fidelityReport) {
+        this.fidelityReport = fidelityReport;
     }
 }

@@ -82,6 +82,12 @@ const extractFormat = (filePath: string): string => {
   return dotIndex > 0 ? filePath.slice(dotIndex + 1).toLowerCase() : ""
 }
 
+/**
+ * 导入去重的路径键：统一反斜杠为正斜杠后比较。
+ * 仅用于跨平台路径的重复判断，不改变队列中保存的原始路径。
+ */
+const normalizeSourcePath = (sourcePath: string): string => sourcePath.replace(/\\/g, "/")
+
 /** 删除后保持当前图选择确定：优先同下标的下一张，否则上一张。 */
 const selectAfterRemoval = (
   before: readonly QueueItem[],
@@ -116,6 +122,14 @@ const removeItemsFromSnapshot = (snapshot: QueueSnapshot, ids: ReadonlySet<strin
     activeItemId: selectAfterRemoval(snapshot.items, items, snapshot.activeItemId, ids),
     checkedItemIds: snapshot.checkedItemIds.filter((id) => !ids.has(id))
   }
+}
+
+/** 计算指定 id 前后（不含自身）的条目 id 集合；id 不存在时返回空集合。 */
+const neighborIds = (snapshot: QueueSnapshot, id: string, side: "left" | "right"): ReadonlySet<string> => {
+  const index = snapshot.items.findIndex((item) => item.id === id)
+  if (index < 0) return new Set()
+  const range = side === "left" ? snapshot.items.slice(0, index) : snapshot.items.slice(index + 1)
+  return new Set(range.map((item) => item.id))
 }
 
 /**
@@ -201,15 +215,41 @@ export const useQueue = (): QueueController => {
     return () => { active = false }
   }, [commit])
 
-  /** 将路径列表追加到队列；队列为空时自动激活首张。HEIC 文件由随包助手转换。 */
+  /** 将路径列表追加到队列；已在队列中的路径按 sourcePath 去重跳过。队列为空时自动激活首张。HEIC 文件由随包助手转换。 */
   const appendPaths = useCallback(async (paths: readonly string[]): Promise<void> => {
     if (paths.length === 0) return
-    const converted = await resolveHeicPaths(paths)
+    const existingKeys = new Set(snapshotRef.current.items.map((item) => normalizeSourcePath(item.sourcePath)))
+    const seenInBatch = new Set<string>()
+    const newPaths = paths.filter((path) => {
+      const key = normalizeSourcePath(path)
+      // 同一批内重复出现的路径也只保留一次
+      if (existingKeys.has(key) || seenInBatch.has(key)) return false
+      seenInBatch.add(key)
+      return true
+    })
+    const skippedDuplicateCount = paths.length - newPaths.length
+    if (newPaths.length === 0) {
+      setLastImportResult({
+        successCount: 0,
+        failedFiles: [],
+        convertedFiles: [],
+        heicUnsupported: false,
+        skippedDuplicateCount
+      })
+      return
+    }
+    const converted = await resolveHeicPaths(newPaths)
     const validItems = converted.filter((item) => item.resolved !== null)
     const failedFiles = converted.filter((item) => item.resolved === null).map((item) => toFileName(item.original))
     const convertedFiles = converted.filter((item) => item.converted).map((item) => toFileName(item.original))
-    const hasHeicUnsupported = paths.some(isHeicFile) && converted.some((item) => item.resolved === null && isHeicFile(item.original))
-    setLastImportResult({ successCount: validItems.length, failedFiles, convertedFiles, heicUnsupported: hasHeicUnsupported })
+    const hasHeicUnsupported = newPaths.some(isHeicFile) && converted.some((item) => item.resolved === null && isHeicFile(item.original))
+    setLastImportResult({
+      successCount: validItems.length,
+      failedFiles,
+      convertedFiles,
+      heicUnsupported: hasHeicUnsupported,
+      skippedDuplicateCount
+    })
     if (validItems.length === 0) return
 
     const added: readonly QueueItem[] = validItems.map((item) => ({
@@ -308,6 +348,54 @@ export const useQueue = (): QueueController => {
 
   const removeChecked = useCallback((): void => {
     commit((previous) => removeItemsFromSnapshot(previous, new Set(previous.checkedItemIds)))
+  }, [commit])
+
+  const removeOthers = useCallback((id: string): void => {
+    commit((previous) => {
+      const keep = previous.items.find((item) => item.id === id)
+      if (keep === undefined) return previous
+      return {
+        items: [keep],
+        // 只保留指定图片：active 无论原来指向谁，都落在保留条目上。
+        activeItemId: id,
+        checkedItemIds: previous.checkedItemIds.includes(id) ? [id] : []
+      }
+    })
+  }, [commit])
+
+  const removeLeftOf = useCallback((id: string): void => {
+    commit((previous) => removeItemsFromSnapshot(previous, neighborIds(previous, id, "left")))
+  }, [commit])
+
+  const removeRightOf = useCallback((id: string): void => {
+    commit((previous) => removeItemsFromSnapshot(previous, neighborIds(previous, id, "right")))
+  }, [commit])
+
+  const reorder = useCallback((id: string, toIndex: number): void => {
+    commit((previous) => {
+      const fromIndex = previous.items.findIndex((item) => item.id === id)
+      if (fromIndex < 0 || !Number.isFinite(toIndex)) return previous
+      const targetIndex = Math.min(previous.items.length - 1, Math.max(0, Math.round(toIndex)))
+      if (targetIndex === fromIndex) return previous
+      const items = [...previous.items]
+      const [moved] = items.splice(fromIndex, 1)
+      items.splice(targetIndex, 0, moved!)
+      return { ...previous, items }
+    })
+  }, [commit])
+
+  const sortByName = useCallback((direction: "asc" | "desc"): void => {
+    commit((previous) => {
+      // Array.prototype.sort 自 ES2019 起为稳定排序：同名文件保持原相对顺序。
+      const items = [...previous.items].sort((a, b) =>
+        direction === "asc"
+          ? a.fileName.localeCompare(b.fileName, undefined, { numeric: true, sensitivity: "base" })
+          : b.fileName.localeCompare(a.fileName, undefined, { numeric: true, sensitivity: "base" })
+      )
+      // 已是目标顺序时不产生新数组引用，避免留下无意义的撤销历史。
+      const sameOrder = items.every((item, index) => item === previous.items[index])
+      return sameOrder ? previous : { ...previous, items }
+    })
   }, [commit])
 
   const clear = useCallback((): void => {
@@ -455,6 +543,11 @@ export const useQueue = (): QueueController => {
     uncheckAll,
     removeItem,
     removeChecked,
+    removeOthers,
+    removeLeftOf,
+    removeRightOf,
+    reorder,
+    sortByName,
     clear,
     undo,
     redo,

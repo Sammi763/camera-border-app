@@ -17,11 +17,11 @@ import type {
 } from "../../../types/preview"
 import type { RenderSettings } from "../types"
 import { buildTextsFromSettings, resolveLogoBrand } from "./buildTexts"
+import { imagePlacementFromSettings } from "./imageArea"
 import { normalizeImagePlacement } from "../../preview/canvas/imagePlacementGeometry"
-import { normalizeTemplateSettings } from "../../template/utils/normalizeTemplate"
 
-/** 新配方只读取明确的 imagePlacement；旧字段由统一迁移入口提前消费。 */
-const recipeImagePlacement = (settings: RenderSettings) => normalizeImagePlacement(settings.imagePlacement)
+/** 配方只读取明确的 v2 imagePlacement；模板兼容字段不进入渲染边界。 */
+const recipeImagePlacement = (settings: RenderSettings) => imagePlacementFromSettings(settings)
 
 /**
  * 将 UI 渐变设置转换为 API 渐变配置。
@@ -55,9 +55,7 @@ export const buildRecipeFromSettings = (
   resolvedTexts?: readonly (string | null)[] | null,
   resolvedBrand?: string | null
 ): RenderRecipe => {
-  // 允许旧 localStorage/模板直接进入边界时自动迁移一次；后面的配方装配不再读取
-  // autoCrop/filmFormat，避免兼容字段继续成为渲染契约。
-  const current = normalizeTemplateSettings(settings)
+  const current = settings
   const logo: LogoConfig | null = current.logo.enabled
     ? {
         enabled: true,

@@ -12,6 +12,10 @@ export type OutputPresetSettings = Pick<RenderSettings,
   | "preserveMetadata"
   | "preserveColorProfile"
   | "preferHighBitDepth"
+  | "tier"
+  | "colorProfilePolicy"
+  | "metadataPolicy"
+  | "bitDepthPolicy"
 >
 
 export type OutputPreset = {
@@ -38,5 +42,11 @@ export const outputPresetSettingsFrom = (settings: RenderSettings): OutputPreset
   customOutputLongEdge: settings.customOutputLongEdge,
   preserveMetadata: settings.preserveMetadata,
   preserveColorProfile: settings.preserveColorProfile,
-  preferHighBitDepth: settings.preferHighBitDepth
+  preferHighBitDepth: settings.preferHighBitDepth,
+  ...(settings.tier === undefined ? {} : {
+    tier: settings.tier,
+    colorProfilePolicy: settings.colorProfilePolicy,
+    metadataPolicy: settings.metadataPolicy,
+    bitDepthPolicy: settings.bitDepthPolicy
+  })
 })

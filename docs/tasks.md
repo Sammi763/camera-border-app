@@ -2,7 +2,7 @@
 
 > 本文把 [PRD](prd.md) 的产品要求拆成可执行任务。任务按依赖排序，默认全部属于待实现或待验收状态；代码已有的旧 Roll、扫描仪、实验室和冲洗结构不代表它们是当前产品需求。
 >
-> 交付目标：用户在 Windows 和 macOS 上安装 `.exe` / `.dmg` 后，无需登录、无需安装 Java，即可完成图片导入、数码 EXIF 读取或胶片摄影预设补充、模板排版、预览和批量导出。图片默认不离开本机。
+> 交付目标：用户在 macOS arm64 上安装正式 `.dmg` 后，无需登录、无需安装 Java，即可完成图片导入、数码 EXIF 读取或胶片摄影预设补充、模板排版、预览和批量导出。macOS x64 与 Windows x64 只保留候选包和候选/模拟验收字段，Windows 状态固定为 `SIMULATED`；图片默认不离开本机。
 
 ## 0. 统一约定
 
@@ -292,13 +292,33 @@ T-05A。外部执行应触发最终 HEAD 的 `windows-package.yml`，配置
 安装、启动、Java 健康检查、正常关闭、卸载以及交互式图形安装、SmartScreen、JPEG/PNG
 导入、预览、单图/批量导出、源图保护、重启、断网、中文及空格路径验证。
 
-验收结论模板：
+验收结论模板（本阶段报告状态固定为 `SIMULATED`，不表示 Windows 平台验收通过）：
 
 ```text
-STAGE: T-05B Windows native acceptance
-VERDICT: PASS | BLOCKED
+STAGE: T-05B Windows candidate acceptance
+VERDICT: SIMULATED | BLOCKED
 WINDOWS_RUN_URL: ...
 NATIVE_INSTALL_SMOKE: pass | not-run
 REAL_USER_PATH: pass | not-run
-NEXT_STAGE_ALLOWED: yes | no
+RELEASE_STATUS: SIMULATED
 ```
+
+### T-06 🟡 跨平台安装与最终冻结验收
+
+本阶段只接受安装包证据：正式目标 macOS arm64 需完成安装后 E2E、断网、无系统依赖、重启
+恢复和卸载；macOS x64 与 Windows x64 保留候选证据，不参与正式 blocker，不能用源码运行
+或交叉构建代替。构建脚本会把 JRE、Java
+Engine、ExifTool、HEIC 解码助手、随包字体、许可证和 SHA-256 写入包内清单，并用独立
+ExifTool 复核输出事实。
+
+执行顺序：
+
+1. 在目标 runner 构建 macOS arm64 正式包，并按需构建 macOS x64 / Windows x64 候选包，保存 `*.sha256`、`*.manifest.json`；
+2. 在正式目标从安装包开始完成核心流程和专业样片矩阵；候选目标单独记录实际安装目录、日志和 E2E 产物；
+3. 在干净系统断网运行，确认不依赖系统 Java、ExifTool 或 HEIC 扩展；
+4. 组织至少 5 名目标摄影用户做首次使用测试，修复阻断/高频问题后重测；
+5. 运行 `pnpm release:report` 汇总版本、commit、组件和证据状态；证据不足时保持
+   `NOT_READY`，只有完整满足 [docs/release-checklist.md §6](release-checklist.md) 才能写入最终 PASS 三行。
+
+签名、公证和自动更新不属于 T-06 发布清单；P0/P1/P2 必须为零，P3 只能保留不影响理解和使用
+的纯视觉项并记录在最终报告。

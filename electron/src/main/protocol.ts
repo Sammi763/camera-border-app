@@ -41,6 +41,8 @@ type ProxyRoute = {
  */
 const PROXY_ROUTES: readonly ProxyRoute[] = [
   { matches: (pathname) => pathname === "/api/health", methods: ["GET"] },
+  { matches: (pathname) => pathname === "/api/capabilities", methods: ["GET"] },
+  { matches: (pathname) => pathname === "/api/export-preflight", methods: ["POST"] },
   { matches: (pathname) => pathname === "/api/preview", methods: ["POST"] },
   { matches: (pathname) => pathname === "/api/render-jobs", methods: ["POST"] },
   {

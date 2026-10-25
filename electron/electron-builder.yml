@@ -54,6 +54,10 @@ extraResources:
     to: java-engine/camera-border-engine.jar
   - from: runtime-bundle/java-runtime
     to: java-runtime
+  - from: runtime-bundle/professional-tools
+    to: professional-tools
+  - from: runtime-bundle/package-manifest.json
+    to: package-manifest.json
 
 mac:
   category: public.app-category.photography

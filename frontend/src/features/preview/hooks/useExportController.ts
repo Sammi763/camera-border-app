@@ -8,6 +8,7 @@
 
 import { useCallback, useRef, useState } from "react"
 import { cancelRenderJob, submitAndWaitForRenderJob } from "../../../services/engine/renderJobsApi"
+import { preflightExport } from "../../../services/engine/exportPreflightApi"
 import { toExportFileName } from "../../../utils/fileName"
 import type {
   ExportSettings,
@@ -16,7 +17,10 @@ import type {
   RenderJobRequest,
   RenderJobSnapshot,
   RenderJobStatusResponse,
-  SourceDecode
+  SourceDecode,
+  CapabilitiesResponse,
+  FidelityReport,
+  ExportPreflightResponse
 } from "../../../types/preview"
 import { buildRecipeFromSettings } from "../../settings/utils/buildRecipe"
 import { resolveOutputSizeFromSettings } from "../../settings/utils/outputSizePresets"
@@ -36,7 +40,7 @@ export type ExportJobState =
   | { readonly kind: "preparing" }
   | { readonly kind: "submitting" }
   | { readonly kind: "running"; readonly jobId: string; readonly total: number; readonly processed: number; readonly currentItem: number | null }
-  | { readonly kind: "completed"; readonly outputPath: string; readonly actualFormat: string; readonly summary: readonly string[] }
+  | { readonly kind: "completed"; readonly outputPath: string; readonly actualFormat: string; readonly summary: readonly string[]; readonly report?: FidelityReport | null }
   | { readonly kind: "cancelled"; readonly message: string }
   | { readonly kind: "error"; readonly message: string }
 
@@ -46,6 +50,7 @@ export type BatchExportItemResult = {
   readonly actualFormat: string | null
   readonly summary: readonly string[]
   readonly error: string | null
+  readonly report?: FidelityReport | null
 }
 
 export type BatchExportState =
@@ -74,6 +79,8 @@ type UseExportControllerArgs = {
   readonly prepareExifForExport: (paths: readonly string[]) => Promise<void>
   readonly autoOpenExportDirectory: boolean
   readonly engineAvailable: boolean
+  /** 传入 null 表示能力探测失败，生产导出仍必须先走 fail-closed 预检；省略仅供旧单测兼容。 */
+  readonly capabilities?: CapabilitiesResponse | null
 }
 
 export type ExportController = {
@@ -81,6 +88,7 @@ export type ExportController = {
   readonly batch: BatchExportState
   readonly isExporting: boolean
   readonly isBatchExporting: boolean
+  readonly lastPreflight?: ExportPreflightResponse | null
   readonly startSingleExport: () => Promise<void>
   readonly startBatchExport: () => Promise<void>
   readonly retryFailed: () => Promise<void>
@@ -99,7 +107,11 @@ const buildExportSettings = (settings: RenderSettings, outputPath: string): Expo
     maxHeight: size.maxHeight,
     preserveMetadata: settings.preserveMetadata,
     preserveColorProfile: settings.preserveColorProfile,
-    preferHighBitDepth: settings.preferHighBitDepth
+    preferHighBitDepth: settings.preferHighBitDepth,
+    tier: settings.tier ?? "standard-delivery",
+    colorProfilePolicy: settings.colorProfilePolicy ?? "source",
+    metadataPolicy: settings.metadataPolicy ?? "preserve",
+    bitDepthPolicy: settings.bitDepthPolicy ?? "8"
   }
 }
 
@@ -133,13 +145,14 @@ const featureResultLabel = (result: FeatureResult | null | undefined): string | 
     return null
   }
   if (result.status === "APPLIED") return result.message ?? "已应用"
-  if (result.status === "SKIPPED") return result.message ?? "该导出能力未应用，像素文件仍已输出"
+  if (result.status === "SOURCE_ABSENT") return result.message ?? "源文件没有该能力的事实"
+  if (result.status === "UNSUPPORTED") return result.message ?? "当前档位不支持该能力"
+  if (result.status === "FAILED") return result.message ?? "该能力校验失败"
   return result.message ?? "已降级"
 }
 
 export const sourceDecodeLabel = (sourceDecode: SourceDecode): string | null => {
-  if (sourceDecode.mode === "raw-developed") return "RAW 已真实显影（LibRaw）"
-  if (sourceDecode.mode === "embedded-preview-fallback") return sourceDecode.warning ?? "RAW 已降级为嵌入预览"
+  if (sourceDecode.mode === "embedded-jpeg") return sourceDecode.warning ?? "RAW 仅使用内嵌 JPEG 像素"
   return null
 }
 
@@ -183,7 +196,8 @@ const asItemStatus = (status: RenderJobStatusResponse, index: number): RenderJob
     ...(status.metadataPreservation === undefined ? {} : { metadataPreservation: status.metadataPreservation }),
     ...(status.colorProfilePreservation === undefined ? {} : { colorProfilePreservation: status.colorProfilePreservation }),
     ...(status.highBitDepth === undefined ? {} : { highBitDepth: status.highBitDepth }),
-    ...(status.sourceDecode === undefined ? {} : { sourceDecode: status.sourceDecode })
+    ...(status.sourceDecode === undefined ? {} : { sourceDecode: status.sourceDecode }),
+    ...(status.fidelityReport === undefined ? {} : { fidelityReport: status.fidelityReport })
   }
 }
 
@@ -198,10 +212,12 @@ export const useExportController = ({
   resolveQueueItem,
   prepareExifForExport,
   autoOpenExportDirectory,
-  engineAvailable
+  engineAvailable,
+  capabilities
 }: UseExportControllerArgs): ExportController => {
   const [single, setSingle] = useState<ExportJobState>({ kind: "idle" })
   const [batch, setBatch] = useState<BatchExportState>({ kind: "idle" })
+  const [lastPreflight, setLastPreflight] = useState<ExportPreflightResponse | null>(null)
   const activeJobRef = useRef<{ readonly kind: "single" | "batch"; readonly jobId: string } | null>(null)
   const frozenBatchRef = useRef<FrozenBatch | null>(null)
 
@@ -231,7 +247,8 @@ export const useExportController = ({
           kind: "completed",
           outputPath: result.outputPath ?? "",
           actualFormat: result.actualFormat ?? "",
-          summary: buildExportSummary(result)
+          summary: buildExportSummary(result),
+          report: result.fidelityReport ?? null
         })
       } else if (status.status === "cancelled") {
         setSingle({ kind: "cancelled", message: result.error ?? "导出任务已取消。" })
@@ -250,6 +267,18 @@ export const useExportController = ({
       })
     }
   }, [])
+
+  const ensurePreflightReady = useCallback(async (request: RenderJobRequest): Promise<void> => {
+    // production WorkspacePage always passes capabilities (including null on failure).
+    // Omitted only preserves the old hook unit-test contract; actual desktop export is fail closed.
+    if (capabilities === undefined) return
+    if (capabilities === null) throw new Error("专业能力探测未完成，已阻止导出")
+    const response = await preflightExport(request)
+    setLastPreflight(response)
+    if (response.status === "ready") return
+    const reasons = response.items.flatMap((item) => item.blockingReasons)
+    throw new Error(`导出预检未通过：${reasons.length > 0 ? reasons.join("；") : "当前档位不可用"}`)
+  }, [capabilities])
 
   const applyBatchStatus = useCallback((status: RenderJobStatusResponse, total: number): void => {
     activeJobRef.current = { kind: "batch", jobId: status.jobId }
@@ -276,6 +305,10 @@ export const useExportController = ({
     const frozenSettings = freezeSettings(settings)
     const selectedItem = queueItems.find((item) => item.filePath === state.filePath)
     const frozenItem = selectedItem === undefined ? null : freezeQueueItem(selectedItem)
+    // 每次新任务都从当前请求重新生成预检摘要，避免把上一次路径冲突或失败原因
+    // 留在 Dock 中，误导用户以为它属于当前导出。
+    setLastPreflight(null)
+    setBatch({ kind: "idle" })
     setSingle({ kind: "preparing" })
 
     try {
@@ -304,6 +337,7 @@ export const useExportController = ({
       const request: RenderJobRequest = {
         items: [{ recipe, export: buildExportSettings(frozenSettings, outputPath) }]
       }
+      await ensurePreflightReady(request)
       setSingle({ kind: "submitting" })
       const terminal = await submitAndWaitForRenderJob(request, undefined, applySingleStatus)
       const result = asItemStatus(terminal, 0)
@@ -313,7 +347,8 @@ export const useExportController = ({
           kind: "completed",
           outputPath: result.outputPath ?? outputPath,
           actualFormat: result.actualFormat ?? frozenSettings.exportFormat,
-          summary: buildExportSummary(result)
+          summary: buildExportSummary(result),
+          report: result.fidelityReport ?? null
         })
         notifySystem("导出完成", state.fileName)
       } else if (terminal.status === "cancelled") {
@@ -329,7 +364,7 @@ export const useExportController = ({
       setSingle({ kind: "error", message })
       notifySystem("导出失败", `${state.fileName}（${message}）`)
     }
-  }, [applySingleStatus, batch, engineAvailable, notifySystem, prepareExifForExport, queueItems, resolveQueueItem, settings, single, state])
+  }, [applySingleStatus, batch, capabilities, engineAvailable, ensurePreflightReady, notifySystem, prepareExifForExport, queueItems, resolveQueueItem, settings, single, state])
 
   const buildBatchRequest = useCallback((items: readonly QueueItem[], frozenSettings: RenderSettings, dirPath: string): RenderJobRequest => {
     const usedNames = new Set<string>()
@@ -374,7 +409,8 @@ export const useExportController = ({
         success: status.status === "completed",
         actualFormat: status.actualFormat ?? null,
         summary: buildExportSummary(status),
-        error: status.status === "completed" ? null : (status.error ?? terminal.error ?? "导出失败")
+        error: status.status === "completed" ? null : (status.error ?? terminal.error ?? "导出失败"),
+        report: status.fidelityReport ?? null
       }
     })
     const success = results.filter((result) => result.success).length
@@ -409,6 +445,9 @@ export const useExportController = ({
 
     const frozenItems = batchExportItems.map(freezeQueueItem)
     const frozenSettings = freezeSettings(settings)
+    // 批量任务可能切换了输出目录或档位；旧摘要不能代表这次冻结的请求。
+    setLastPreflight(null)
+    setSingle({ kind: "idle" })
     setBatch({ kind: "preparing", total: frozenItems.length })
     try {
       const dirPath = await window.desktop.selectExportDirectory()
@@ -418,6 +457,7 @@ export const useExportController = ({
       }
       await prepareExifForExport(frozenItems.map((item) => item.filePath))
       const request = buildBatchRequest(frozenItems, frozenSettings, dirPath)
+      await ensurePreflightReady(request)
       const frozen: FrozenBatch = { request, items: frozenItems, dirPath, results: [] }
       frozenBatchRef.current = frozen
       const terminal = await submitAndWaitForRenderJob(
@@ -430,7 +470,7 @@ export const useExportController = ({
       activeJobRef.current = null
       setBatch({ kind: "error", message: toErrorMessage(error, "批量导出失败") })
     }
-  }, [applyBatchStatus, batch, batchExportItems, buildBatchRequest, engineAvailable, finishBatch, prepareExifForExport, settings, single])
+  }, [applyBatchStatus, batch, batchExportItems, buildBatchRequest, engineAvailable, ensurePreflightReady, finishBatch, prepareExifForExport, settings, single])
 
   const retryFailed = useCallback(async (): Promise<void> => {
     const frozen = frozenBatchRef.current
@@ -496,6 +536,7 @@ export const useExportController = ({
     batch,
     isExporting: isBusy(single),
     isBatchExporting: isBusy(batch),
+    lastPreflight,
     startSingleExport,
     startBatchExport,
     retryFailed,

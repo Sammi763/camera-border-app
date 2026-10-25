@@ -1,6 +1,7 @@
 package com.camborder.app.repository;
 
 import com.camborder.app.dto.RenderJobItemStatusResponse;
+import com.camborder.app.dto.FidelityReport;
 import com.camborder.app.dto.RenderJobSnapshot;
 import com.camborder.app.dto.RenderJobStatusResponse;
 import com.camborder.app.dto.SourceDecode;
@@ -82,6 +83,7 @@ public final class RenderJobRecord {
         item.setColorProfilePreservation(exportResult.getColorProfilePreservation());
         item.setHighBitDepth(exportResult.getHighBitDepth());
         item.setSourceDecode(sourceDecode);
+        item.setFidelityReport(exportResult.getFidelityReport());
     }
 
     public synchronized void failItem(final int index, final String error) {
@@ -166,6 +168,7 @@ public final class RenderJobRecord {
             response.setColorProfilePreservation(only.getColorProfilePreservation());
             response.setHighBitDepth(only.getHighBitDepth());
             response.setSourceDecode(only.getSourceDecode());
+            response.setFidelityReport(only.getFidelityReport());
         }
         return response;
     }

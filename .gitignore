@@ -31,3 +31,11 @@ electron/release/
 
 # Windows 图标生成产物（scripts/create-windows-icon.mjs；每次打包前重新生成）
 electron/build/
+
+# 构建时下载的专业组件、字体和许可证；它们必须进入安装包，不直接提交二进制。
+professional-tools/
+.cache/fonts/
+.cache/professional-tools/
+
+# 阶段基线证据可能包含 EXIF、GPS、截图和本机运行信息，只保留在本机。
+.local/

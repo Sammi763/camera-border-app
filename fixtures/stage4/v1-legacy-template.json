@@ -1,0 +1,87 @@
+{
+  "kind": "camera-border-template",
+  "version": 1,
+  "template": {
+    "id": "stage4-v1-legacy-fixture",
+    "name": "Stage4 v1 legacy",
+    "settings": {
+      "borderColor": "#ffffff",
+      "borderTop": 0,
+      "borderBottom": 0,
+      "borderLeft": 0,
+      "borderRight": 0,
+      "textContent": "Stage4 text edit",
+      "textFontSize": 18,
+      "textColor": "#ffffff",
+      "textPlacement": "image-bottom-center",
+      "textArea": "image",
+      "fontFamily": "sans-serif",
+      "textLayers": [
+        {
+          "id": "l1",
+          "enabled": true,
+          "content": "Stage4 text edit",
+          "fontFamily": "sans-serif",
+          "fontSize": 18,
+          "color": "#ffffff",
+          "placement": "image-bottom-center",
+          "textArea": "image",
+          "marginX": 0,
+          "marginY": 14,
+          "lineSpacing": 2,
+          "letterSpacing": 1,
+          "backgroundEnabled": false,
+          "backgroundColor": "#000000",
+          "backgroundPaddingX": 6,
+          "backgroundPaddingY": 3,
+          "shadowEnabled": true,
+          "shadowColor": "#000000",
+          "shadowBlur": 6,
+          "shadowOffsetX": 0,
+          "shadowOffsetY": 1,
+          "strokeEnabled": false,
+          "strokeColor": "#000000",
+          "strokeWidth": 1
+        },
+        {
+          "id": "l2",
+          "enabled": false,
+          "content": "",
+          "fontFamily": "sans-serif",
+          "fontSize": 14,
+          "color": "#888888",
+          "placement": "top-center",
+          "textArea": "border",
+          "marginX": 0,
+          "marginY": 8,
+          "lineSpacing": 0,
+          "letterSpacing": 0,
+          "backgroundEnabled": false,
+          "backgroundColor": "#000000",
+          "backgroundPaddingX": 6,
+          "backgroundPaddingY": 3,
+          "shadowEnabled": false,
+          "shadowColor": "#000000",
+          "shadowBlur": 0,
+          "shadowOffsetX": 2,
+          "shadowOffsetY": 2,
+          "strokeEnabled": false,
+          "strokeColor": "#000000",
+          "strokeWidth": 1
+        }
+      ],
+      "gradient": {
+        "enabled": false,
+        "type": "linear",
+        "angle": 0,
+        "stops": [
+          { "offset": 0, "color": "#000000" },
+          { "offset": 1, "color": "#ffffff" }
+        ]
+      },
+      "filmFormat": null,
+      "autoCrop": false
+    },
+    "createdAt": 1700000000000
+  }
+}

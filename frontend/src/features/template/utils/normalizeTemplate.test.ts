@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { normalizeTemplatePatch, normalizeTemplateSettings, isLegacySettings } from "./normalizeTemplate"
+import { migrateLegacyTemplateLayout } from "./legacyTemplateMigration"
 import type { RenderSettings, TextLayerSettings } from "../../settings/types"
 
 /** 构造最小合法旧格式 RenderSettings（不含 textLayers）。 */
@@ -85,8 +86,8 @@ describe("normalizeTemplatePatch", () => {
     expect(patch.textLayers!.length).toBe(0)
   })
 
-  it("旧布局字段只在迁移时消费，不会继续写入当前设置补丁", () => {
-    const patch = normalizeTemplatePatch({
+  it("旧模板布局字段只在 adapter 迁移时消费，不会写入当前设置补丁", () => {
+    const patch = migrateLegacyTemplateLayout({
       filmFormat: "135",
       autoCrop: true,
     })
@@ -106,15 +107,14 @@ describe("normalizeTemplateSettings", () => {
     expect(result.textLayers[1]!.enabled).toBe(false)
     expect(result.imagePlacement).toMatchObject({ mode: "fit", targetAspectRatio: null })
     expect(result).not.toHaveProperty("filmFormat")
-    expect(result).not.toHaveProperty("autoCrop")
   })
 
-  it("旧画幅和 autoCrop 只在迁移时转换为 v2 图片布局", () => {
-    const result = normalizeTemplateSettings({
+  it("旧模板画幅与裁剪字段只在 adapter 中转换为 v2 图片布局", () => {
+    const result = normalizeTemplateSettings(migrateLegacyTemplateLayout({
       ...legacySettings,
       filmFormat: "135",
       autoCrop: true,
-    })
+    }))
     expect(result.imagePlacement).toEqual({
       mode: "fill",
       focalX: 0.5,

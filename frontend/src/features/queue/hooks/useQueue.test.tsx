@@ -2,6 +2,7 @@ import { describe, expect, it, afterEach, beforeEach, vi } from "vitest"
 import { act, renderHook, waitFor } from "@testing-library/react"
 import { useQueue } from "./useQueue"
 import type { PhotoAssetStore, ShootingPreset } from "../../metadata/types"
+import type { QueueController } from "../types"
 import { createEmptyAssetStore } from "../../metadata/types"
 
 const makePreset = (id: string): ShootingPreset => ({
@@ -224,6 +225,209 @@ describe("useQueue（当前预览图与批量选中状态）", () => {
     expect(result.current.activeItemId).toBe("available")
     expect(result.current.checkedItemIds).toEqual(["available"])
     delete (window as unknown as { desktop?: unknown }).desktop
+  })
+})
+
+describe("useQueue（导入去重）", () => {
+  afterEach(() => {
+    localStorage.clear()
+    vi.restoreAllMocks()
+  })
+
+  it("重复导入同一 sourcePath 时跳过并计入 skippedDuplicateCount", async () => {
+    const { result } = renderHook(() => useQueue())
+    await act(async () => {
+      await result.current.addFromPaths(["/photos/a.jpg"])
+    })
+    expect(result.current.items).toHaveLength(1)
+
+    await act(async () => {
+      await result.current.addFromPaths(["/photos/a.jpg"])
+    })
+    expect(result.current.items).toHaveLength(1)
+    expect(result.current.lastImportResult?.skippedDuplicateCount).toBe(1)
+    expect(result.current.lastImportResult?.successCount).toBe(0)
+  })
+
+  it("混合新旧路径时只导入新路径，跳过计数正确", async () => {
+    const { result } = renderHook(() => useQueue())
+    await act(async () => {
+      await result.current.addFromPaths(["/photos/a.jpg", "/photos/b.jpg"])
+    })
+    await act(async () => {
+      await result.current.addFromPaths(["/photos/b.jpg", "/photos/c.jpg", "/photos/d.jpg"])
+    })
+    expect(result.current.items.map((item) => item.fileName)).toEqual(["a.jpg", "b.jpg", "c.jpg", "d.jpg"])
+    expect(result.current.lastImportResult?.skippedDuplicateCount).toBe(1)
+    expect(result.current.lastImportResult?.successCount).toBe(2)
+  })
+
+  it("同一批内的重复路径也只保留一次", async () => {
+    const { result } = renderHook(() => useQueue())
+    await act(async () => {
+      await result.current.addFromPaths(["/photos/a.jpg", "/photos/a.jpg"])
+    })
+    expect(result.current.items).toHaveLength(1)
+    expect(result.current.lastImportResult?.skippedDuplicateCount).toBe(1)
+  })
+
+  it("反斜杠路径与正斜杠路径视为同一文件（Windows 路径归一）", async () => {
+    const { result } = renderHook(() => useQueue())
+    await act(async () => {
+      await result.current.addFromPaths(["C:\\photos\\a.jpg"])
+    })
+    await act(async () => {
+      await result.current.addFromPaths(["C:/photos/a.jpg"])
+    })
+    expect(result.current.items).toHaveLength(1)
+    expect(result.current.lastImportResult?.skippedDuplicateCount).toBe(1)
+  })
+
+  it("空数组导入为空操作，不产生导入结果", async () => {
+    const { result } = renderHook(() => useQueue())
+    await act(async () => {
+      await result.current.addFromPaths([])
+    })
+    expect(result.current.items).toHaveLength(0)
+    expect(result.current.lastImportResult).toBeNull()
+  })
+})
+
+describe("useQueue（队列批量关闭 / 排序 / 拖拽排序）", () => {
+  const importThree = async (): Promise<{ result: { current: QueueController }; ids: string[] }> => {
+    const rendered = renderHook(() => useQueue())
+    await act(async () => {
+      await rendered.result.current.addFromPaths(["/photos/a.jpg", "/photos/b.jpg", "/photos/c.jpg"])
+    })
+    return { result: rendered.result, ids: rendered.result.current.items.map((item) => item.id) }
+  }
+
+  afterEach(() => {
+    localStorage.clear()
+    vi.restoreAllMocks()
+  })
+
+  it("removeOthers 只保留指定图片，active 落在保留条目上且可撤销", async () => {
+    const { result, ids } = await importThree()
+    act(() => result.current.setActive(ids[2]!))
+    act(() => result.current.removeOthers(ids[0]!))
+    expect(result.current.items.map((item) => item.id)).toEqual([ids[0]])
+    expect(result.current.activeItemId).toBe(ids[0])
+    expect(result.current.canUndo).toBe(true)
+
+    act(() => result.current.undo())
+    expect(result.current.items).toHaveLength(3)
+    expect(result.current.activeItemId).toBe(ids[2])
+  })
+
+  it("removeOthers 保留条目的勾选状态；未勾选时勾选集清空", async () => {
+    const { result, ids } = await importThree()
+    act(() => result.current.toggleChecked(ids[1]!))
+    act(() => result.current.removeOthers(ids[0]!))
+    expect(result.current.checkedItemIds).toEqual([])
+
+    act(() => result.current.undo())
+    act(() => result.current.removeOthers(ids[1]!))
+    expect(result.current.checkedItemIds).toEqual([ids[1]])
+  })
+
+  it("removeLeftOf / removeRightOf 删除对应侧条目且保持 active 确定性", async () => {
+    const { result, ids } = await importThree()
+    act(() => result.current.removeLeftOf(ids[2]!))
+    expect(result.current.items.map((item) => item.id)).toEqual([ids[2]])
+    expect(result.current.activeItemId).toBe(ids[2])
+
+    act(() => result.current.undo())
+    expect(result.current.items).toHaveLength(3)
+
+    act(() => result.current.removeRightOf(ids[0]!))
+    expect(result.current.items.map((item) => item.id)).toEqual([ids[0]])
+  })
+
+  it("对不存在的 id 操作与空队列边界都不产生变更", async () => {
+    const { result, ids } = await importThree()
+    act(() => result.current.removeLeftOf("not-exist"))
+    act(() => result.current.removeRightOf("not-exist"))
+    act(() => result.current.removeOthers("not-exist"))
+    act(() => result.current.reorder("not-exist", 0))
+    act(() => result.current.reorder(ids[0]!, Number.NaN))
+    expect(result.current.items).toHaveLength(3)
+    // 无效操作不产生历史：撤销一次直接回到导入前的空队列
+    act(() => result.current.undo())
+    expect(result.current.items).toHaveLength(0)
+
+    act(() => result.current.redo())
+    act(() => result.current.clear())
+    act(() => result.current.removeLeftOf(ids[0]!))
+    act(() => result.current.removeOthers(ids[0]!))
+    expect(result.current.items).toHaveLength(0)
+  })
+
+  it("reorder 移动条目到目标下标；越界自动钳制", async () => {
+    const { result, ids } = await importThree()
+    act(() => result.current.reorder(ids[0]!, 2))
+    expect(result.current.items.map((item) => item.id)).toEqual([ids[1], ids[2], ids[0]])
+
+    // 负数下标钳制到队首
+    act(() => result.current.reorder(ids[0]!, -5))
+    expect(result.current.items.map((item) => item.id)).toEqual([ids[0], ids[1], ids[2]])
+  })
+
+  it("拖回原位不产生撤销历史", async () => {
+    const { result, ids } = await importThree()
+    act(() => result.current.reorder(ids[1]!, 1))
+    // 只有导入这一条历史：撤销直接清空队列，而不是先撤销一次无变化的 reorder
+    act(() => result.current.undo())
+    expect(result.current.items).toHaveLength(0)
+  })
+
+  it("reorder 后可撤销恢复原顺序", async () => {
+    const { result, ids } = await importThree()
+    act(() => result.current.reorder(ids[0]!, 2))
+    act(() => result.current.undo())
+    expect(result.current.items.map((item) => item.id)).toEqual(ids)
+  })
+
+  it("sortByName 升序降序；同名文件保持原相对顺序（稳定排序）", async () => {
+    const { result } = renderHook(() => useQueue())
+    // 两个不同目录下的同名文件：fileName 相同，稳定排序必须保持导入时的相对顺序
+    await act(async () => {
+      await result.current.addFromPaths([
+        "/photos/IMG_2.jpg",
+        "/photos/roll-a/DUP.jpg",
+        "/photos/IMG_10.jpg",
+        "/photos/roll-b/DUP.jpg",
+        "/photos/IMG_1.jpg"
+      ])
+    })
+    const dupFirstId = result.current.items.find((item) => item.sourcePath === "/photos/roll-a/DUP.jpg")!.id
+    const dupSecondId = result.current.items.find((item) => item.sourcePath === "/photos/roll-b/DUP.jpg")!.id
+
+    act(() => result.current.sortByName("asc"))
+    // 数值排序：IMG_1 < IMG_2 < IMG_10；同名 DUP 按原顺序在前
+    expect(result.current.items.map((item) => item.fileName)).toEqual([
+      "DUP.jpg", "DUP.jpg", "IMG_1.jpg", "IMG_2.jpg", "IMG_10.jpg"
+    ])
+    const ascOrder = result.current.items.map((item) => item.id)
+    expect(ascOrder.indexOf(dupFirstId)).toBeLessThan(ascOrder.indexOf(dupSecondId))
+
+    act(() => result.current.sortByName("desc"))
+    expect(result.current.items.map((item) => item.fileName)).toEqual([
+      "IMG_10.jpg", "IMG_2.jpg", "IMG_1.jpg", "DUP.jpg", "DUP.jpg"
+    ])
+    // 降序时同名文件仍保持原相对顺序
+    const descOrder = result.current.items.map((item) => item.id)
+    expect(descOrder.indexOf(dupFirstId)).toBeLessThan(descOrder.indexOf(dupSecondId))
+  })
+
+  it("sortByName 已是目标顺序时不产生撤销历史", async () => {
+    const { result, ids } = await importThree()
+    // a.jpg / b.jpg / c.jpg 已经是升序
+    act(() => result.current.sortByName("asc"))
+    expect(result.current.items.map((item) => item.id)).toEqual(ids)
+    // 只有导入这一条历史：撤销直接清空队列
+    act(() => result.current.undo())
+    expect(result.current.items).toHaveLength(0)
   })
 })
 

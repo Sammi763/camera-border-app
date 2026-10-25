@@ -1,8 +1,17 @@
 import { readdir, stat } from "node:fs/promises"
-import { extname, isAbsolute, join } from "node:path"
+import { dirname, extname, isAbsolute, join } from "node:path"
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron"
 import { IPC_CHANNELS, type ImageSourceResult } from "../types/desktopApi.js"
 import { composePackagedE2eImagePaths } from "./packagedE2ePaths.js"
+import {
+  composeExportDefaultPath,
+  getDialogMemoryFilePath,
+  readDialogMemory,
+  recallDialogDir,
+  recordDialogDir,
+  writeDialogMemory,
+  type DialogMemoryKind
+} from "./dialogMemory.js"
 
 const IMAGE_FILTERS = [
   {
@@ -24,6 +33,8 @@ const IMAGE_FILTERS = [
 type PackagedE2ePathKey =
   | "CAMBORDER_E2E_SAMPLE"
   | "CAMBORDER_E2E_RETRY_SAMPLE"
+  | "CAMBORDER_E2E_EXTRA_SAMPLES"
+  | "CAMBORDER_E2E_LOGO"
   | "CAMBORDER_E2E_QUEUE_DIR"
   | "CAMBORDER_E2E_OUTPUT"
   | "CAMBORDER_E2E_OUTPUT_DIR"
@@ -38,8 +49,26 @@ const getPackagedE2ePath = (key: PackagedE2ePathKey): string | null => {
 
 const getPackagedE2eImagePaths = (): readonly string[] => composePackagedE2eImagePaths(
   getPackagedE2ePath("CAMBORDER_E2E_SAMPLE"),
-  getPackagedE2ePath("CAMBORDER_E2E_RETRY_SAMPLE")
+  getPackagedE2ePath("CAMBORDER_E2E_RETRY_SAMPLE"),
+  getPackagedE2eExtraSamples()
 )
+
+/** 解析打包 E2E 明确声明的附加真实样片，格式错误必须让测试失败而不是静默丢弃。 */
+const getPackagedE2eExtraSamples = (): readonly string[] => {
+  if (process.env["CAMBORDER_E2E"] !== "1" || !app.isPackaged) return []
+  const raw = process.env["CAMBORDER_E2E_EXTRA_SAMPLES"]
+  if (raw === undefined) return []
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch (error) {
+    throw new Error(`CAMBORDER_E2E_EXTRA_SAMPLES 不是有效 JSON：${error instanceof Error ? error.message : String(error)}`)
+  }
+  if (!Array.isArray(parsed) || parsed.some((value) => typeof value !== "string" || !isAbsolute(value))) {
+    throw new Error("CAMBORDER_E2E_EXTRA_SAMPLES 必须是绝对路径字符串数组")
+  }
+  return parsed
+}
 
 /** 根据默认文件名扩展名选择导出格式过滤器。 */
 const getExportFilters = (defaultFileName: string): Electron.FileFilter[] => {
@@ -58,8 +87,22 @@ const getExportFilters = (defaultFileName: string): Electron.FileFilter[] => {
  *
  * 渲染进程不直接操作文件系统——通过 IPC 请求主进程打开系统对话框，
  * 仅返回绝对路径。遵循 ARCHITECTURE.md §1（前端不直接操作本地文件系统）。
+ *
+ * 目录记忆：导入/导出对话框从上次选择的位置打开；记忆读写失败静默回退，
+ * 绝不影响对话框本身。打包 E2E 替身路径不读写记忆。
  */
 export const registerFileDialogIpc = (): void => {
+  const memoryFilePath = getDialogMemoryFilePath()
+
+  /** 读取指定类型的上次目录；失败时 dialogMemory 已回退为 null。 */
+  const recallDir = (kind: DialogMemoryKind): string | null =>
+    recallDialogDir(readDialogMemory(memoryFilePath), kind)
+
+  /** 选择成功后写回目录记忆；写入失败静默忽略，不影响对话框返回值。 */
+  const rememberDir = (kind: DialogMemoryKind, dirPath: string): void => {
+    writeDialogMemory(memoryFilePath, recordDialogDir(readDialogMemory(memoryFilePath), kind, dirPath))
+  }
+
   ipcMain.handle(IPC_CHANNELS.SELECT_IMAGES, async (): Promise<string[]> => {
     const e2eSamples = getPackagedE2eImagePaths()
     if (e2eSamples.length > 0) {
@@ -71,21 +114,28 @@ export const registerFileDialogIpc = (): void => {
       return []
     }
 
+    const lastImportDir = recallDir("import")
     const result = await dialog.showOpenDialog(parent, {
       title: "选择图片",
       properties: ["openFile", "multiSelections"],
-      filters: IMAGE_FILTERS
+      filters: IMAGE_FILTERS,
+      ...(lastImportDir === null ? {} : { defaultPath: lastImportDir })
     })
 
-    if (result.canceled) {
+    if (result.canceled || result.filePaths.length === 0) {
       return []
     }
 
+    const firstPath = result.filePaths[0]
+    if (firstPath !== undefined) {
+      rememberDir("import", dirname(firstPath))
+    }
     return result.filePaths
   })
 
   /**
    * 导出保存路径选择对话框。
+   * 默认从上次导出目录打开（记忆目录 + 默认文件名）。
    * 返回用户选择的绝对路径；取消时返回 null。
    */
   ipcMain.handle(
@@ -101,9 +151,10 @@ export const registerFileDialogIpc = (): void => {
         return null
       }
 
+      const memory = readDialogMemory(memoryFilePath)
       const result = await dialog.showSaveDialog(parent, {
         title: "导出原图成品",
-        defaultPath: defaultFileName,
+        defaultPath: composeExportDefaultPath(memory, defaultFileName),
         filters: getExportFilters(defaultFileName)
       })
 
@@ -111,12 +162,14 @@ export const registerFileDialogIpc = (): void => {
         return null
       }
 
+      rememberDir("export", dirname(result.filePath))
       return result.filePath
     }
   )
 
   /**
-   * 导出目录选择对话框。
+   * 导出目录选择对话框（批量导出）。
+   * 默认打开上次导出目录；成功后写回记忆。
    * 返回用户选择的目录绝对路径；取消时返回 null。
    */
   ipcMain.handle(
@@ -132,16 +185,22 @@ export const registerFileDialogIpc = (): void => {
         return null
       }
 
+      const lastExportDir = recallDir("export")
       const result = await dialog.showOpenDialog(parent, {
         title: "选择导出目录",
-        properties: ["openDirectory", "createDirectory"]
+        properties: ["openDirectory", "createDirectory"],
+        ...(lastExportDir === null ? {} : { defaultPath: lastExportDir })
       })
 
       if (result.canceled || result.filePaths.length === 0) {
         return null
       }
 
-      return result.filePaths[0] ?? null
+      const dirPath = result.filePaths[0] ?? null
+      if (dirPath !== null) {
+        rememberDir("export", dirPath)
+      }
+      return dirPath
     }
   )
 
@@ -189,10 +248,12 @@ export const registerFileDialogIpc = (): void => {
         return null
       }
 
+      const lastImportDir = recallDir("import")
       const result = await dialog.showOpenDialog(parent, {
         title: "选择图片文件或文件夹",
         properties: ["openFile", "openDirectory", "multiSelections"],
-        filters: IMAGE_FILTERS
+        filters: IMAGE_FILTERS,
+        ...(lastImportDir === null ? {} : { defaultPath: lastImportDir })
       })
 
       if (result.canceled || result.filePaths.length === 0) {
@@ -209,6 +270,9 @@ export const registerFileDialogIpc = (): void => {
 
       if (hasExtension) {
         // 选中的是文件
+        if (firstPath !== undefined) {
+          rememberDir("import", dirname(firstPath))
+        }
         return {
           kind: "files",
           paths: result.filePaths.filter((p) => isSupportedImage(p))
@@ -219,6 +283,7 @@ export const registerFileDialogIpc = (): void => {
       if (firstPath === undefined) {
         return null
       }
+      rememberDir("import", firstPath)
       const images = await scanDirectoryImages(firstPath)
       return {
         kind: "directory",
@@ -242,16 +307,22 @@ export const registerFileDialogIpc = (): void => {
         return []
       }
 
+      const lastImportDir = recallDir("import")
       const result = await dialog.showOpenDialog(parent, {
         title: "选择图片文件",
         properties: ["openFile", "multiSelections"],
-        filters: IMAGE_FILTERS
+        filters: IMAGE_FILTERS,
+        ...(lastImportDir === null ? {} : { defaultPath: lastImportDir })
       })
 
-      if (result.canceled) {
+      if (result.canceled || result.filePaths.length === 0) {
         return []
       }
 
+      const firstPath = result.filePaths[0]
+      if (firstPath !== undefined) {
+        rememberDir("import", dirname(firstPath))
+      }
       return result.filePaths.filter((p) => isSupportedImage(p))
     }
   )
@@ -261,6 +332,10 @@ export const registerFileDialogIpc = (): void => {
   ipcMain.handle(
     IPC_CHANNELS.SELECT_LOGO_FILE,
     async (): Promise<string | null> => {
+      const e2eLogo = getPackagedE2ePath("CAMBORDER_E2E_LOGO")
+      if (e2eLogo !== null) {
+        return e2eLogo
+      }
       const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
       if (parent === undefined) return null
       const result = await dialog.showOpenDialog(parent, {
@@ -292,9 +367,11 @@ export const registerFileDialogIpc = (): void => {
         return null
       }
 
+      const lastImportDir = recallDir("import")
       const result = await dialog.showOpenDialog(parent, {
         title: "选择图片文件夹",
-        properties: ["openDirectory"]
+        properties: ["openDirectory"],
+        ...(lastImportDir === null ? {} : { defaultPath: lastImportDir })
       })
 
       if (result.canceled || result.filePaths.length === 0) {
@@ -306,6 +383,7 @@ export const registerFileDialogIpc = (): void => {
         return null
       }
 
+      rememberDir("import", dirPath)
       const images = await scanDirectoryImages(dirPath)
       return {
         kind: "directory",

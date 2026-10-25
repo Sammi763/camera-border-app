@@ -3,7 +3,13 @@ import path from "node:path"
 import { registerAllIpc } from "../ipc/index.js"
 import { cleanupHeicTempFiles } from "../ipc/imageConvert.js"
 import { JavaBridge } from "../engine/JavaBridge.js"
-import { resolveBundledJavaExecutable, resolveBundledLibRawExecutable } from "../engine/engineRuntime.js"
+import {
+  resolveBundledComponentManifest,
+  resolveBundledExifToolExecutable,
+  resolveBundledJavaExecutable,
+  resolveBundledFontsDirectory
+} from "../engine/engineRuntime.js"
+import { isBundledHeicDecoderAvailable } from "../ipc/imageConvert.js"
 import { ENGINE_READY_TIMEOUT_MS } from "../engine/engineConfig.js"
 import type { EngineConfig } from "../engine/engineConfig.js"
 import { engineBaseUrl, engineManaged, enginePort } from "../config/devMode.js"
@@ -32,14 +38,19 @@ const buildBridge = (): JavaBridge => {
     console.warn("[app] 开发模式未找到随包 Java Runtime，回退到系统 PATH 中的 java。")
   }
 
-  // 随包 LibRaw 原生程序：存在时经环境变量注入引擎（RAW 真实显影）；
-  // 缺失时不注入——引擎走嵌入预览降级并在 sourceDecode.warning 说明。
-  const bundledLibRaw = resolveBundledLibRawExecutable()
-  const engineEnv: Record<string, string> | undefined = bundledLibRaw !== null
-    ? { CAMBORDER_LIBRAW_PATH: bundledLibRaw }
-    : undefined
-  if (bundledLibRaw === null) {
-    console.warn("[app] 未找到随包 LibRaw 原生程序，RAW 将降级为嵌入预览。")
+  // 专业外部组件只在随包文件真实存在时注入；缺失时能力探测为 false，
+  // 不回退到用户 PATH，也不把不可用能力暴露成可勾选的开关。
+  const bundledExifTool = resolveBundledExifToolExecutable()
+  const bundledManifest = resolveBundledComponentManifest()
+  const bundledFonts = resolveBundledFontsDirectory()
+  const engineEnv: Record<string, string> = {
+    CAMBORDER_HEIC_DECODER_AVAILABLE: String(isBundledHeicDecoderAvailable()),
+    CAMBORDER_BUNDLED_FONTS_DIR: bundledFonts ?? "",
+    ...(bundledExifTool === null ? {} : { CAMBORDER_EXIFTOOL_PATH: bundledExifTool }),
+    ...(bundledManifest === null ? {} : { CAMBORDER_COMPONENT_MANIFEST: bundledManifest })
+  }
+  if (bundledExifTool === null) {
+    console.warn("[app] 未找到随包 ExifTool，专业元数据能力将保持不可用。")
   }
 
   const base = {

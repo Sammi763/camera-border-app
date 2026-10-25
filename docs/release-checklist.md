@@ -1,15 +1,17 @@
 # 发布验收清单（打包产物与干净机器验证）
 
-> 适用范围：`pnpm run package` 产出的 macOS arm64/x64 `.dmg` 与 Windows x64 `.exe`。
+> 适用范围：`pnpm run package` 产出的正式 macOS arm64 `.dmg`，以及保留的 macOS x64 / Windows x64 候选包。
 > 打包链路见 [CONTRIBUTING.md](../CONTRIBUTING.md)；架构约束见 [ARCHITECTURE.md](../ARCHITECTURE.md)。
 > 产品契约唯一权威见 [docs/prd.md §0](prd.md)；本清单只记录如何验收，不扩展支持范围。
+> 发布角色与 blocker 语义以 [`docs/release-scope.json`](release-scope.json) 为准：正式目标只有
+> `darwin-arm64`；Windows 候选状态固定为 `SIMULATED`，不能写成平台验收 `PASS`。
 
 ## 0. 产品契约门槛（阶段 0 冻结）
 
-发布前不得把“代码路径存在”写成“产品支持”。最终发行平台、输入/输出格式、三个导出
+发布前不得把“代码路径存在”写成“产品支持”。正式发行平台、输入/输出格式、三个导出
 档位和术语必须与 [docs/prd.md §0](prd.md) 一致：
 
-- 平台仅为 macOS arm64、macOS x64、Windows x64。
+- 正式发布平台仅为 macOS arm64；macOS x64 与 Windows x64 是不阻塞正式发布的候选目标，Windows 状态为 `SIMULATED`。
 - 输入为 JPEG、PNG、TIFF、HEIC/HEIF，以及只读取内嵌 JPEG 预览的 RAW。
 - 输出为 JPEG 8-bit、PNG 8/16-bit、TIFF 8/16-bit。
 - 快速分享：JPEG 92、长边 2048、sRGB、移除 GPS/位置。
@@ -19,8 +21,32 @@
 - RAW 不做真实显影；没有可读取内嵌 JPEG 时必须明确失败。
 - 修图、云同步、登录、自动更新和真实 RAW 显影不属于产品范围。
 
-只有三种最终平台均通过下方安装、离线和样片验收，格式、位深、ICC 和元数据才可标记
-为“正式支持”；否则只能记录为“当前已实现”或“未验收”。
+只有 macOS arm64 正式目标通过下方安装、离线和样片验收，才可进入正式发布门；候选目标
+的证据单独记录。正式目标证据缺失时只能记录为“当前已实现”或“未验收”。
+
+## 0.1 阶段 0 本地基线
+
+阶段 0 只读取当前 checkout 和 `photos/`，不改产品运行行为。证据目录必须位于被 Git
+忽略的 `.local/stage0/` 下，不能上传或提交原始照片、EXIF/GPS 或截图：
+
+```bash
+EVIDENCE=.local/stage0/0.1.0-$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short HEAD)
+mkdir -p "$EVIDENCE"
+node scripts/generate-photo-manifest.mjs \
+  --input photos \
+  --output "$EVIDENCE/photo-manifest.json" \
+  --run-info-output "$EVIDENCE/run-info.json"
+# 先按当前 checkout 构建 macOS arm64 app，再执行真实 Renderer CDP 基线：
+node scripts/capture-stage0-baseline.mjs \
+  --app "electron/release/macos-arm64/mac-arm64/Camera Border.app" \
+  --output "$EVIDENCE" \
+  --manifest "$EVIDENCE/photo-manifest.json" \
+  --run-info "$EVIDENCE/run-info.json"
+```
+
+必须生成 `photo-manifest.json`、`run-info.json`、`baseline-geometry.json`、`issue-baseline.md`、
+四张 PNG 和 `verification-report.json`。`issue-baseline.md` 只登记几何异常，不能在本阶段
+顺手修复 Electron、Frontend 或 Java Engine。
 
 ## 验收分阶段
 
@@ -37,7 +63,7 @@ WINDOWS_NATIVE_ACCEPTANCE: DEFERRED_EXTERNAL
 NEXT_STAGE_ALLOWED: yes
 ```
 
-### T-05B：Windows 平台验收
+### T-05B：Windows 候选平台验收
 
 由外部 Windows x64 runner、云主机或其他验收方执行。触发最终 HEAD 的
 `windows-package.yml`，配置 `RUNTIME_SHA256_WIN_X64`，保存 workflow URL、构建日志、
@@ -46,13 +72,16 @@ NEXT_STAGE_ALLOWED: yes
 macOS 交叉构建结果冒充原生通过。
 
 ```text
-STAGE: T-05B Windows native acceptance
-VERDICT: PASS | BLOCKED
+STAGE: T-05B Windows candidate acceptance
+VERDICT: SIMULATED | BLOCKED
 WINDOWS_RUN_URL: ...
 NATIVE_INSTALL_SMOKE: pass | not-run
 REAL_USER_PATH: pass | not-run
-NEXT_STAGE_ALLOWED: yes | no
+RELEASE_STATUS: SIMULATED
 ```
+
+Windows 原生 runner 的结果可以作为后续候选证据保存，但本阶段报告固定写入
+`releaseStatus=SIMULATED`；安装包文件哈希 `installerIntegrity=PASS` 只代表文件完整性。
 
 ## 1. 打包前检查
 
@@ -112,12 +141,23 @@ pnpm package && pnpm e2e:packaged
 
 该 E2E 会启动实际打包应用的可执行文件，确认随包 JRE 存在（macOS 为
 `resources/java-runtime/Contents/Home/bin/java`，Windows 为 `resources/java-runtime/bin/java.exe`）
-并由托管 `JavaBridge` 启动；它不启动 Vite、不连接系统 Java，也不把开发端口注入应用。固定样片默认使用 `photos/78330006.jpg`，可用绝对路径通过
+并由托管 `JavaBridge` 启动；它不启动 Vite、不连接系统 Java，也不把开发端口注入应用。固定样片默认使用 `fixtures/stage4/real-exif-canon-m03a9518.jpg`，来源、许可和 SHA-256 见 [fixtures/stage4/README.md](../fixtures/stage4/README.md)，可用绝对路径通过
 `CAMBORDER_E2E_SAMPLE` 覆盖；导出文件默认写入隔离临时目录，可用
 `CAMBORDER_E2E_OUTPUT` 覆盖。
 
-这条命令的成功结果只记录当前 macOS 架构的阶段 1 验收；它不表示 macOS x64 或 Windows
-x64 已实测。两个平台仍须在各自原生环境按同一命令完成独立验收。
+方向与统一几何基线另执行：
+
+```bash
+pnpm package && node scripts/capture-stage1-baseline.mjs
+```
+
+该脚本只使用当前 checkout 生成的 macOS arm64 应用，固定验收六张真实 Orientation=8 的 ARW、
+「适应画布」和 `actual/100%` 两态、Canvas/Java/导出的有向几何，并用独立 ExifTool 检查六个
+ARW 导出结果。证据保存在 `.local/stage1/<version>-<timestamp>-<commit>/`，不进入 Git；该目录
+中的 `verification-report.status` 独立于最终发布报告状态。
+
+这条命令的成功结果只记录当前 macOS arm64 正式目标的阶段 1 验收；它不表示 macOS x64 或
+Windows x64 候选包已实测。两个候选目标的结果必须按各自环境独立记录，且不改变正式门。
 
 - [ ] 页面地址为 `app://app/...`，不是 `http://localhost` 或 Vite 地址；
 - [ ] 页面运行时只看到 `engine.managed=true`，Renderer 没有 JavaBridge 绝对地址；
@@ -128,8 +168,8 @@ x64 已实测。两个平台仍须在各自原生环境按同一命令完成独�
 - [ ] E2E 在应用允许的最小窗口尺寸下确认照片仍可见，或显示「预览区域不足」；不得出现
       「引擎预览已同步」但只有纯边框画布的假成功状态；
 - [ ] 失败时保留 `CAMBORDER_E2E_KEEP_TEMP=1` 的临时用户数据和应用日志，用于定位打包问题；
-- [ ] macOS arm64、macOS x64、Windows x64 分别在对应原生环境执行；一个平台通过不能替代
-      其它平台验收。
+- [ ] macOS arm64 在对应原生环境执行并作为正式 blocker；macOS x64 / Windows x64 的候选结果
+      单独记录，一个候选平台通过不能替代正式目标验收。
 
 ### 真实构建记录（2026-08-24，macOS arm64 开发机）
 
@@ -266,14 +306,15 @@ x64 已实测。两个平台仍须在各自原生环境按同一命令完成独�
 
 macOS：
 
-- [ ] arm64 与 x64 两个 `.dmg` 分别在对应架构机器上冒烟通过；
-- [ ] 两个架构均完成 JPEG、PNG、TIFF、HEIC/HEIF 和 RAW 内嵌 JPEG 预览的样片回归；
+- [ ] arm64 `.dmg` 在对应机器上冒烟通过，并作为正式发布 blocker；
+- [ ] x64 `.dmg` 作为候选包单独记录，不阻塞正式发布；
+- [ ] arm64 完成 JPEG、PNG、TIFF、HEIC/HEIF 和 RAW 内嵌 JPEG 预览的样片回归；x64 结果可选；
 - [ ] 首次打开 Gatekeeper 提示的处理方式已写入发布说明
       （未签名构建需右键打开或 `xattr -cr`）。
 
 Windows：
 
-- [ ] Windows 10/11 x64 的 `.exe`（NSIS）安装、启动、卸载正常；
+- [ ] Windows 10/11 x64 的 `.exe`（NSIS）候选包安装、启动、卸载结果单独记录；报告状态固定为 `SIMULATED`；
 - [ ] 原生 Windows 自动冒烟：
 
 ```powershell
@@ -282,7 +323,7 @@ Windows：
 
       脚本只验证随包资源、快捷方式、引擎健康、Java 退出和卸载，不修改 Defender/SmartScreen；
       双击图形化安装、重启 Windows、核心照片流程仍需人工勾选；
-- [ ] x64 包在 Intel/AMD Windows 10/11 上通过；Windows ARM64 不属于最终发行目标；
+- [ ] x64 包的 Intel/AMD Windows 10/11 结果仅作为候选证据；Windows ARM64 不属于发行目标；
 - [ ] 杀毒软件误报情况已记录（如有）。
 
 ## 4. 样片回归
@@ -293,7 +334,7 @@ Windows：
 已经完成格式验收。
 
 - [ ] 每个矩阵条目完成「导入 → 预览 → 单图导出 → 批量导出」；
-- [ ] 三个平台均验证三个固定导出档位，不用交叉构建结果冒充原生验收；
+- [ ] macOS arm64 正式目标验证三个固定导出档位；候选平台结果单独记录，不用交叉构建结果冒充原生验收；
 - [ ] 快速分享移除 GPS/位置，标准交付和高保真归档保留 GPS/位置；
 - [ ] RAW 仅以内嵌 JPEG 预览作为图像来源，无内嵌 JPEG 时明确失败；NEF、CR2、CR3、ARW、
       RAF、DNG、ORF、RW2、PEF 九种扩展名各有一正一负真实相机样片；
@@ -305,6 +346,72 @@ Windows：
 - Windows 当前为未签名 x64 NSIS 测试包，首次下载可能触发 SmartScreen；
 - macOS 当前未配置 Developer ID 代码签名与公证；
 - 自动更新不在产品范围内；
-- 当前 HEIC/HEIF 在 Windows 的正式链路仍待样片验收；最终目标是三种平台均按 §0 支持；
-- RAW 不做真实显影，不随包携带或依赖 LibRaw 显影程序，只验收内嵌 JPEG 预览；
+- 当前 HEIC/HEIF 在 Windows 候选链路仍待样片验收；正式发布门只检查 macOS arm64；
+- RAW 不做真实显影，不随包携带或依赖外部显影程序，只验收内嵌 JPEG 预览；
 - 浏览器降级模式仅用于开发验证，打包产物以 Electron 模式为唯一正式入口。
+
+## 6. 阶段 6：跨平台安装与最终冻结验收
+
+本阶段的发布对象是安装包，不是源码工作区。正式目标必须从自己的安装包开始验证；候选目标
+按同样格式记录但不参与正式 blocker：
+安装、首次启动、选择文件/文件夹、JPEG/TIFF/HEIC/RAW 内嵌 JPEG 导入与预览、EXIF
+和拍摄信息预设、版式与文字修改、三档单图/批量导出、重启恢复、引擎故障与恢复、卸载。
+不得用另一平台的交叉构建结果替代原生安装后证据。
+
+### 6.1 构建和随包资源
+
+- [ ] 构建 macOS arm64 正式包，并按需要保留 macOS x64 / Windows x64 候选包；每个目标目录只保留本次版本产物；
+- [ ] 安装包包含与目标平台匹配的 JRE、Java Engine、ExifTool、HEIC 解码助手、字体及许可证；
+- [ ] JRE 的 `release`、`NOTICE` 和 Java Engine 的 `Implementation-Version` 随包存在，且
+      清单中的厂商、版本、架构与实际资源一致；不得通过删除 `release` 元数据来绕过校验；
+- [ ] `package-manifest.json` 记录版本、完整 40 位源码 commit、目标平台/架构、组件版本、许可证和 SHA-256；
+- [ ] `Camera-Border-*.sha256` 与 `*.manifest.json` 已生成；可用 `pnpm release:report` 汇总为
+      `electron/release/release-report.json`；正式目标安装后 E2E、清洁系统、断网和用户测试证据的
+      汇总格式见 [阶段 6 证据格式](stage6-evidence.md)。报告默认对尚未取得的安装后证据标记
+      `NOT_RUN`，不得改写成通过；报告生成时还会重新核对安装包字节数、SHA-256 和 sidecar，
+      不能用过期或重复目标清单冒充发布产物；
+- [ ] 安装包内没有开发模式、测试入口、绝对路径或内部端口暴露；UI 只展示能力探测为真的控件；
+- [ ] 构建不依赖最终用户安装 Java、ExifTool、系统 HEIC 扩展、Node.js、pnpm 或 Python。
+
+### 6.2 正式目标与候选目标安装后 E2E
+
+- [ ] macOS arm64 正式包在已安装应用上完成核心流程，至少包含 JPEG、TIFF、HEIC、RAW 内嵌 JPEG；
+- [ ] macOS x64 / Windows x64 候选结果可单独保存；Windows 的报告状态必须为 `SIMULATED`；
+- [ ] 独立 ExifTool 读取输出的 Width/Height、Orientation、BitDepth、ColorSpace、EXIF/XMP/IPTC/GPS/ICC/DPI；
+- [ ] 源图 SHA-256 导出前后一致；应用重启后队列、版式和当前导出档位恢复；
+- [ ] 手动结束 Java Engine 后 UI 显示明确失败原因，重试后恢复；卸载后程序目录删除、用户数据按约定保留；
+- [ ] 无系统 Java、ExifTool 或 HEIC 扩展时仍能启动并完成随包能力范围内的核心流程；
+- [ ] 断网安装、启动、导入、预览、编辑和导出均通过，运行期没有外网请求；
+- [ ] 组件架构与目标平台一致，字体/许可证文件实际存在；Windows 原生证据由
+      `scripts/smoke-test-windows.ps1` 加已安装 `pnpm e2e:packaged` 提供。
+
+### 6.3 专业保真冻结
+
+- [ ] sRGB、Adobe RGB、无 ICC 样片分别完成预览和导出；无 ICC 按 sRGB 处理并写入报告；
+- [ ] JPEG 固定 8-bit；PNG/TIFF 用独立工具确认真实 8/16-bit；8-bit 源不得报告为有效 16-bit；
+- [ ] 分享档移除 GPS/位置；标准交付和高保真归档保留 EXIF/XMP/IPTC/GPS/ICC/DPI，且移除旧尺寸缩略图；
+- [ ] 固定档位能力不足时预检失败；外部工具超时、非零退出或输出无效时任务失败并清理临时文件；不存在
+      `completed + SKIPPED`；
+- [ ] RAW 只使用实际抽取的内嵌 JPEG，报告写明像素来源和尺寸；不得存在 `raw-developed` 或 LibRaw 生产路径；
+- [ ] 导出完成响应包含已核验的 `FidelityReport`，预检摘要与实际输出事实一致。
+
+### 6.4 摄影用户首次使用测试
+
+- [ ] 至少 5 名目标摄影用户完成记录，至少 4/5 人不看帮助完成首次导入、选版式和导出；
+- [ ] 中位首次出图时间不超过 3 分钟；没有人误认为 RAW 是真实显影；
+- [ ] 所有人能理解“当前图片”和“批量已选”的区别；阻断/高频问题修复后重新测试；
+- [ ] 最终报告记录参与者匿名编号、任务完成率、首次出图时间、中止点和修复回归结果。
+
+### 6.5 最终冻结门
+
+签名、公证和自动更新明确不在本阶段发布清单内；除这三项外，正式目标条目必须有证据。
+最终验收必须输出以下三行，不能用条件性文字替代：
+
+```yaml
+VERDICT: PASS
+NEXT_STAGE_ALLOWED: yes
+RELEASE_READY: yes
+```
+
+正式目标安装后证据缺失、P0/P1/P2 非零、专业样片矩阵未通过、摄影用户门槛未达成，均保持
+`NOT_READY`/`FAIL`，不得发布；候选目标缺失不单独阻塞正式门。

@@ -179,6 +179,87 @@ describe("PreviewPanel 单图导出（EXIF 等待 + 解析一致）", () => {
     expect(canvas.dataset["previewBorderBottom"]).toBe("80")
   })
 
+  it("有引擎源图事实时显示导出像素尺寸，不把预览尺寸冒充输出尺寸", async () => {
+    const state = makeDecodedActiveState()
+    if (state.kind !== "active") throw new Error("测试需要 active 预览状态")
+
+    render(
+      <PreviewPanel
+        state={{
+          ...state,
+          engineResponse: {
+            status: "ok",
+            message: "",
+            previewAvailable: false,
+            previewUrl: "",
+            fidelityReport: {
+              phase: "preflight",
+              verified: true,
+              source: {
+                width: 5035,
+                height: 3339,
+                bitDepth: 8,
+                orientation: 1
+              }
+            }
+          }
+        }}
+        settings={makeSettings()}
+        hasSelectedImage={true}
+        queueItems={[makeItem()]}
+        batchExportItems={[]}
+        batchExportLabel=""
+        resolveQueueItem={vi.fn(() => ({ textOverride: null, resolvedLayers: [], brand: null }))}
+        prepareExifForExport={vi.fn(async () => {})}
+        showExportControls={false}
+      />
+    )
+
+    await waitFor(() => expect(screen.getByTestId("preview-output-size").textContent).toContain("5115×3459 px"))
+    expect(screen.getByTestId("preview-css-size").textContent).toContain("CSS px")
+  })
+
+  it("优先使用解码边界报告的全分辨率有向尺寸", async () => {
+    const state = makeDecodedActiveState()
+    if (state.kind !== "active") throw new Error("测试需要 active 预览状态")
+
+    render(
+      <PreviewPanel
+        state={{
+          ...state,
+          engineResponse: {
+            status: "ok",
+            message: "",
+            previewAvailable: false,
+            previewUrl: "",
+            sourceDecode: {
+              mode: "standard",
+              format: "jpeg",
+              warning: null,
+              fullWidth: 6000,
+              fullHeight: 4000
+            },
+            fidelityReport: {
+              phase: "completed",
+              verified: true,
+              source: { width: 1280, height: 853, bitDepth: 8, orientation: 1 }
+            }
+          }
+        }}
+        settings={makeSettings()}
+        hasSelectedImage={true}
+        queueItems={[makeItem()]}
+        batchExportItems={[]}
+        batchExportLabel=""
+        resolveQueueItem={vi.fn(() => ({ textOverride: null, resolvedLayers: [], brand: null }))}
+        prepareExifForExport={vi.fn(async () => {})}
+        showExportControls={false}
+      />
+    )
+
+    await waitFor(() => expect(screen.getByTestId("preview-output-size").textContent).toContain("6080×4120 px"))
+  })
+
   it("导出前等待 EXIF，并用 resolveQueueItem 的解析结果构建 RenderRecipe", async () => {
     const renderJobBodies: { items: readonly { recipe: { imagePath: string; texts: readonly { content: string }[] } }[] }[] = []
     const callLog: string[] = []
@@ -830,7 +911,7 @@ describe("PreviewPanel 单图导出（EXIF 等待 + 解析一致）", () => {
               status: "completed",
               outputPath: `/tmp/${index}.jpg`,
               actualFormat: "jpeg",
-              metadataPreservation: { status: "SKIPPED", message: "当前格式不支持 EXIF" }
+              metadataPreservation: { status: "UNSUPPORTED", message: "当前格式不包含可复制的 EXIF" }
             }))
           })
         }
@@ -869,7 +950,7 @@ describe("PreviewPanel 单图导出（EXIF 等待 + 解析一致）", () => {
       await waitFor(() => {
         expect(screen.getByText(/批量导出完成/)).toBeTruthy()
       }, { timeout: 3000 })
-      expect(screen.getAllByText(/EXIF：当前格式不支持 EXIF/)).toHaveLength(3)
+      expect(screen.getAllByText(/EXIF：当前格式不包含可复制的 EXIF/)).toHaveLength(3)
     })
 
     it("批量全部成功：发「批量导出完成」+ 成功数", async () => {
@@ -1070,4 +1151,195 @@ describe("PreviewPanel 单图导出（EXIF 等待 + 解析一致）", () => {
     })
   })
 })
+})
+
+describe("PreviewPanel 编辑态叠加（原图 / 网格 / 裁切构图）", () => {
+  beforeEach(() => {
+    class ResizeObserverStub {
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    }
+    vi.stubGlobal("ResizeObserver", ResizeObserverStub)
+    vi.stubGlobal("URL.createObjectURL", () => "blob:fake")
+    vi.stubGlobal("URL.revokeObjectURL", () => {})
+  })
+
+  afterEach(() => {
+    delete (window as unknown as { desktop?: unknown }).desktop
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  const renderPreview = (props: Partial<ComponentProps<typeof PreviewPanelView>> = {}): ReturnType<typeof render> => {
+    return render(
+      <PreviewPanel
+        state={makeDecodedActiveState()}
+        settings={makeSettings()}
+        hasSelectedImage={true}
+        queueItems={[makeItem()]}
+        batchExportItems={[]}
+        batchExportLabel=""
+        resolveQueueItem={vi.fn(() => ({ textOverride: null, resolvedLayers: [], brand: null }))}
+        prepareExifForExport={vi.fn(async () => {})}
+        showExportControls={false}
+        {...props}
+      />
+    )
+  }
+
+  it("按住 \\ 显示无边框原图叠加，松开恢复；切图后自动退出", () => {
+    const { rerender } = renderPreview()
+
+    expect(screen.queryByTestId("preview-original-overlay")).toBeNull()
+    fireEvent.keyDown(window, { key: "\\" })
+    expect(screen.getByTestId("preview-original-overlay")).toBeDefined()
+    fireEvent.keyUp(window, { key: "\\" })
+    expect(screen.queryByTestId("preview-original-overlay")).toBeNull()
+
+    // 工具栏按钮按住同样生效
+    const holdButton = screen.getByRole("button", { name: "原图" })
+    fireEvent.pointerDown(holdButton)
+    expect(screen.getByTestId("preview-original-overlay")).toBeDefined()
+    fireEvent.pointerUp(holdButton)
+    expect(screen.queryByTestId("preview-original-overlay")).toBeNull()
+
+    // 切换图片时退出叠加状态
+    fireEvent.keyDown(window, { key: "\\" })
+    const nextState = makeDecodedActiveState()
+    if (nextState.kind !== "active") throw new Error("测试需要 active 预览状态")
+    rerender(
+      <PreviewPanel
+        state={{ ...nextState, filePath: "/photos/B.jpg", fileName: "B.jpg" }}
+        settings={makeSettings()}
+        hasSelectedImage={true}
+        queueItems={[makeItem()]}
+        batchExportItems={[]}
+        batchExportLabel=""
+        resolveQueueItem={vi.fn(() => ({ textOverride: null, resolvedLayers: [], brand: null }))}
+        prepareExifForExport={vi.fn(async () => {})}
+        showExportControls={false}
+      />
+    )
+    expect(screen.queryByTestId("preview-original-overlay")).toBeNull()
+  })
+
+  it("网格开关切换 aria-pressed 状态", () => {
+    renderPreview()
+    const gridButton = screen.getByRole("button", { name: "网格" })
+    expect(gridButton.getAttribute("aria-pressed")).toBe("false")
+    fireEvent.click(gridButton)
+    expect(gridButton.getAttribute("aria-pressed")).toBe("true")
+    fireEvent.click(gridButton)
+    expect(gridButton.getAttribute("aria-pressed")).toBe("false")
+  })
+
+  it("裁切模式下在图片区域拖动更新焦点并标记用户修改；非裁切保持平移", () => {
+    const onUpdateImagePlacement = vi.fn()
+    const cropSettings: RenderSettings = {
+      ...makeSettings(),
+      borderTop: 0,
+      borderBottom: 0,
+      borderLeft: 0,
+      borderRight: 0,
+      imagePlacement: { mode: "fill", focalX: 0.5, focalY: 0.5, rotation: 0, targetAspectRatio: 1 }
+    }
+    const { container } = renderPreview({ settings: cropSettings, onUpdateImagePlacement })
+    const wrapper = container.querySelector<HTMLElement>(".previewCanvasWrapper")!
+
+    // 浏览器在按住左键拖动时 mousemove 的 buttons=1，jsdom fireEvent 需显式模拟
+    fireEvent.mouseDown(wrapper, { button: 0, buttons: 1, clientX: 0.4, clientY: 0.6 })
+    expect(onUpdateImagePlacement).toHaveBeenCalledWith({
+      imagePlacement: expect.objectContaining({ mode: "fill", focalX: 0.4, focalY: 0.6 })
+    }, { historyTag: "image-placement-drag-1" })
+
+    fireEvent.mouseMove(wrapper, { buttons: 1, clientX: 0.2, clientY: 0.8 })
+    expect(onUpdateImagePlacement).toHaveBeenLastCalledWith({
+      imagePlacement: expect.objectContaining({ focalX: 0.2, focalY: 0.8 })
+    }, { historyTag: "image-placement-drag-1" })
+
+    fireEvent.mouseUp(wrapper)
+    // 松开后不再更新焦点
+    fireEvent.mouseMove(wrapper, { clientX: 0.9, clientY: 0.9 })
+    expect(onUpdateImagePlacement).toHaveBeenCalledTimes(2)
+  })
+
+  it("拖动过程中无按键的 mousemove 立即结束手势，不更新焦点", () => {
+    const onUpdateImagePlacement = vi.fn()
+    const cropSettings: RenderSettings = {
+      ...makeSettings(),
+      borderTop: 0,
+      borderBottom: 0,
+      borderLeft: 0,
+      borderRight: 0,
+      imagePlacement: { mode: "fill", focalX: 0.5, focalY: 0.5, rotation: 0, targetAspectRatio: 1 }
+    }
+    const { container } = renderPreview({ settings: cropSettings, onUpdateImagePlacement })
+    const wrapper = container.querySelector<HTMLElement>(".previewCanvasWrapper")!
+
+    fireEvent.mouseDown(wrapper, { button: 0, buttons: 1, clientX: 0.4, clientY: 0.6 })
+    expect(onUpdateImagePlacement).toHaveBeenCalledTimes(1)
+
+    // buttons=0（如原生拖拽逃逸后重入）必须结束手势且不再应用焦点
+    fireEvent.mouseMove(wrapper, { buttons: 0, clientX: 0.2, clientY: 0.8 })
+    fireEvent.mouseMove(wrapper, { buttons: 1, clientX: 0.1, clientY: 0.9 })
+    expect(onUpdateImagePlacement).toHaveBeenCalledTimes(1)
+  })
+
+  it("未提供 onUpdateImagePlacement 时裁切拖动回退为画布平移语义", () => {
+    const cropSettings: RenderSettings = {
+      ...makeSettings(),
+      borderTop: 0,
+      borderBottom: 0,
+      borderLeft: 0,
+      borderRight: 0,
+      imagePlacement: { mode: "fill", focalX: 0.5, focalY: 0.5, rotation: 0, targetAspectRatio: 1 }
+    }
+    const { container } = renderPreview({ settings: cropSettings })
+    const wrapper = container.querySelector<HTMLElement>(".previewCanvasWrapper")!
+
+    // 不应抛异常：按下与拖动按平移语义处理
+    fireEvent.mouseDown(wrapper, { button: 0, clientX: 0.4, clientY: 0.6 })
+    fireEvent.mouseMove(wrapper, { clientX: 0.5, clientY: 0.7 })
+    fireEvent.mouseUp(wrapper)
+  })
+})
+
+describe("PreviewPanel 网格与导出一致性", () => {
+  beforeEach(() => {
+    class ResizeObserverStub {
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    }
+    vi.stubGlobal("ResizeObserver", ResizeObserverStub)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it("开启构图辅助线不改变画布上的导出配方诊断快照（网格只在绘制层叠加）", () => {
+    render(
+      <PreviewPanel
+        state={makeDecodedActiveState()}
+        settings={makeSettings()}
+        hasSelectedImage={true}
+        queueItems={[makeItem()]}
+        batchExportItems={[]}
+        batchExportLabel=""
+        resolveQueueItem={vi.fn(() => ({ textOverride: null, resolvedLayers: [], brand: null }))}
+        prepareExifForExport={vi.fn(async () => {})}
+        showExportControls={false}
+      />
+    )
+    const canvas = document.querySelector("canvas.previewCanvas") as HTMLCanvasElement
+    const snapshotBefore = JSON.stringify(canvas.dataset)
+
+    fireEvent.click(screen.getByRole("button", { name: "网格" }))
+    expect(screen.getByRole("button", { name: "网格" }).getAttribute("aria-pressed")).toBe("true")
+
+    expect(JSON.stringify(canvas.dataset)).toBe(snapshotBefore)
+  })
 })

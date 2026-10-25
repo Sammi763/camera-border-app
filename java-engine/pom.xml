@@ -18,6 +18,7 @@
 
   <properties>
     <java.version>11</java.version>
+    <twelvemonkeys.version>3.14.0</twelvemonkeys.version>
   </properties>
 
   <dependencies>
@@ -25,13 +26,32 @@
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-web</artifactId>
     </dependency>
-    <!-- EXIF 读取 + RAW 嵌入式预览提取（NEF/CR2/CR3/ARW/RAF/DNG/ORF/RW2/PEF）。
-         ICC/输出位深由当前 ImageEncoder 的格式化路径负责；TIFF 元数据写回能力
-         仍由导出结果明确报告是否降级，不在依赖注释中误称为已全部支持。 -->
+    <!-- EXIF 读取与 RAW 内嵌 JPEG 识别；生产环境不做 RAW 传感器显影。 -->
     <dependency>
       <groupId>com.drewnoakes</groupId>
       <artifactId>metadata-extractor</artifactId>
       <version>2.19.0</version>
+    </dependency>
+    <!-- 固定版本的 ImageIO 插件：真实 TIFF 8/16-bit 读写与 metadata 支持。 -->
+    <dependency>
+      <groupId>com.twelvemonkeys.imageio</groupId>
+      <artifactId>imageio-core</artifactId>
+      <version>${twelvemonkeys.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.twelvemonkeys.imageio</groupId>
+      <artifactId>imageio-metadata</artifactId>
+      <version>${twelvemonkeys.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.twelvemonkeys.imageio</groupId>
+      <artifactId>imageio-jpeg</artifactId>
+      <version>${twelvemonkeys.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.twelvemonkeys.imageio</groupId>
+      <artifactId>imageio-tiff</artifactId>
+      <version>${twelvemonkeys.version}</version>
     </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>

@@ -1,165 +1,112 @@
 /**
  * 预览视口纯状态逻辑（不依赖 React）。
  *
- * 视口语义：
- * - fit：画布填满容器，渲染器将图片缩放到容器内（scale = 1.0）
- * - actual（100%）：画布按图片+边框的自然像素尺寸渲染，
- *   scale = max(naturalW / containerW, naturalH / containerH)
- *   确保 1 图片像素 = 1 画布像素，画布可能溢出容器
- * - custom：用户自定义缩放比例
+ * 视口只有两种模式：
+ * - fit：Canvas 的逻辑尺寸等于容器尺寸，渲染器在其中等比适应；
+ * - actual：Canvas 的逻辑尺寸等于自然合成像素尺寸，scale 固定为 1，溢出时可拖拽。
  *
- * 所有缩放、拖拽、钳制逻辑分别使用 width/height，不做单一值近似。
+ * CSS 显示尺寸、Canvas backing store 和自然导出尺寸由组件分别记录；这里仅管理
+ * actual Canvas 相对于容器的二维偏移，禁止重新引入滚轮或 custom 缩放状态。
  */
 
-/** 最小缩放比例。 */
-export const MIN_SCALE = 0.05
+export type ViewportMode = "fit" | "actual"
 
-/** 最大缩放比例。 */
-export const MAX_SCALE = 16.0
-
-/** 缩放灵敏度（每次滚轮事件的缩放步进）。 */
-export const WHEEL_ZOOM_STEP = 0.15
-
-/** 视口模式。 */
-export type ViewportMode = "fit" | "actual" | "custom"
-
-/** 视口状态。 */
 export type ViewportState = {
   readonly mode: ViewportMode
-  readonly scale: number
+  /** actual 模式固定为 1；保留字段是为了让诊断和现有调用方保持清晰。 */
+  readonly scale: 1
   readonly offsetX: number
   readonly offsetY: number
 }
 
-/** 容器和图片的二维尺寸信息。 */
 export type ViewportDimensions = {
   readonly containerW: number
   readonly containerH: number
+  /** 自然合成 Canvas 的逻辑像素尺寸（包含边框）。 */
   readonly naturalW: number
   readonly naturalH: number
 }
 
-/**
- * 钳制缩放比例到有效范围。
- */
-export const clampScale = (scale: number): number => {
-  if (!Number.isFinite(scale)) {
-    return 1.0
-  }
-  return Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale))
-}
+const isValidDimensions = (dims: ViewportDimensions): boolean =>
+  Number.isFinite(dims.containerW) && Number.isFinite(dims.containerH)
+  && Number.isFinite(dims.naturalW) && Number.isFinite(dims.naturalH)
+  && dims.containerW > 0 && dims.containerH > 0
+  && dims.naturalW > 0 && dims.naturalH > 0
 
-/**
- * 钳制单轴偏移量，确保画布边缘不会完全拖出容器。
- *
- * @param offset 当前偏移
- * @param canvasSize 画布在该轴的像素尺寸
- * @param containerSize 容器在该轴的像素尺寸
- */
+/** 小于容器时返回居中偏移，大于容器时返回可拖拽范围内的偏移。 */
 export const clampOffset = (
   offset: number,
-  canvasSize: number,
+  contentSize: number,
   containerSize: number
 ): number => {
-  if (canvasSize <= containerSize) {
+  if (!Number.isFinite(contentSize) || !Number.isFinite(containerSize) || containerSize <= 0) {
     return 0
   }
-  const maxOffset = canvasSize - containerSize
-  return Math.min(0, Math.max(-maxOffset, offset))
+  if (contentSize <= containerSize) {
+    return (containerSize - contentSize) / 2
+  }
+  const minimum = containerSize - contentSize
+  const safeOffset = Number.isFinite(offset) ? offset : 0
+  return Math.min(0, Math.max(minimum, safeOffset))
 }
 
-/** 创建初始视口状态（fit 模式）。 */
 export const createInitialViewport = (): ViewportState => ({
   mode: "fit",
-  scale: 1.0,
+  scale: 1,
   offsetX: 0,
   offsetY: 0
 })
 
-/** 切换到 fit 模式。 */
 export const applyResetToFit = (): ViewportState => createInitialViewport()
 
-/**
- * 切换到 actual（100%）模式。
- *
- * scale = max(naturalW / containerW, naturalH / containerH)
- * 确保画布尺寸 = 自然像素尺寸，1 图片像素对应 1 画布像素。
- */
+/** 切换到真实 1:1：自然 Canvas 不缩放，初始位置按两个轴分别居中。 */
 export const applyResetToActual = (dims: ViewportDimensions): ViewportState => {
-  if (dims.naturalW <= 0 || dims.containerW <= 0 || dims.naturalH <= 0 || dims.containerH <= 0) {
-    return createInitialViewport()
+  if (!isValidDimensions(dims)) return createInitialViewport()
+  return {
+    mode: "actual",
+    scale: 1,
+    offsetX: clampOffset(0, dims.naturalW, dims.containerW),
+    offsetY: clampOffset(0, dims.naturalH, dims.containerH)
   }
-  const scaleW = dims.naturalW / dims.containerW
-  const scaleH = dims.naturalH / dims.containerH
-  const scale = clampScale(Math.max(scaleW, scaleH))
-  return { mode: "actual", scale, offsetX: 0, offsetY: 0 }
 }
 
-/**
- * 双击：在 fit 和 actual 之间切换。
- * custom 模式下双击也回到 fit。
- */
+/** 在容器或自然 Canvas 尺寸变化后保持 actual 偏移合法；未溢出轴始终回到中心。 */
+export const reconcileViewportBounds = (
+  state: ViewportState,
+  dims: ViewportDimensions
+): ViewportState => {
+  if (state.mode !== "actual" || !isValidDimensions(dims)) return state
+  const next = {
+    mode: "actual" as const,
+    scale: 1 as const,
+    offsetX: clampOffset(state.offsetX, dims.naturalW, dims.containerW),
+    offsetY: clampOffset(state.offsetY, dims.naturalH, dims.containerH)
+  }
+  if (next.offsetX === state.offsetX && next.offsetY === state.offsetY && state.scale === 1) {
+    return state
+  }
+  return next
+}
+
 export const applyDoubleClick = (
   state: ViewportState,
   dims: ViewportDimensions
-): ViewportState => {
-  if (state.mode === "fit") {
-    return applyResetToActual(dims)
-  }
-  return applyResetToFit()
-}
+): ViewportState => state.mode === "fit"
+  ? applyResetToActual(dims)
+  : applyResetToFit()
 
-/**
- * 以指定锚点为中心缩放（custom 模式）。
- *
- * X 和 Y 轴分别使用各自的容器尺寸计算画布尺寸和钳制偏移。
- *
- * @param state 当前视口状态
- * @param newScale 目标缩放比例
- * @param anchorX 鼠标在容器内的 X 坐标
- * @param anchorY 鼠标在容器内的 Y 坐标
- * @param dims 容器和图片尺寸
- */
-export const applyZoomTo = (
-  state: ViewportState,
-  newScale: number,
-  anchorX: number,
-  anchorY: number,
-  dims: ViewportDimensions
-): ViewportState => {
-  const clamped = clampScale(newScale)
-  const ratio = clamped / state.scale
-  const rawOffsetX = anchorX - (anchorX - state.offsetX) * ratio
-  const rawOffsetY = anchorY - (anchorY - state.offsetY) * ratio
-  // 画布尺寸 = 容器尺寸 × 缩放比例，X/Y 分别计算
-  const canvasW = dims.containerW * clamped
-  const canvasH = dims.containerH * clamped
-  return {
-    mode: "custom",
-    scale: clamped,
-    offsetX: clampOffset(rawOffsetX, canvasW, dims.containerW),
-    offsetY: clampOffset(rawOffsetY, canvasH, dims.containerH)
-  }
-}
-
-/**
- * 拖拽平移（带边界钳制）。
- *
- * X 和 Y 轴分别使用各自的画布和容器尺寸钳制。
- */
+/** actual 模式拖拽两个轴分别钳制；fit 模式不因拖拽产生第三种缩放状态。 */
 export const applyDragMove = (
   state: ViewportState,
   deltaX: number,
   deltaY: number,
   dims: ViewportDimensions
 ): ViewportState => {
-  const scale = state.scale
-  const canvasW = dims.containerW * scale
-  const canvasH = dims.containerH * scale
+  if (state.mode !== "actual" || !isValidDimensions(dims)) return state
   return {
-    mode: state.mode === "fit" ? "custom" : state.mode,
-    scale,
-    offsetX: clampOffset(state.offsetX + deltaX, canvasW, dims.containerW),
-    offsetY: clampOffset(state.offsetY + deltaY, canvasH, dims.containerH)
+    mode: "actual",
+    scale: 1,
+    offsetX: clampOffset(state.offsetX + deltaX, dims.naturalW, dims.containerW),
+    offsetY: clampOffset(state.offsetY + deltaY, dims.naturalH, dims.containerH)
   }
 }

@@ -4,6 +4,7 @@ import com.camborder.app.dto.ExportSettings;
 import com.camborder.app.dto.SourceDecode;
 import com.camborder.app.model.RenderRecipe;
 import com.camborder.app.util.ImageEncoder;
+import com.camborder.app.util.SourceImageInfo;
 
 import java.awt.image.BufferedImage;
 
@@ -21,10 +22,17 @@ public interface ImageRenderService {
     final class ComposeOutcome {
         private final BufferedImage image;
         private final SourceDecode sourceDecode;
+        private final SourceImageInfo sourceInfo;
 
-        public ComposeOutcome(final BufferedImage image, final SourceDecode sourceDecode) {
+        public ComposeOutcome(final BufferedImage image, final SourceDecode sourceDecode,
+                              final SourceImageInfo sourceInfo) {
             this.image = image;
             this.sourceDecode = sourceDecode;
+            this.sourceInfo = sourceInfo;
+        }
+
+        public ComposeOutcome(final BufferedImage image, final SourceDecode sourceDecode) {
+            this(image, sourceDecode, null);
         }
 
         public BufferedImage getImage() {
@@ -33,6 +41,10 @@ public interface ImageRenderService {
 
         public SourceDecode getSourceDecode() {
             return sourceDecode;
+        }
+
+        public SourceImageInfo getSourceInfo() {
+            return sourceInfo;
         }
     }
 
@@ -63,5 +75,13 @@ public interface ImageRenderService {
                                                   final ExportSettings export,
                                                   final String sourcePath) {
         return writeToFile(image, export);
+    }
+
+    /** 使用同一次解码得到的源事实，避免导出再次猜测 RAW/ICC/位深。 */
+    default ImageEncoder.ExportResult writeToFile(final BufferedImage image,
+                                                  final ExportSettings export,
+                                                  final String sourcePath,
+                                                  final com.camborder.app.util.SourceImageInfo sourceInfo) {
+        return writeToFile(image, export, sourcePath);
     }
 }

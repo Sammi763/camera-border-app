@@ -50,6 +50,9 @@ export const WorkspaceWelcome = ({
       <p className="workspaceWelcomeDropHint">
         {isBrowserMode ? "或点击「加载样片」使用内置样片体验流程" : "也可以直接把照片拖进这个窗口"}
       </p>
+      <p className="workspaceWelcomeShortcutHint">
+        按 <kbd className="workspaceWelcomeKbd">?</kbd> 查看快捷键
+      </p>
 
       <div className="workspaceWelcomeValues">
         {VALUE_HINTS.map((hint) => (

@@ -1,11 +1,18 @@
 import { readFile, writeFile } from "node:fs/promises"
-import { join } from "node:path"
+import { isAbsolute, join } from "node:path"
 import { app, dialog, ipcMain } from "electron"
 import { IPC_CHANNELS } from "../types/desktopApi.js"
 
 /** 模板文件存储路径：userData/templates.json */
 const getTemplatesFilePath = (): string => {
   return join(app.getPath("userData"), "templates.json")
+}
+
+/** 打包 E2E 的模板选择只在明确的打包测试环境中返回固定文件。 */
+const getPackagedE2eTemplatePath = (): string | null => {
+  if (process.env["CAMBORDER_E2E"] !== "1" || !app.isPackaged) return null
+  const value = process.env["CAMBORDER_E2E_TEMPLATE"]
+  return value !== undefined && isAbsolute(value) ? value : null
 }
 
 /**
@@ -79,6 +86,10 @@ export const registerTemplateStorageIpc = (): void => {
   ipcMain.handle(
     IPC_CHANNELS.IMPORT_TEMPLATE_JSON,
     async (): Promise<string | null> => {
+      const e2eTemplate = getPackagedE2eTemplatePath()
+      if (e2eTemplate !== null) {
+        return await readFile(e2eTemplate, "utf-8")
+      }
       const { canceled, filePaths } = await dialog.showOpenDialog({
         title: "导入模板",
         filters: [{ name: "相机边框模板", extensions: ["camborder-template.json", "json"] }],

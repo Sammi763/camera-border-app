@@ -3,7 +3,6 @@ package com.camborder.app.util;
 import org.springframework.stereotype.Component;
 
 import java.awt.Graphics2D;
-import java.awt.Image;
 import java.awt.image.BufferedImage;
 
 /**
@@ -32,16 +31,14 @@ public final class ImageScaler {
 
         int newWidth = Math.max(1, (int) Math.round(width * scale));
         int newHeight = Math.max(1, (int) Math.round(height * scale));
-        int type = source.getColorModel().hasAlpha()
-                ? BufferedImage.TYPE_INT_ARGB
-                : BufferedImage.TYPE_INT_RGB;
-
-        BufferedImage output = new BufferedImage(newWidth, newHeight, type);
+        BufferedImage output = PixelBufferFactory.createLikeInSrgb(source, newWidth, newHeight);
         Graphics2D graphics = output.createGraphics();
         try {
-            graphics.drawImage(
-                    source.getScaledInstance(newWidth, newHeight, Image.SCALE_SMOOTH),
-                    0, 0, null);
+            graphics.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION,
+                    java.awt.RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+            graphics.setRenderingHint(java.awt.RenderingHints.KEY_RENDERING,
+                    java.awt.RenderingHints.VALUE_RENDER_QUALITY);
+            graphics.drawImage(source, 0, 0, newWidth, newHeight, null);
         } finally {
             graphics.dispose();
         }

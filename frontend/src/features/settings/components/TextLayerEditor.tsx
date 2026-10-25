@@ -73,6 +73,10 @@ type TextLayerCardProps = {
 const TextLayerCard = ({ layer, index, fonts, onUpdate }: TextLayerCardProps): JSX.Element => {
   const [expanded, setExpanded] = useState(index === 0)
   const normalizedPlacement = normalizeTextPlacement(layer.textArea, layer.placement)
+  const availableFonts = fonts.filter((font) => font.engineAvailable)
+  const selectedFont = availableFonts.some((font) => font.value === layer.fontFamily)
+    ? layer.fontFamily
+    : "sans-serif"
 
   const title = `文字 ${index + 1}`
   const summary = layer.enabled
@@ -156,29 +160,29 @@ const TextLayerCard = ({ layer, index, fonts, onUpdate }: TextLayerCardProps): J
               字体
               <select
                 className="settingSelect"
-                value={layer.fontFamily}
+                value={selectedFont}
                 onChange={(e) => onUpdate({ fontFamily: e.target.value })}
               >
                 <optgroup label="内置字体">
-                  {fonts.filter((f) => f.source === "builtin").map((opt) => (
+                  {availableFonts.filter((f) => f.source === "builtin").map((opt) => (
                     <option key={opt.value} value={opt.value}>
-                      {opt.label}{!opt.engineAvailable ? "（候选）" : ""}
+                      {opt.label}
                     </option>
                   ))}
                 </optgroup>
-                {fonts.some((f) => f.source === "system") && (
-                  <optgroup label="候选字体（系统）">
-                    {fonts.filter((f) => f.source === "system").map((opt) => (
+                {availableFonts.some((f) => f.source === "system") && (
+                  <optgroup label="已验证系统字体">
+                    {availableFonts.filter((f) => f.source === "system").map((opt) => (
                       <option key={opt.value} value={opt.value}>
-                        {opt.label}{!opt.engineAvailable ? "（候选）" : ""}
+                        {opt.label}
                       </option>
                     ))}
                   </optgroup>
                 )}
               </select>
-              {!fonts.some((f) => f.value === layer.fontFamily && f.engineAvailable) && (
+              {!availableFonts.some((f) => f.value === layer.fontFamily) && (
                 <span className="settingHint">
-                  ⚠ 当前字体引擎可能不可用，导出时将回退到 SansSerif
+                  当前保存的字体不在已验证清单中，本次导出将使用 SansSerif。
                 </span>
               )}
             </label>

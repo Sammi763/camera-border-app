@@ -20,7 +20,8 @@ import java.io.File;
  * - 仅读取，不写回元数据；ICC 由导出编码器单独搬运，位深由图像编码器处理。
  * - 文件不存在或不可读 -> 抛受控异常 -> 400（与预览/导出一致）。
  * - 读取不到对应 EXIF 字段时该字段返回 null，整体不抛 500。
- * - 依赖 metadata-extractor 的格式识别能力；非 JPEG（如无 EXIF 的 PNG/TIFF）通常读不到字段，返回全 null。
+ * - 依赖 metadata-extractor 的格式识别能力；PNG/TIFF 等格式缺少字段时只返回对应 null。
+ *   Stage 4 的真实 TIFF 样片用于验收 TIFF 相机与拍摄时间读取。
  */
 @Service
 public final class ExifMetadataServiceImpl implements PhotoMetadataService {

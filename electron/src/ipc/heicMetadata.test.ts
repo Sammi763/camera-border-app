@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest"
+import { readFileSync } from "node:fs"
+import { resolve } from "node:path"
 import { inflateSync } from "node:zlib"
 import { PNG } from "pngjs"
 import {
@@ -11,6 +13,18 @@ import {
 } from "./heicMetadata"
 
 describe("HEIC/HEIF metadata bridge", () => {
+  it("读取真实 HEIC 样片的方向、ICC 和 Exif，而不是只验证合成 box", () => {
+    const sample = readFileSync(resolve(process.cwd(), "../fixtures/stage4/real-orientation-icc-iphone12pro.heic"))
+    const metadata = extractHeifMetadata(sample)
+
+    expect(metadata.orientation).toEqual({ rotation: 270, mirror: false })
+    expect(metadata.icc).not.toBeNull()
+    expect(metadata.icc?.length).toBe(536)
+    expect(metadata.exif).not.toBeNull()
+    expect(metadata.exif?.length).toBeGreaterThan(64)
+    expect(readExifOrientation(metadata.exif!)).toEqual({ rotation: 0, mirror: false })
+  })
+
   it("损坏或不含 meta 的输入不会伪造元数据", () => {
     expect(extractHeifMetadata(Buffer.from("not-heif"))).toEqual({
       orientation: { rotation: 0, mirror: false },
@@ -24,6 +38,19 @@ describe("HEIC/HEIF metadata bridge", () => {
     source.data.set([255, 0, 0, 255, 0, 255, 0, 255])
 
     const rotated = applyHeifOrientation(source, { rotation: 90, mirror: false })
+
+    expect(rotated.width).toBe(1)
+    expect(rotated.height).toBe(2)
+    expect([...rotated.data.subarray(0, 4)]).toEqual([0, 255, 0, 255])
+    expect([...rotated.data.subarray(4, 8)]).toEqual([255, 0, 0, 255])
+  })
+
+  it("兼容 PNG.sync.read 的普通对象结果并保留旋转像素", () => {
+    const source = new PNG({ width: 2, height: 1 })
+    source.data.set([255, 0, 0, 255, 0, 255, 0, 255])
+    const decoded = PNG.sync.read(PNG.sync.write(source))
+
+    const rotated = applyHeifOrientation(decoded, { rotation: 90, mirror: false })
 
     expect(rotated.width).toBe(1)
     expect(rotated.height).toBe(2)

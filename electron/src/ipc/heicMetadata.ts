@@ -471,10 +471,13 @@ export const extractHeifMetadata = (input: Uint8Array): HeifMetadata => {
 export const applyHeifOrientation = (source: PNG, orientation: HeifOrientation): PNG => {
   const rotation = orientation.rotation
   const rotated = rotation === 90 || rotation === 270
-  const target = new (source.constructor as { new (options: { width: number; height: number }): PNG })({
+  // PNG.sync.read 返回的是带 width/height/data 的普通对象，不是 PNG 类实例；
+  // 目标只需满足 pngjs 的编码数据契约，不能依赖 source.constructor 创建空 data。
+  const target = {
     width: rotated ? source.height : source.width,
-    height: rotated ? source.width : source.height
-  })
+    height: rotated ? source.width : source.height,
+    data: Buffer.alloc((rotated ? source.height : source.width) * (rotated ? source.width : source.height) * 4)
+  } as unknown as PNG
   for (let y = 0; y < source.height; y += 1) {
     for (let x = 0; x < source.width; x += 1) {
       const mirroredX = orientation.mirror ? source.width - 1 - x : x

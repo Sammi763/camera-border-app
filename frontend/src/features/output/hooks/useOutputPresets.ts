@@ -17,7 +17,7 @@ const isFiniteInteger = (value: unknown, min: number, max: number): value is num
 export const isValidOutputPresetSettings = (value: unknown): value is OutputPresetSettings => {
   if (value === null || typeof value !== "object") return false
   const output = value as Record<string, unknown>
-  return (output["exportFormat"] === "png" || output["exportFormat"] === "jpeg" || output["exportFormat"] === "tiff")
+  const baseValid = (output["exportFormat"] === "png" || output["exportFormat"] === "jpeg" || output["exportFormat"] === "tiff")
     && isFiniteInteger(output["jpegQuality"], 1, 100)
     && typeof output["outputSizePreset"] === "string"
     && VALID_OUTPUT_SIZE_PRESETS.has(output["outputSizePreset"])
@@ -25,6 +25,16 @@ export const isValidOutputPresetSettings = (value: unknown): value is OutputPres
     && typeof output["preserveMetadata"] === "boolean"
     && typeof output["preserveColorProfile"] === "boolean"
     && typeof output["preferHighBitDepth"] === "boolean"
+  if (!baseValid) return false
+  if (output["tier"] === undefined) return true
+  return output["tier"] === "quick-share"
+    || output["tier"] === "standard-delivery"
+    || output["tier"] === "high-fidelity-archive"
+    || output["tier"] === "custom"
+    ? (output["colorProfilePolicy"] === "source" || output["colorProfilePolicy"] === "srgb" || output["colorProfilePolicy"] === "none")
+      && (output["metadataPolicy"] === "preserve" || output["metadataPolicy"] === "remove-location" || output["metadataPolicy"] === "strip")
+      && (output["bitDepthPolicy"] === "source" || output["bitDepthPolicy"] === "8")
+    : false
 }
 
 export const isValidOutputPreset = (value: unknown): value is OutputPreset => {

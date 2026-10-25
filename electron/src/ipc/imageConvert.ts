@@ -151,12 +151,21 @@ export const convertWithBundledDecoder = async (
     const timer = setTimeout(() => {
       void finish(false)
     }, timeoutMs)
-    worker.on("message", (message: { readonly ok?: boolean }) => {
+    worker.on("message", (message: { readonly ok?: boolean; readonly message?: string }) => {
+      if (message.ok !== true && typeof message.message === "string") {
+        console.error(`[HEIC] 随包解码 worker 失败：${message.message}`)
+      }
       void finish(message.ok === true)
     })
-    worker.on("error", () => { void finish(false) })
+    worker.on("error", (error) => {
+      console.error("[HEIC] 随包解码 worker 异常", error)
+      void finish(false)
+    })
     worker.on("exit", (code) => {
-      if (code !== 0) void finish(false)
+      if (code !== 0) {
+        console.error(`[HEIC] 随包解码 worker 退出码：${code}`)
+        void finish(false)
+      }
     })
   })
 }

@@ -35,13 +35,13 @@ describe("专业导出结构化结果", () => {
       expect(result.message).toBeNull()
     })
 
-    it("SKIPPED：当前版本不支持，已跳过", () => {
+    it("UNSUPPORTED：能力不可用时必须显式报告", () => {
       const result: FeatureResult = {
-        status: "SKIPPED",
-        message: "当前版本暂不支持 EXIF 元数据保留，已跳过"
+        status: "UNSUPPORTED",
+        message: "当前运行时不具备 EXIF 元数据能力"
       }
-      expect(result.status).toBe("SKIPPED")
-      expect(result.message).toContain("暂不支持")
+      expect(result.status).toBe("UNSUPPORTED")
+      expect(result.message).toContain("不具备")
     })
 
     it("APPLIED：已实际应用", () => {
@@ -101,21 +101,21 @@ describe("专业导出结构化结果", () => {
         outputPath: "/tmp/output.tif",
         actualFormat: "tiff",
         metadataPreservation: {
-          status: "SKIPPED" as FeatureStatus,
-          message: "当前版本暂不支持 EXIF 元数据保留，已跳过"
+          status: "UNSUPPORTED" as FeatureStatus,
+          message: "当前运行时不具备 EXIF 元数据能力"
         },
         colorProfilePreservation: {
-          status: "SKIPPED" as FeatureStatus,
-          message: "当前版本暂不支持 ICC 色彩配置文件嵌入，已跳过"
+          status: "UNSUPPORTED" as FeatureStatus,
+          message: "当前运行时不具备 ICC 色彩配置文件能力"
         },
         highBitDepth: {
-          status: "SKIPPED" as FeatureStatus,
-          message: "当前版本暂不支持高位深输出，已使用 8bit"
+          status: "DOWNGRADED" as FeatureStatus,
+          message: "当前档位只允许 8-bit 输出"
         }
       }
-      expect(response.metadataPreservation?.status).toBe("SKIPPED")
-      expect(response.colorProfilePreservation?.status).toBe("SKIPPED")
-      expect(response.highBitDepth?.status).toBe("SKIPPED")
+      expect(response.metadataPreservation?.status).toBe("UNSUPPORTED")
+      expect(response.colorProfilePreservation?.status).toBe("UNSUPPORTED")
+      expect(response.highBitDepth?.status).toBe("DOWNGRADED")
     })
 
     it("未开启专业选项时 status 为 NOT_REQUESTED", () => {

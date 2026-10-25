@@ -15,6 +15,10 @@ export type OutputSettingKey =
   | "preserveMetadata"
   | "preserveColorProfile"
   | "preferHighBitDepth"
+  | "tier"
+  | "colorProfilePolicy"
+  | "metadataPolicy"
+  | "bitDepthPolicy"
 
 /** 用户版式的持久化结构：只描述布局、边框、文字和标识视觉设置。 */
 export type LayoutSettings = Omit<RenderSettings, OutputSettingKey>

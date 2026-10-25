@@ -17,6 +17,8 @@ import type { StudioTheme } from "../components/layout/TopBar"
 import { WorkspaceTabs } from "../components/layout/WorkspaceTabs"
 import type { WorkspaceTab, WorkspaceTabId } from "../components/layout/WorkspaceTabs"
 import { ModalDrawer } from "../components/layout/ModalDrawer"
+import { ShortcutOverlay } from "../components/layout/ShortcutOverlay"
+import { HelpPanel } from "../components/layout/HelpPanel"
 import { QueuePanel } from "../features/queue/components/QueuePanel"
 import { PreviewPanel } from "../features/preview/components/PreviewPanel"
 import type { PreviewBackground, PreviewViewportCommand } from "../features/preview/components/PreviewPanel"
@@ -30,6 +32,7 @@ import { PresetTextComposer } from "../features/metadata/components/PresetTextCo
 import { TemplatePanel } from "../features/template/components/TemplatePanel"
 import { TemplateGallery } from "../features/template/components/TemplateGallery"
 import { useEngineHealth } from "../features/preview/hooks/useEngineHealth"
+import { useEngineCapabilities } from "../features/preview/hooks/useEngineCapabilities"
 import { useQueue } from "../features/queue/hooks/useQueue"
 import { usePreview } from "../features/preview/hooks/usePreview"
 import { useExportController } from "../features/preview/hooks/useExportController"
@@ -53,7 +56,7 @@ import type { PresetDraft } from "../features/quick/utils/buildPresetFromText"
 import { buildPresetFromText } from "../features/quick/utils/buildPresetFromText"
 import { recommendTemplateId, orientationFromSize } from "../features/quick/utils/recommendTemplate"
 import type { DesktopRuntime } from "../types/runtime"
-import type { RenderSettings } from "../features/settings/types"
+import type { RenderSettings, SettingsUpdateOptions } from "../features/settings/types"
 import type { LayoutSettings, Template } from "../features/template/types"
 import type { FilmStock } from "../features/metadata/types"
 import type { QueueItem } from "../features/queue/types"
@@ -141,7 +144,11 @@ const applyLayoutSettings = (
     customOutputLongEdge: current.customOutputLongEdge,
     preserveMetadata: current.preserveMetadata,
     preserveColorProfile: current.preserveColorProfile,
-    preferHighBitDepth: current.preferHighBitDepth
+    preferHighBitDepth: current.preferHighBitDepth,
+    ...(current.tier === undefined ? {} : { tier: current.tier }),
+    ...(current.colorProfilePolicy === undefined ? {} : { colorProfilePolicy: current.colorProfilePolicy }),
+    ...(current.metadataPolicy === undefined ? {} : { metadataPolicy: current.metadataPolicy }),
+    ...(current.bitDepthPolicy === undefined ? {} : { bitDepthPolicy: current.bitDepthPolicy })
   }
 }
 
@@ -149,8 +156,8 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
   const health = useEngineHealth()
   const queue = useQueue()
   const settings = useSettings()
-  const userModifiedRef = useRef(false)
-  const defaultTemplateAppliedRef = useRef(false)
+  const userModifiedRef = useRef(settings.restoredFromStorage)
+  const defaultTemplateAppliedRef = useRef(settings.restoredFromStorage)
   const prevQueueLenRef = useRef(0)
   const presets = useShootingPresets()
   const assets = usePhotoAssets()
@@ -160,7 +167,8 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
   const [theme, setTheme] = useState<StudioTheme>(readTheme)
   const [previewBackground, setPreviewBackground] = useState<PreviewBackground>(readPreviewBackground)
   const [activeTab, setActiveTab] = useState<WorkspaceTabId>("style")
-  const [drawer, setDrawer] = useState<"templates" | "presets" | "assets" | null>(null)
+  const [drawer, setDrawer] = useState<"templates" | "presets" | "assets" | "help" | null>(null)
+  const [shortcutOverlayOpen, setShortcutOverlayOpen] = useState(false)
   const [viewportCommand, setViewportCommand] = useState<PreviewViewportCommand | null>(null)
   /** 所有批量行为共享同一个根级操作范围，不在各面板各自维护。 */
   const [operationScope, setOperationScope] = useState<OperationScope>("active")
@@ -292,12 +300,16 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
     setActivePresetId(variantId)
   }, [settings])
 
-  // 包装 update，标记用户已主动修改设置（阻止默认模板覆盖）
-  const handleSettingsUpdate = useCallback((patch: Partial<RenderSettings>): void => {
+  // 包装 update，标记用户已主动修改设置（阻止默认模板覆盖）。
+  // options.historyTag 由连续手势（裁切构图拖动）传入，合并为一条撤销历史。
+  const handleSettingsUpdate = useCallback((patch: Partial<RenderSettings>, options?: SettingsUpdateOptions): void => {
     userModifiedRef.current = true
-    settings.update(patch)
+    settings.update(patch, options)
     setActivePresetId(null)
   }, [settings])
+
+  // 裁切构图拖动：与其它手动设置变更共用 userModified 语义。
+  const handleUpdateImagePlacement = handleSettingsUpdate
 
   // 包装 updateNumber，同样标记用户已主动修改设置
   const handleSettingsUpdateNumber = useCallback(
@@ -455,6 +467,8 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
   // 引擎是否可用：仅在「健康端点连续 ready」时为 true。
   // loading/error 都视为不可用，UI 据此禁用导出按钮、提示用户当前为本地预览模式。
   const engineAvailable = health.kind === "ready"
+  const capabilitiesState = useEngineCapabilities(engineAvailable)
+  const capabilities = capabilitiesState.kind === "ready" ? capabilitiesState.capabilities : null
   // 当前失败原因（error 时为诊断消息，loading/ready 时为 null）；供 PreviewPanel 解释禁用原因
   const engineUnavailableReason: string | null = health.kind === "error" ? health.message : null
 
@@ -584,7 +598,8 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
     resolveQueueItem,
     prepareExifForExport: exif.ensureExifForExport,
     autoOpenExportDirectory: true,
-    engineAvailable
+    engineAvailable,
+    capabilities
   })
 
   /** 统一工作台快捷键；输入控件和管理抽屉内不拦截用户文本编辑。 */
@@ -599,8 +614,19 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
       if (isEditableTarget(event.target) || (event.target instanceof HTMLElement && event.target.closest('[role="dialog"]') !== null)) {
         return
       }
+      // 快捷键速查面板打开时暂停工作台快捷键；关闭行为由面板自身处理（Esc 或 ?）。
+      if (shortcutOverlayOpen) {
+        return
+      }
       const key = event.key.toLowerCase()
       const withModifier = event.metaKey || event.ctrlKey
+
+      // `?` 打开快捷键速查面板；输入控件与对话框内已由上方守卫排除。
+      if (event.key === "?") {
+        event.preventDefault()
+        setShortcutOverlayOpen(true)
+        return
+      }
 
       if (withModifier && key === "z") {
         event.preventDefault()
@@ -665,7 +691,7 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
     }
     window.addEventListener("keydown", handleKeyDown)
     return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [exportController, operationScope, queue])
+  }, [exportController, operationScope, queue, shortcutOverlayOpen])
 
   // 空队列统一显示欢迎页；有照片后固定进入渐进式三栏工作台。
   const handleWelcomePickFiles = useCallback((): void => {
@@ -746,6 +772,7 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
             textOverride={queue.activeTextOverride}
             setTextOverride={queue.setActiveTextOverride}
             detectedBrandLabel={detectedBrand?.label ?? null}
+            capabilities={capabilities}
             showOutputSettings={false}
           />
         </div>
@@ -800,6 +827,7 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
             textOverride={queue.activeTextOverride}
             setTextOverride={queue.setActiveTextOverride}
             detectedBrandLabel={detectedBrand?.label ?? null}
+            capabilities={capabilities}
             showStyleSettings={false}
           />
           <p className="settingsCapabilityHint">快捷键：⌘/Ctrl + Enter 导出当前范围。</p>
@@ -809,7 +837,7 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
   ], [
     activeItem, activePresetId, assets, detectedBrand, handleApplyInfoCardVariant, handleApplyPreset,
     handlePreviewBackgroundChange, identitySources, operationScope, presets, selectedIdentity,
-    preview, previewBackground, queue, recommendedTemplateId, settings, settingsController
+    preview, previewBackground, queue, recommendedTemplateId, settings, settingsController, capabilities
   ])
 
   const workspaceStyle = {
@@ -828,6 +856,7 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
         onThemeChange={handleThemeChange}
         onPickFiles={handleWelcomePickFiles}
         onPickFolder={handleWelcomePickFolder}
+        onOpenHelp={() => setDrawer("help")}
       />
 
       {isEmpty ? (
@@ -859,7 +888,9 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
               engineUnavailableReason={engineUnavailableReason}
               viewportCommand={viewportCommand}
               previewBackground={previewBackground}
+              activeTemplateId={activePresetId}
               showExportControls={false}
+              onUpdateImagePlacement={handleUpdateImagePlacement}
             />
           </div>
           <div className="workspaceRight">
@@ -977,6 +1008,11 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
       <ModalDrawer open={drawer === "assets"} title="资料库" onClose={() => setDrawer(null)}>
         <AssetLibraryPanel assetController={assets} filmStocks={filmStocks} />
       </ModalDrawer>
+      <ModalDrawer open={drawer === "help"} title="帮助" onClose={() => setDrawer(null)}>
+        <HelpPanel />
+      </ModalDrawer>
+
+      <ShortcutOverlay open={shortcutOverlayOpen} onClose={() => setShortcutOverlayOpen(false)} />
     </div>
   )
 }

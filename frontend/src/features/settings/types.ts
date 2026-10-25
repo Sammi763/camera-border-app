@@ -44,7 +44,25 @@ export type BorderStyleSettings = {
  */
 export type OutputSizePreset = "original" | "1080p" | "2k" | "4k" | "custom"
 
-import type { ImagePlacement } from "../../types/preview"
+/** 图片区域方向。auto 在原图比例下跟随源图方向。 */
+export type ImageAreaOrientation = "auto" | "landscape" | "portrait" | "square"
+
+/** 图片区域比例；targetAspectRatioOverride 只用于兼容旧画幅比例。 */
+export type ImageAreaRatio = "original" | "1:1" | "4:5" | "3:4" | "2:3" | "3:2" | "9:16"
+
+/** 工作台可编辑的图片区域设置。 */
+export type ImageAreaSettings = {
+  readonly orientation: ImageAreaOrientation
+  readonly ratio: ImageAreaRatio
+  readonly displayMode: "fit" | "fill"
+  readonly focalX: number
+  readonly focalY: number
+  readonly rotation: number
+  /** 旧胶片画幅等非标准比例的兼容值；用户选择标准比例后清除。 */
+  readonly targetAspectRatioOverride?: number | null
+}
+
+import type { BitDepthPolicy, ColorProfilePolicy, FidelityTier, ImagePlacement, MetadataPolicy } from "../../types/preview"
 
 /**
  * 品牌标识（Logo）配置。
@@ -160,6 +178,8 @@ export type RenderSettings = {
   readonly textLayers: readonly TextLayerSettings[]
   /** 图片布局几何；画幅选择只负责填充其中的 targetAspectRatio。 */
   readonly imagePlacement?: ImagePlacement
+  /** 图片区域 UI 设置；缺失时由 imagePlacement 迁移得到。 */
+  readonly imageArea?: ImageAreaSettings
   /** 布局预设标识，展示层使用，不会写入 RenderRecipe。 */
   readonly layoutPresetId?: string | null
   /** 渐变设置。 */
@@ -180,35 +200,37 @@ export type RenderSettings = {
   readonly preserveColorProfile: boolean
   /** 专业导出：是否优先保留高位深（>8bit）。TIFF 支持，其他格式降级。 */
   readonly preferHighBitDepth: boolean
+  /** 阶段五导出档位；旧模板缺失时由规范化逻辑填充标准交付。 */
+  readonly tier?: FidelityTier
+  readonly colorProfilePolicy?: ColorProfilePolicy
+  readonly metadataPolicy?: MetadataPolicy
+  readonly bitDepthPolicy?: BitDepthPolicy
   /** 品牌标识配置。 */
   readonly logo: LogoConfig
 }
 
-/**
- * 仅供旧 localStorage/模板迁移使用的布局字段。
- *
- * 这些字段不是当前设置或 RenderRecipe 的一部分；它们单独建类型，
- * 防止新的设置状态继续写出已经失效的 autoCrop/filmFormat。
- */
-export type LegacyLayoutSettings = {
-  readonly autoCrop?: boolean
-  readonly filmFormat?: string | null
-}
-
-/** 迁移入口允许的旧/新设置输入。迁移完成后必须返回 RenderSettings。 */
-export type RenderSettingsInput = Partial<RenderSettings> & LegacyLayoutSettings
+/** 模板边界的部分设置输入；旧模板布局字段由独立 migration adapter 消费。 */
+export type RenderSettingsInput = Partial<RenderSettings>
 
 export type NumberSettingKey = "borderTop" | "borderBottom" | "borderLeft" | "borderRight"
   | "textFontSize" | "jpegQuality" | "customOutputLongEdge"
 
+/** update 的可选参数：historyTag 用于连续手势（如裁切构图拖动）合并撤销历史。 */
+export type SettingsUpdateOptions = {
+  /** 相邻提交携带相同标签时不重复压撤销栈；标签本身不进入设置数据。 */
+  readonly historyTag?: string
+}
+
 export type SettingsController = {
   readonly settings: RenderSettings
+  /** 首次挂载时是否恢复了有效的工作台设置；用于阻止默认模板覆盖用户配置。 */
+  readonly restoredFromStorage: boolean
   /**
    * 设置版本号，每次防抖结束后自动递增。
    * usePreview 通过监听此值变化来触发预览请求。
    */
   readonly settingsVersion: number
-  readonly update: (patch: Partial<RenderSettings>) => void
+  readonly update: (patch: Partial<RenderSettings>, options?: SettingsUpdateOptions) => void
   /** NaN 安全的数字输入更新，自动钳制到 [min, max] 范围。 */
   readonly updateNumber: (key: NumberSettingKey, value: number, min: number, max: number) => void
   /** 更新指定文字图层。 */

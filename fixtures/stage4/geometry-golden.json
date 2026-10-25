@@ -1,0 +1,870 @@
+{
+  "schema": "camera-border.stage4.geometry-golden.v1",
+  "description": "同一组 RenderRecipe v2 图片放置输入及两端必须一致的字段级期望值。",
+  "cases": [
+    {
+      "id": "landscape-fit-0-fit-native",
+      "source": {
+        "width": 640,
+        "height": 360
+      },
+      "placement": {
+        "mode": "fit",
+        "focalX": 0.5,
+        "focalY": 0.5,
+        "rotation": 0,
+        "targetAspectRatio": null
+      },
+      "expected": {
+        "sourceWidth": 640,
+        "sourceHeight": 360,
+        "rotatedWidth": 640,
+        "rotatedHeight": 360,
+        "targetWidth": 640,
+        "targetHeight": 360,
+        "drawWidth": 640,
+        "drawHeight": 360,
+        "offsetX": 0,
+        "offsetY": 0,
+        "scale": 1
+      }
+    },
+    {
+      "id": "landscape-fill-0-fill-square-top-left",
+      "source": {
+        "width": 640,
+        "height": 360
+      },
+      "placement": {
+        "mode": "fill",
+        "focalX": 0,
+        "focalY": 0,
+        "rotation": 0,
+        "targetAspectRatio": 1
+      },
+      "expected": {
+        "sourceWidth": 640,
+        "sourceHeight": 360,
+        "rotatedWidth": 640,
+        "rotatedHeight": 360,
+        "targetWidth": 360,
+        "targetHeight": 360,
+        "drawWidth": 640,
+        "drawHeight": 360,
+        "offsetX": 0,
+        "offsetY": 0,
+        "scale": 1
+      }
+    },
+    {
+      "id": "landscape-fill-0-fill-4-3-center",
+      "source": {
+        "width": 640,
+        "height": 360
+      },
+      "placement": {
+        "mode": "fill",
+        "focalX": 0.5,
+        "focalY": 0.5,
+        "rotation": 0,
+        "targetAspectRatio": 1.3333333333333333
+      },
+      "expected": {
+        "sourceWidth": 640,
+        "sourceHeight": 360,
+        "rotatedWidth": 640,
+        "rotatedHeight": 360,
+        "targetWidth": 480,
+        "targetHeight": 360,
+        "drawWidth": 640,
+        "drawHeight": 360,
+        "offsetX": -80,
+        "offsetY": 0,
+        "scale": 1
+      }
+    },
+    {
+      "id": "landscape-fill-0-fill-16-9-bottom-right",
+      "source": {
+        "width": 640,
+        "height": 360
+      },
+      "placement": {
+        "mode": "fill",
+        "focalX": 1,
+        "focalY": 1,
+        "rotation": 0,
+        "targetAspectRatio": 1.7777777777777777
+      },
+      "expected": {
+        "sourceWidth": 640,
+        "sourceHeight": 360,
+        "rotatedWidth": 640,
+        "rotatedHeight": 360,
+        "targetWidth": 640,
+        "targetHeight": 360,
+        "drawWidth": 640,
+        "drawHeight": 360,
+        "offsetX": 0,
+        "offsetY": 0,
+        "scale": 1
+      }
+    },
+    {
+      "id": "landscape-fit-90-fit-native",
+      "source": {
+        "width": 640,
+        "height": 360
+      },
+      "placement": {
+        "mode": "fit",
+        "focalX": 0.5,
+        "focalY": 0.5,
+        "rotation": 90,
+        "targetAspectRatio": null
+      },
+      "expected": {
+        "sourceWidth": 640,
+        "sourceHeight": 360,
+        "rotatedWidth": 360,
+        "rotatedHeight": 640,
+        "targetWidth": 360,
+        "targetHeight": 640,
+        "drawWidth": 640,
+        "drawHeight": 360,
+        "offsetX": 0,
+        "offsetY": 0,
+        "scale": 1
+      }
+    },
+    {
+      "id": "landscape-fill-90-fill-square-top-left",
+      "source": {
+        "width": 640,
+        "height": 360
+      },
+      "placement": {
+        "mode": "fill",
+        "focalX": 0,
+        "focalY": 0,
+        "rotation": 90,
+        "targetAspectRatio": 1
+      },
+      "expected": {
+        "sourceWidth": 640,
+        "sourceHeight": 360,
+        "rotatedWidth": 360,
+        "rotatedHeight": 640,
+        "targetWidth": 360,
+        "targetHeight": 360,
+        "drawWidth": 640,
+        "drawHeight": 360,
+        "offsetX": 0,
+        "offsetY": 0,
+        "scale": 1
+      }
+    },
+    {
+      "id": "landscape-fill-90-fill-4-3-center",
+      "source": {
+        "width": 640,
+        "height": 360
+      },
+      "placement": {
+        "mode": "fill",
+        "focalX": 0.5,
+        "focalY": 0.5,
+        "rotation": 90,
+        "targetAspectRatio": 1.3333333333333333
+      },
+      "expected": {
+        "sourceWidth": 640,
+        "sourceHeight": 360,
+        "rotatedWidth": 360,
+        "rotatedHeight": 640,
+        "targetWidth": 360,
+        "targetHeight": 270,
+        "drawWidth": 640,
+        "drawHeight": 360,
+        "offsetX": 0,
+        "offsetY": -185,
+        "scale": 1
+      }
+    },
+    {
+      "id": "landscape-fill-90-fill-16-9-bottom-right",
+      "source": {
+        "width": 640,
+        "height": 360
+      },
+      "placement": {
+        "mode": "fill",
+        "focalX": 1,
+        "focalY": 1,
+        "rotation": 90,
+        "targetAspectRatio": 1.7777777777777777
+      },
+      "expected": {
+        "sourceWidth": 640,
+        "sourceHeight": 360,
+        "rotatedWidth": 360,
+        "rotatedHeight": 640,
+        "targetWidth": 360,
+        "targetHeight": 202.5,
+        "drawWidth": 640,
+        "drawHeight": 360,
+        "offsetX": 0,
+        "offsetY": -437.5,
+        "scale": 1
+      }
+    },
+    {
+      "id": "landscape-fit-180-fit-native",
+      "source": {
+        "width": 640,
+        "height": 360
+      },
+      "placement": {
+        "mode": "fit",
+        "focalX": 0.5,
+        "focalY": 0.5,
+        "rotation": 180,
+        "targetAspectRatio": null
+      },
+      "expected": {
+        "sourceWidth": 640,
+        "sourceHeight": 360,
+        "rotatedWidth": 640,
+        "rotatedHeight": 360,
+        "targetWidth": 640,
+        "targetHeight": 360,
+        "drawWidth": 640,
+        "drawHeight": 360,
+        "offsetX": 0,
+        "offsetY": 0,
+        "scale": 1
+      }
+    },
+    {
+      "id": "landscape-fill-180-fill-square-top-left",
+      "source": {
+        "width": 640,
+        "height": 360
+      },
+      "placement": {
+        "mode": "fill",
+        "focalX": 0,
+        "focalY": 0,
+        "rotation": 180,
+        "targetAspectRatio": 1
+      },
+      "expected": {
+        "sourceWidth": 640,
+        "sourceHeight": 360,
+        "rotatedWidth": 640,
+        "rotatedHeight": 360,
+        "targetWidth": 360,
+        "targetHeight": 360,
+        "drawWidth": 640,
+        "drawHeight": 360,
+        "offsetX": 0,
+        "offsetY": 0,
+        "scale": 1
+      }
+    },
+    {
+      "id": "landscape-fill-180-fill-4-3-center",
+      "source": {
+        "width": 640,
+        "height": 360
+      },
+      "placement": {
+        "mode": "fill",
+        "focalX": 0.5,
+        "focalY": 0.5,
+        "rotation": 180,
+        "targetAspectRatio": 1.3333333333333333
+      },
+      "expected": {
+        "sourceWidth": 640,
+        "sourceHeight": 360,
+        "rotatedWidth": 640,
+        "rotatedHeight": 360,
+        "targetWidth": 480,
+        "targetHeight": 360,
+        "drawWidth": 640,
+        "drawHeight": 360,
+        "offsetX": -80,
+        "offsetY": 0,
+        "scale": 1
+      }
+    },
+    {
+      "id": "landscape-fill-180-fill-16-9-bottom-right",
+      "source": {
+        "width": 640,
+        "height": 360
+      },
+      "placement": {
+        "mode": "fill",
+        "focalX": 1,
+        "focalY": 1,
+        "rotation": 180,
+        "targetAspectRatio": 1.7777777777777777
+      },
+      "expected": {
+        "sourceWidth": 640,
+        "sourceHeight": 360,
+        "rotatedWidth": 640,
+        "rotatedHeight": 360,
+        "targetWidth": 640,
+        "targetHeight": 360,
+        "drawWidth": 640,
+        "drawHeight": 360,
+        "offsetX": 0,
+        "offsetY": 0,
+        "scale": 1
+      }
+    },
+    {
+      "id": "landscape-fit-270-fit-native",
+      "source": {
+        "width": 640,
+        "height": 360
+      },
+      "placement": {
+        "mode": "fit",
+        "focalX": 0.5,
+        "focalY": 0.5,
+        "rotation": 270,
+        "targetAspectRatio": null
+      },
+      "expected": {
+        "sourceWidth": 640,
+        "sourceHeight": 360,
+        "rotatedWidth": 360,
+        "rotatedHeight": 640,
+        "targetWidth": 360,
+        "targetHeight": 640,
+        "drawWidth": 640,
+        "drawHeight": 360,
+        "offsetX": 0,
+        "offsetY": 0,
+        "scale": 1
+      }
+    },
+    {
+      "id": "landscape-fill-270-fill-square-top-left",
+      "source": {
+        "width": 640,
+        "height": 360
+      },
+      "placement": {
+        "mode": "fill",
+        "focalX": 0,
+        "focalY": 0,
+        "rotation": 270,
+        "targetAspectRatio": 1
+      },
+      "expected": {
+        "sourceWidth": 640,
+        "sourceHeight": 360,
+        "rotatedWidth": 360,
+        "rotatedHeight": 640,
+        "targetWidth": 360,
+        "targetHeight": 360,
+        "drawWidth": 640,
+        "drawHeight": 360,
+        "offsetX": 0,
+        "offsetY": 0,
+        "scale": 1
+      }
+    },
+    {
+      "id": "landscape-fill-270-fill-4-3-center",
+      "source": {
+        "width": 640,
+        "height": 360
+      },
+      "placement": {
+        "mode": "fill",
+        "focalX": 0.5,
+        "focalY": 0.5,
+        "rotation": 270,
+        "targetAspectRatio": 1.3333333333333333
+      },
+      "expected": {
+        "sourceWidth": 640,
+        "sourceHeight": 360,
+        "rotatedWidth": 360,
+        "rotatedHeight": 640,
+        "targetWidth": 360,
+        "targetHeight": 270,
+        "drawWidth": 640,
+        "drawHeight": 360,
+        "offsetX": 0,
+        "offsetY": -185,
+        "scale": 1
+      }
+    },
+    {
+      "id": "landscape-fill-270-fill-16-9-bottom-right",
+      "source": {
+        "width": 640,
+        "height": 360
+      },
+      "placement": {
+        "mode": "fill",
+        "focalX": 1,
+        "focalY": 1,
+        "rotation": 270,
+        "targetAspectRatio": 1.7777777777777777
+      },
+      "expected": {
+        "sourceWidth": 640,
+        "sourceHeight": 360,
+        "rotatedWidth": 360,
+        "rotatedHeight": 640,
+        "targetWidth": 360,
+        "targetHeight": 202.5,
+        "drawWidth": 640,
+        "drawHeight": 360,
+        "offsetX": 0,
+        "offsetY": -437.5,
+        "scale": 1
+      }
+    },
+    {
+      "id": "asymmetric-fit-0-fit-native",
+      "source": {
+        "width": 401,
+        "height": 267
+      },
+      "placement": {
+        "mode": "fit",
+        "focalX": 0.5,
+        "focalY": 0.5,
+        "rotation": 0,
+        "targetAspectRatio": null
+      },
+      "expected": {
+        "sourceWidth": 401,
+        "sourceHeight": 267,
+        "rotatedWidth": 401,
+        "rotatedHeight": 267,
+        "targetWidth": 401,
+        "targetHeight": 267,
+        "drawWidth": 401,
+        "drawHeight": 267,
+        "offsetX": 0,
+        "offsetY": 0,
+        "scale": 1
+      }
+    },
+    {
+      "id": "asymmetric-fill-0-fill-square-top-left",
+      "source": {
+        "width": 401,
+        "height": 267
+      },
+      "placement": {
+        "mode": "fill",
+        "focalX": 0,
+        "focalY": 0,
+        "rotation": 0,
+        "targetAspectRatio": 1
+      },
+      "expected": {
+        "sourceWidth": 401,
+        "sourceHeight": 267,
+        "rotatedWidth": 401,
+        "rotatedHeight": 267,
+        "targetWidth": 267,
+        "targetHeight": 267,
+        "drawWidth": 401,
+        "drawHeight": 267,
+        "offsetX": 0,
+        "offsetY": 0,
+        "scale": 1
+      }
+    },
+    {
+      "id": "asymmetric-fill-0-fill-4-3-center",
+      "source": {
+        "width": 401,
+        "height": 267
+      },
+      "placement": {
+        "mode": "fill",
+        "focalX": 0.5,
+        "focalY": 0.5,
+        "rotation": 0,
+        "targetAspectRatio": 1.3333333333333333
+      },
+      "expected": {
+        "sourceWidth": 401,
+        "sourceHeight": 267,
+        "rotatedWidth": 401,
+        "rotatedHeight": 267,
+        "targetWidth": 356,
+        "targetHeight": 267,
+        "drawWidth": 401,
+        "drawHeight": 267,
+        "offsetX": -22.5,
+        "offsetY": 0,
+        "scale": 1
+      }
+    },
+    {
+      "id": "asymmetric-fill-0-fill-16-9-bottom-right",
+      "source": {
+        "width": 401,
+        "height": 267
+      },
+      "placement": {
+        "mode": "fill",
+        "focalX": 1,
+        "focalY": 1,
+        "rotation": 0,
+        "targetAspectRatio": 1.7777777777777777
+      },
+      "expected": {
+        "sourceWidth": 401,
+        "sourceHeight": 267,
+        "rotatedWidth": 401,
+        "rotatedHeight": 267,
+        "targetWidth": 401,
+        "targetHeight": 225.5625,
+        "drawWidth": 401,
+        "drawHeight": 267,
+        "offsetX": 0,
+        "offsetY": -41.4375,
+        "scale": 1
+      }
+    },
+    {
+      "id": "asymmetric-fit-90-fit-native",
+      "source": {
+        "width": 401,
+        "height": 267
+      },
+      "placement": {
+        "mode": "fit",
+        "focalX": 0.5,
+        "focalY": 0.5,
+        "rotation": 90,
+        "targetAspectRatio": null
+      },
+      "expected": {
+        "sourceWidth": 401,
+        "sourceHeight": 267,
+        "rotatedWidth": 267,
+        "rotatedHeight": 401,
+        "targetWidth": 267,
+        "targetHeight": 401,
+        "drawWidth": 401,
+        "drawHeight": 267,
+        "offsetX": 0,
+        "offsetY": 0,
+        "scale": 1
+      }
+    },
+    {
+      "id": "asymmetric-fill-90-fill-square-top-left",
+      "source": {
+        "width": 401,
+        "height": 267
+      },
+      "placement": {
+        "mode": "fill",
+        "focalX": 0,
+        "focalY": 0,
+        "rotation": 90,
+        "targetAspectRatio": 1
+      },
+      "expected": {
+        "sourceWidth": 401,
+        "sourceHeight": 267,
+        "rotatedWidth": 267,
+        "rotatedHeight": 401,
+        "targetWidth": 267,
+        "targetHeight": 267,
+        "drawWidth": 401,
+        "drawHeight": 267,
+        "offsetX": 0,
+        "offsetY": 0,
+        "scale": 1
+      }
+    },
+    {
+      "id": "asymmetric-fill-90-fill-4-3-center",
+      "source": {
+        "width": 401,
+        "height": 267
+      },
+      "placement": {
+        "mode": "fill",
+        "focalX": 0.5,
+        "focalY": 0.5,
+        "rotation": 90,
+        "targetAspectRatio": 1.3333333333333333
+      },
+      "expected": {
+        "sourceWidth": 401,
+        "sourceHeight": 267,
+        "rotatedWidth": 267,
+        "rotatedHeight": 401,
+        "targetWidth": 267,
+        "targetHeight": 200.25,
+        "drawWidth": 401,
+        "drawHeight": 267,
+        "offsetX": 0,
+        "offsetY": -100.375,
+        "scale": 1
+      }
+    },
+    {
+      "id": "asymmetric-fill-90-fill-16-9-bottom-right",
+      "source": {
+        "width": 401,
+        "height": 267
+      },
+      "placement": {
+        "mode": "fill",
+        "focalX": 1,
+        "focalY": 1,
+        "rotation": 90,
+        "targetAspectRatio": 1.7777777777777777
+      },
+      "expected": {
+        "sourceWidth": 401,
+        "sourceHeight": 267,
+        "rotatedWidth": 267,
+        "rotatedHeight": 401,
+        "targetWidth": 267,
+        "targetHeight": 150.1875,
+        "drawWidth": 401,
+        "drawHeight": 267,
+        "offsetX": 0,
+        "offsetY": -250.8125,
+        "scale": 1
+      }
+    },
+    {
+      "id": "asymmetric-fit-180-fit-native",
+      "source": {
+        "width": 401,
+        "height": 267
+      },
+      "placement": {
+        "mode": "fit",
+        "focalX": 0.5,
+        "focalY": 0.5,
+        "rotation": 180,
+        "targetAspectRatio": null
+      },
+      "expected": {
+        "sourceWidth": 401,
+        "sourceHeight": 267,
+        "rotatedWidth": 401,
+        "rotatedHeight": 267,
+        "targetWidth": 401,
+        "targetHeight": 267,
+        "drawWidth": 401,
+        "drawHeight": 267,
+        "offsetX": 0,
+        "offsetY": 0,
+        "scale": 1
+      }
+    },
+    {
+      "id": "asymmetric-fill-180-fill-square-top-left",
+      "source": {
+        "width": 401,
+        "height": 267
+      },
+      "placement": {
+        "mode": "fill",
+        "focalX": 0,
+        "focalY": 0,
+        "rotation": 180,
+        "targetAspectRatio": 1
+      },
+      "expected": {
+        "sourceWidth": 401,
+        "sourceHeight": 267,
+        "rotatedWidth": 401,
+        "rotatedHeight": 267,
+        "targetWidth": 267,
+        "targetHeight": 267,
+        "drawWidth": 401,
+        "drawHeight": 267,
+        "offsetX": 0,
+        "offsetY": 0,
+        "scale": 1
+      }
+    },
+    {
+      "id": "asymmetric-fill-180-fill-4-3-center",
+      "source": {
+        "width": 401,
+        "height": 267
+      },
+      "placement": {
+        "mode": "fill",
+        "focalX": 0.5,
+        "focalY": 0.5,
+        "rotation": 180,
+        "targetAspectRatio": 1.3333333333333333
+      },
+      "expected": {
+        "sourceWidth": 401,
+        "sourceHeight": 267,
+        "rotatedWidth": 401,
+        "rotatedHeight": 267,
+        "targetWidth": 356,
+        "targetHeight": 267,
+        "drawWidth": 401,
+        "drawHeight": 267,
+        "offsetX": -22.5,
+        "offsetY": 0,
+        "scale": 1
+      }
+    },
+    {
+      "id": "asymmetric-fill-180-fill-16-9-bottom-right",
+      "source": {
+        "width": 401,
+        "height": 267
+      },
+      "placement": {
+        "mode": "fill",
+        "focalX": 1,
+        "focalY": 1,
+        "rotation": 180,
+        "targetAspectRatio": 1.7777777777777777
+      },
+      "expected": {
+        "sourceWidth": 401,
+        "sourceHeight": 267,
+        "rotatedWidth": 401,
+        "rotatedHeight": 267,
+        "targetWidth": 401,
+        "targetHeight": 225.5625,
+        "drawWidth": 401,
+        "drawHeight": 267,
+        "offsetX": 0,
+        "offsetY": -41.4375,
+        "scale": 1
+      }
+    },
+    {
+      "id": "asymmetric-fit-270-fit-native",
+      "source": {
+        "width": 401,
+        "height": 267
+      },
+      "placement": {
+        "mode": "fit",
+        "focalX": 0.5,
+        "focalY": 0.5,
+        "rotation": 270,
+        "targetAspectRatio": null
+      },
+      "expected": {
+        "sourceWidth": 401,
+        "sourceHeight": 267,
+        "rotatedWidth": 267,
+        "rotatedHeight": 401,
+        "targetWidth": 267,
+        "targetHeight": 401,
+        "drawWidth": 401,
+        "drawHeight": 267,
+        "offsetX": 0,
+        "offsetY": 0,
+        "scale": 1
+      }
+    },
+    {
+      "id": "asymmetric-fill-270-fill-square-top-left",
+      "source": {
+        "width": 401,
+        "height": 267
+      },
+      "placement": {
+        "mode": "fill",
+        "focalX": 0,
+        "focalY": 0,
+        "rotation": 270,
+        "targetAspectRatio": 1
+      },
+      "expected": {
+        "sourceWidth": 401,
+        "sourceHeight": 267,
+        "rotatedWidth": 267,
+        "rotatedHeight": 401,
+        "targetWidth": 267,
+        "targetHeight": 267,
+        "drawWidth": 401,
+        "drawHeight": 267,
+        "offsetX": 0,
+        "offsetY": 0,
+        "scale": 1
+      }
+    },
+    {
+      "id": "asymmetric-fill-270-fill-4-3-center",
+      "source": {
+        "width": 401,
+        "height": 267
+      },
+      "placement": {
+        "mode": "fill",
+        "focalX": 0.5,
+        "focalY": 0.5,
+        "rotation": 270,
+        "targetAspectRatio": 1.3333333333333333
+      },
+      "expected": {
+        "sourceWidth": 401,
+        "sourceHeight": 267,
+        "rotatedWidth": 267,
+        "rotatedHeight": 401,
+        "targetWidth": 267,
+        "targetHeight": 200.25,
+        "drawWidth": 401,
+        "drawHeight": 267,
+        "offsetX": 0,
+        "offsetY": -100.375,
+        "scale": 1
+      }
+    },
+    {
+      "id": "asymmetric-fill-270-fill-16-9-bottom-right",
+      "source": {
+        "width": 401,
+        "height": 267
+      },
+      "placement": {
+        "mode": "fill",
+        "focalX": 1,
+        "focalY": 1,
+        "rotation": 270,
+        "targetAspectRatio": 1.7777777777777777
+      },
+      "expected": {
+        "sourceWidth": 401,
+        "sourceHeight": 267,
+        "rotatedWidth": 267,
+        "rotatedHeight": 401,
+        "targetWidth": 267,
+        "targetHeight": 150.1875,
+        "drawWidth": 401,
+        "drawHeight": 267,
+        "offsetX": 0,
+        "offsetY": -250.8125,
+        "scale": 1
+      }
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs"
 import path from "node:path"
-import { javaRuntimeDir } from "../paths/paths.js"
+import { javaRuntimeDir, professionalToolsDir } from "../paths/paths.js"
 
 /**
  * 随包 Java Runtime 的可执行文件解析。
@@ -38,13 +38,26 @@ export const resolveBundledJavaExecutable = (): string | null => {
 }
 
 /**
- * 随包 LibRaw 原生程序（RAW 真实显影）解析。
- * 布局：<resources>/libraw/camborder-libraw-sampler(.exe)，由打包脚本放入。
- * 缺失时返回 null——引擎据此走嵌入预览降级，并在 sourceDecode.warning 说明原因。
+ * 随包 ExifTool 解析。
+ * macOS 使用官方发行包中的 Perl 启动脚本和同目录 lib，Windows 使用官方
+ * 64-bit 可执行文件。缺失时只让 Java 引擎把专业能力报告为 false。
  */
-export const resolveBundledLibRawExecutable = (): string | null => {
-  const resourcesDir = path.dirname(javaRuntimeDir)
-  const name = process.platform === "win32" ? "camborder-libraw-sampler.exe" : "camborder-libraw-sampler"
-  const candidate = path.join(resourcesDir, "libraw", name)
+export const resolveBundledExifToolExecutable = (): string | null => {
+  const relative = process.platform === "win32"
+    ? path.join("win-x64", "exiftool.exe")
+    : path.join("macos", "exiftool")
+  const candidate = path.join(professionalToolsDir, "exiftool", relative)
+  return existsSync(candidate) ? candidate : null
+}
+
+/** 随包组件清单，供 Java 引擎返回版本、许可证与校验和。 */
+export const resolveBundledComponentManifest = (): string | null => {
+  const candidate = path.join(professionalToolsDir, "components.json")
+  return existsSync(candidate) ? candidate : null
+}
+
+/** 随包字体目录；缺失时 Java 端必须把字体能力报告为 false。 */
+export const resolveBundledFontsDirectory = (): string | null => {
+  const candidate = path.join(professionalToolsDir, "fonts")
   return existsSync(candidate) ? candidate : null
 }

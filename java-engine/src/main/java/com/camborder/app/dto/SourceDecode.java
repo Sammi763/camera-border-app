@@ -5,20 +5,31 @@ package com.camborder.app.dto;
  *
  * mode 取值：
  * - standard：标准格式（JPEG/PNG/TIFF 等）由 ImageIO 直接读取；
- * - raw-developed：RAW 经 LibRaw 子进程完成默认显影（真实传感器数据）；
- * - embedded-preview-fallback：RAW 真实显影不可用/失败，降级为文件内嵌 JPEG 预览。
+ * - embedded-jpeg：RAW 只使用文件内嵌 JPEG 作为像素来源。
  *
- * warning：非空时给出可解释的降级原因；standard/raw-developed 成功时为 null。
+ * warning：非空时给出 RAW 像素来源受限等可解释说明。
  */
 public final class SourceDecode {
 
     public static final String MODE_STANDARD = "standard";
-    public static final String MODE_RAW_DEVELOPED = "raw-developed";
-    public static final String MODE_EMBEDDED_FALLBACK = "embedded-preview-fallback";
+    public static final String MODE_EMBEDDED_JPEG = "embedded-jpeg";
 
     private String mode;
     private String format;
     private String warning;
+    /** 解码边界读取到的 EXIF Orientation，范围固定为 1–8。 */
+    private int orientation = 1;
+    /** Orientation 物理应用前的解码尺寸。 */
+    private int decodedWidth;
+    private int decodedHeight;
+    /** Orientation 应用后的有向像素尺寸。 */
+    private int orientedWidth;
+    private int orientedHeight;
+    /** 预览采样前的全分辨率有向源尺寸；RAW 指内嵌 JPEG 的全分辨率尺寸。 */
+    private int fullWidth;
+    private int fullHeight;
+    /** 是否已经在解码边界处理过方向。 */
+    private boolean orientationApplied;
 
     public SourceDecode() {
     }
@@ -34,14 +45,10 @@ public final class SourceDecode {
         return new SourceDecode(MODE_STANDARD, format, null);
     }
 
-    /** RAW 真实显影成功。 */
-    public static SourceDecode rawDeveloped(final String format) {
-        return new SourceDecode(MODE_RAW_DEVELOPED, format, null);
-    }
-
-    /** RAW 降级为嵌入预览，附中文原因。 */
-    public static SourceDecode embeddedFallback(final String format, final String warning) {
-        return new SourceDecode(MODE_EMBEDDED_FALLBACK, format, warning);
+    /** RAW 使用内嵌 JPEG，明确说明不会读取传感器 RAW。 */
+    public static SourceDecode embeddedJpeg(final String format) {
+        return new SourceDecode(MODE_EMBEDDED_JPEG, format,
+                "RAW 仅使用文件内嵌 JPEG 像素，不代表传感器 RAW 显影");
     }
 
     public String getMode() {
@@ -66,5 +73,69 @@ public final class SourceDecode {
 
     public void setWarning(final String warning) {
         this.warning = warning;
+    }
+
+    public int getOrientation() {
+        return orientation;
+    }
+
+    public void setOrientation(final int orientation) {
+        this.orientation = orientation;
+    }
+
+    public int getDecodedWidth() {
+        return decodedWidth;
+    }
+
+    public void setDecodedWidth(final int decodedWidth) {
+        this.decodedWidth = decodedWidth;
+    }
+
+    public int getDecodedHeight() {
+        return decodedHeight;
+    }
+
+    public void setDecodedHeight(final int decodedHeight) {
+        this.decodedHeight = decodedHeight;
+    }
+
+    public int getOrientedWidth() {
+        return orientedWidth;
+    }
+
+    public void setOrientedWidth(final int orientedWidth) {
+        this.orientedWidth = orientedWidth;
+    }
+
+    public int getOrientedHeight() {
+        return orientedHeight;
+    }
+
+    public void setOrientedHeight(final int orientedHeight) {
+        this.orientedHeight = orientedHeight;
+    }
+
+    public int getFullWidth() {
+        return fullWidth;
+    }
+
+    public void setFullWidth(final int fullWidth) {
+        this.fullWidth = fullWidth;
+    }
+
+    public int getFullHeight() {
+        return fullHeight;
+    }
+
+    public void setFullHeight(final int fullHeight) {
+        this.fullHeight = fullHeight;
+    }
+
+    public boolean isOrientationApplied() {
+        return orientationApplied;
+    }
+
+    public void setOrientationApplied(final boolean orientationApplied) {
+        this.orientationApplied = orientationApplied;
     }
 }

@@ -7,7 +7,8 @@
 ## 0. 先确认阶段 0 产品契约
 
 任何涉及导入、渲染、导出、元数据或界面术语的任务，先读 [docs/prd.md §0](prd.md)。
-本手册不得自行增加支持范围。最终平台仅为 macOS arm64、macOS x64、Windows x64；输入为
+本手册不得自行增加支持范围。正式发布目标仅为 macOS arm64；macOS x64 和 Windows x64 为候选目标，
+其中 Windows 状态固定为 `SIMULATED`；输入为
 JPEG、PNG、TIFF、HEIC/HEIF 和 RAW 内嵌 JPEG 预览；输出为 JPEG 8-bit、PNG 8/16-bit、
 TIFF 8/16-bit。
 
@@ -21,15 +22,39 @@ PNG 是必须提供的同档位输出格式变体，不是第四个档位。快�
 PNG 8-bit；高保真归档允许 TIFF 或按源位深输出 PNG 8/16-bit。输出格式选择不得改变所选
 档位的尺寸、色彩和 GPS/位置策略。
 
+## 0.3 阶段五专业保真链路
+
+专业导出控件必须以运行时能力为前置条件：
+
+1. 请求 `GET /api/capabilities`。结果来自随包的 TwelveMonkeys ImageIO、ExifTool 和
+   `components.json`；缺少组件、版本不匹配或不可执行时，相关 `available` 必须为 `false`，
+   不得回退系统 PATH。
+2. 用户选择档位和输出格式后请求 `POST /api/export-preflight`。预检要同时检查源图事实、
+   输出路径、格式/位深、ICC/元数据策略、目标尺寸和冲突；固定档位无法满足时阻断提交。
+3. 提交 `POST /api/render-jobs` 后只接受实际完成并经独立 ExifTool 读取验证的结果。报告中的
+   `FidelityReport` 使用实际输出的尺寸、方向、位深、色彩空间、ICC 和 EXIF/XMP/IPTC/GPS
+   状态；JPEG 固定 8-bit，PNG/TIFF 按真实 8/16-bit 编码，8-bit 源不得报告为 16-bit。
+4. 无 ICC 源按 sRGB 处理并在报告中标记 `sRGB-assumed`；分享档移除 GPS/位置，标准交付和
+   高保真归档保留。ExifTool 超时、非零退出、输出无效或临时文件清理失败都必须使导出失败，
+   不得返回 `completed + SKIPPED`。
+5. RAW 只以可读取的内嵌 JPEG 作为像素来源；归档报告应显示 `fidelityScope=limited`、实际
+   像素来源和尺寸，不得启用 LibRaw 或其他生产显影路径。
+
+专业组件的版本、许可证、下载地址和 SHA-256 维护在 `third-party/professional-components.json`，
+打包由 `scripts/fetch-professional-tools.sh` 和 `scripts/package-app.sh` 完成。独立验收应使用
+随包 ExifTool 读取实际输出，不以应用自身报告代替文件事实。JRE 的 `release`、`NOTICE` 和
+Java Engine 的 JAR manifest 也必须随包保留，供校验器确认厂商、版本、架构和许可证；构建
+脚本不得为了缩小体积删除这些证明材料。
+
 ## 0.1 验证打包应用链路（阶段 1）
 
 **起点**：需要验证发布产物，而不是 Vite 页面或本机手动启动的 Java。
 
 **步骤**：
 
-1. 当前 macOS 开发机按 `pnpm package && pnpm e2e:packaged` 完成阶段 1 验收；该结果只覆盖
-   当前 CPU 架构。macOS x64 和 Windows x64 仍须在对应原生构建环境分别执行同一命令，不能
-   把当前结果写为已实测。
+1. 当前 macOS arm64 开发机按 `pnpm package && pnpm e2e:packaged` 完成正式目标阶段 1 验收；
+   macOS x64 和 Windows x64 仍须在对应环境分别执行同一命令并作为候选记录，不能把候选结果
+   写成正式发布通过。
 2. 确认产物资源目录含随包 JRE（macOS 为 `java-runtime/Contents/Home/bin/java`，Windows
    为 `java-runtime/bin/java.exe`）、引擎 jar、前端构建产物，以及 macOS
    `build/icon.icns` / Windows `build/icon.ico` 对应的正式图标。
@@ -44,9 +69,25 @@ PNG 8-bit；高保真归档允许 TIFF 或按源位深输出 PNG 8/16-bit。输�
 5. 引擎尚未 ready 时，页面应收到结构化 `503 ENGINE_STARTING` 并显示启动中；进程失败时
    才显示不可用及失败原因。
 
-**可验证终点**：E2E 退出码为 0，页面地址为 `app://app/...`，输出文件存在且非空；三种
-最终平台各自执行并分别记录结果。脚本默认使用 `photos/78330006.jpg`，不添加真实二进制
-样片，也不替代 [`docs/test-samples.md`](test-samples.md) 的格式验收。
+### 0.1.1 采集阶段 1 方向与几何基线
+
+阶段 1 的方向/几何证据必须从当前 checkout 重新打包的 macOS arm64 应用采集，不能使用旧候选包：
+
+```bash
+pnpm package
+node scripts/capture-stage1-baseline.mjs
+```
+
+脚本固定验证六张真实 ARW、横图、Polaroid 和 `actual/100%` 场景，并将证据写入
+`.local/stage1/<version>-<timestamp>-<commit>/`：包括四张真实 Renderer PNG、每个场景的窗口/
+viewport/CSS Canvas/backing Canvas/图片区域几何、Java 预览同步状态、源文件 SHA-256、六张 ARW
+批量导出以及独立 ExifTool 的 Orientation/宽高/位深读取。`.local/` 不提交 Git，也不上传素材。
+
+脚本只在 macOS arm64 运行正式目标证据；macOS x64 与 Windows x64 仍是候选目标，Windows
+状态固定为 `SIMULATED`，不会因为候选证据缺失阻塞正式 arm64。
+
+**可验证终点**：E2E 退出码为 0，页面地址为 `app://app/...`，输出文件存在且非空；正式目标
+与候选目标各自执行并分别记录结果。脚本默认使用 `fixtures/stage4/real-exif-canon-m03a9518.jpg`；完整来源、许可和 SHA-256 清单见 [fixtures/stage4/README.md](../fixtures/stage4/README.md)。真实样片固定纳入版本库并按清单验收；它们不替代 [`docs/test-samples.md`](test-samples.md) 的完整格式矩阵。
 
 ## 0.2 RenderRecipe v2 与本地解码边界（阶段 4）
 
@@ -60,6 +101,19 @@ Canvas 与 Java 引擎都调用同一套“旋转包围盒 → 目标区域 → 
 解码助手在隔离 worker 中转换为带 EXIF/ICC 的临时 PNG，单文件、单次数量和输出大小受限，
 超时会终止 worker 并清理临时结果；应用退出时清理本实例临时目录。能力探测失败必须明确
 报告不支持，不回退到操作系统外部解码工具或系统扩展。
+
+### 0.2.1 阶段 2 图片区域与 Polaroid 验收
+
+阶段 2 的工作台验收应覆盖横图、竖图、方图和 Polaroid，并在 1200×760、1400×863、1920×1080
+三个窗口尺寸下检查中央预览仍然居中。页面上的图片区域、预览 CSS 尺寸和输出像素尺寸必须
+分别可读；1:1 视图允许溢出滚动，但未溢出的轴仍需居中。
+
+检查图片区域的方向、比例和完整显示/填满裁切语义，确认图片没有被拉伸。Polaroid 编辑态可
+显示“图片区”辅助线，但导出 PNG/JPEG/TIFF 不得包含该辅助线。固定输出档位中的 PNG 变体必须
+保持原档位，不得因格式选择改成 custom。
+
+重启应用后确认图片区域、版式、输出档位和水印恢复；预览缩放不要求恢复。键盘焦点、按钮文字、
+中文路径和面板展开/收起也属于验收范围。
 
 ## 1. 新增一个 Java API 端点（端到端）
 
@@ -264,7 +318,7 @@ grep -rn '](\.' README.md AGENTS.md CONTRIBUTING.md ARCHITECTURE.md DESIGN.md do
 ## 验证 RAW 输入契约
 
 RAW 是最终支持的输入格式，但产品只读取文件内可读取的内嵌 JPEG 预览，不做真实显影。
-因此不能新增、启用或验收 LibRaw/其他 RAW 显影子进程作为产品能力。
+因此不能新增、启用或验收外部 RAW 显影子进程作为产品能力。
 
 RAW 验收扩展名冻结为 NEF、CR2、CR3、ARW、RAF、DNG、ORF、RW2、PEF。每个扩展名都要按
 [`docs/test-samples.md`](test-samples.md) 的固定文件名准备一正一负两份真实相机样片。
@@ -272,7 +326,7 @@ RAW 验收扩展名冻结为 NEF、CR2、CR3、ARW、RAF、DNG、ORF、RW2、PEF
 1. 准备带内嵌 JPEG 的 RAW 样片和没有内嵌 JPEG 的 RAW 失败样片，覆盖上述九种扩展名。
 2. 验证带预览样片的导入、预览、单图导出和批量导出；结果必须明确标识“内嵌 JPEG 预览”。
 3. 验证无预览样片返回明确失败，不得静默使用传感器数据显影、其他缩略图或伪装成完整 RAW。
-4. 在 macOS arm64、macOS x64、Windows x64 分别执行；开发机上的单平台或交叉构建结果不能替代平台验收。
+4. 在 macOS arm64 正式目标执行；macOS x64 / Windows x64 作为候选分别执行，开发机上的单平台或交叉构建结果不能替代对应目标验收。
 
 ## 打包与冒烟
 
@@ -286,3 +340,31 @@ CAMBORDER_SMOKE_PORT=8091 bash scripts/smoke-test.sh <app 可执行文件>
 签名要点（macOS）：electron-builder 的 afterPack 钩子对嵌套 framework/helper 与外层
 做 ad-hoc 签名，**绝不重签 Resources/java-runtime**（覆盖 Temurin 原始 hardened-runtime
 签名会导致 java 进程被内核 SIGKILL）。正式分发替换为开发者证书 + 公证。
+
+## 对话框目录记忆、导入去重与预览辅助（用户体验项）
+
+这些能力均为体验优化：不改变 `RenderRecipe` 冻结契约，预览辅助不进入四链路一致性约束。
+
+### 对话框目录记忆（electron）
+
+- 存储：`userData/dialog-memory.json`（`lastImportDir` / `lastExportDir`）。解析与拼装是纯函数（`electron/src/ipc/dialogMemory.ts`），fileDialog 只负责调用时机。
+- 行为：所有导入对话框从上次导入目录打开；单图导出保存框 `defaultPath = join(lastExportDir, 默认文件名)`；批量导出目录框打开上次导出目录。选择成功才写回；取消不写。读写失败静默回退，绝不阻塞对话框。
+- 约束：打包 E2E 替身路径（`CAMBORDER_E2E_*`）不读写记忆。要给新的对话框加记忆：复用 `readDialogMemory/recordDialogDir/writeDialogMemory`，不要自己写 JSON。
+
+### 导入去重（frontend queue）
+
+- 规则：按 `sourcePath` 反斜杠归一后比较（`useQueue.normalizeSourcePath`），同一批内重复也只保留一次；HEIC 转换只对新增路径执行。
+- 反馈：`ImportResult.skippedDuplicateCount` 计入 QueuePanel 导入提示「N 张已在队列中，已跳过」。
+
+### 队列批量操作与排序（frontend queue）
+
+- `useQueue` 新增 `removeOthers / removeLeftOf / removeRightOf / reorder / sortByName`，全部走现有撤销历史；`reorder` 拖回原位与无效 id/NaN 不产生历史条目，`sortByName` 为稳定排序（同名文件保持原相对顺序）且已有序时不产生历史。
+- QueuePanel 行右键为自绘受控菜单（删除此图/其他/左侧/右侧、清空）；行 HTML5 拖拽排序的 dataTransfer 类型为 `application/x-camborder-queue-item`，与根级文件拖放路由（按 `dataTransfer.files` 判别）天然隔离。
+
+### 预览编辑态辅助（frontend preview）
+
+- 网格辅助线：`canvasRenderer.drawImageGridOverlay(ctx, rect)`（三分线 + 中心十字，零尺寸 rect 安全跳过），由 CanvasPreview 在 `drawPreviewToCanvas` 之后按图片区域叠加；开关只在预览元信息栏。
+- 按住查看原图：`\` 键或工具栏「原图」按钮按住时叠加无边框原图 `<img>`，松开恢复；切换图片或窗口失焦自动退出；模态对话框打开期间不触发。
+- 裁切构图拖动：`canvasRenderer.calculateFocalFromPointer` 把图片区域内指针换算为 `focalX/focalY`（区域外忽略、clamp 0–1），经 `onUpdateImagePlacement` 走 `settingsController.update` 标记 userModified；非裁切模式保持画布平移。
+- 撤销语义：连续手势类设置更新必须携带 `options.historyTag`（如 `image-placement-drag-{手势序号}`）。`useSettings.commitSettings` 对相邻同标签提交只保留手势开始前的一条撤销快照——一次拖动一次 ⌘Z 即可回到拖动前；每次按下手势递增序号，两次拖动不合并；undo/redo 后标签重置，手势不会跨撤销边界合并。普通设置更新不传标签，行为不变。
+- 共同约束：辅助内容只画在 Canvas 即时预览上，引擎渲染与导出结果不含网格/原图叠加；新增辅助线时同样遵守「编辑态叠加、不进 RenderRecipe」。

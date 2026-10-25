@@ -1,6 +1,6 @@
 # 图片边框工具
 
-一个面向摄影工作流的本地桌面图片边框工具。项目目标是让摄影用户可以快速为数码或胶片照片添加边框、拍摄信息和可复用版式，并以尽量保留原图质量的方式批量导出成品。最终发行平台只有 macOS arm64、macOS x64 和 Windows x64；不要求登录，图片和用户资产默认只保存在本机。
+一个面向摄影工作流的本地桌面图片边框工具。项目目标是让摄影用户可以快速为数码或胶片照片添加边框、拍摄信息和可复用版式，并以尽量保留原图质量的方式批量导出成品。当前正式发布目标仅为 macOS arm64；macOS x64 和 Windows x64 保留候选包，不参与正式发布阻塞。应用不要求登录，图片和用户资产默认只保存在本机。
 
 当前项目采用 Electron + React + Java 本地图像引擎的架构：界面运行在桌面 App 中，图像读取、预览同步和原图导出由本地 Java 服务完成，图片不会上传到云端。
 
@@ -30,6 +30,12 @@ cd .. && pnpm dev
 | [docs/adr/](docs/adr/) | 关键决策的原因与替代方案 |
 | [docs/cookbook.md](docs/cookbook.md) | 常见任务操作步骤（加端点/变量/版式/字体等） |
 | [docs/release-checklist.md](docs/release-checklist.md) | 打包链路与干净机器验收清单 |
+| [docs/release-scope.json](docs/release-scope.json) | 机器可读的正式目标、候选目标和验收策略 |
+| [docs/support-matrix.md](docs/support-matrix.md) | 平台、格式、档位与随包依赖边界 |
+| [docs/offline-help.md](docs/offline-help.md) | 离线使用、能力探测与 RAW 用户帮助 |
+| [docs/raw-and-fidelity.md](docs/raw-and-fidelity.md) | RAW、ICC、位深、元数据与独立验收口径 |
+| [docs/troubleshooting.md](docs/troubleshooting.md) | 引擎、外部工具、路径和安装排障 |
+| [docs/user-study-stage6.md](docs/user-study-stage6.md) | 阶段 6 摄影用户首次使用测试记录模板 |
 | [DESIGN.md](DESIGN.md) | 设计系统（色彩 token、字体、间距、组件） |
 | [electron/README.md](electron/README.md) | 桌面壳：职责、IPC 桥接 API、持久化位置 |
 | [frontend/README.md](frontend/README.md) | 前端：目录、数据流、桌面/浏览器模式差异 |
@@ -42,7 +48,7 @@ cd .. && pnpm dev
 
 | 项目 | 冻结范围 |
 |---|---|
-| 平台 | macOS arm64、macOS x64、Windows x64 |
+| 平台 | 正式：macOS arm64；候选：macOS x64、Windows x64（Windows 状态为 `SIMULATED`） |
 | 输入 | JPEG、PNG、TIFF、HEIC/HEIF、RAW 内嵌 JPEG 预览 |
 | 输出 | JPEG 8-bit、PNG 8/16-bit、TIFF 8/16-bit |
 | 固定导出档位 | 快速分享（JPEG 92 / 长边 2048 / sRGB / 移除 GPS/位置）；标准交付（JPEG 95 / 原图尺寸 / 8-bit / 源 ICC + 全部元数据）；高保真归档（TIFF / 原图尺寸 / 源位深 / 源 ICC + 全部元数据） |
@@ -59,7 +65,7 @@ RAW 扩展名与样片范围、格式/位深/ICC/元数据预期见 [`docs/test-
 ## 当前已实现（工程基线，不等于最终支持）
 
 > 本节只记录当前 HEAD 已存在的工程能力。它不代表 §0 的最终格式、位深、ICC、元数据或
-> 三平台验收已经完成；最终支持必须以 [docs/prd.md §0](docs/prd.md) 和样片矩阵为准。
+> 阶段 0 只建立可复核基线，不等同于正式发布已就绪；正式门只检查 macOS arm64，候选平台不参与阻塞。
 
 ### 统一渐进式工作台
 
@@ -82,6 +88,21 @@ RAW 扩展名与样片范围、格式/位深/ICC/元数据预期见 [`docs/test-
 - 文件夹导入自动扫描当前层级图片，按文件名自然排序。
 - 首张图片自动激活预览；点击缩略图切换当前预览图。
 - 空文件夹显示中文提示。
+
+### 方向与预览几何
+
+- EXIF Orientation 1–8 只在 Java 引擎的图片解码边界物理处理一次；这一步与用户在
+  `RenderRecipe.imagePlacement.rotation` 中设置的手动旋转分开，避免重复旋转。
+- RAW 预览只使用文件内的 `JpgFromRaw` 内嵌 JPEG；内嵌 JPEG 的 Orientation 会先统一为实际
+  像素方向，再进入 Canvas、引擎预览和导出链路。
+- 「适应画布」保持图片比例并显示完整图片；只有 `fill` 图片区域明确允许裁切，并在界面显示
+  裁切状态。
+- 预览缩放只有「适应画布」和「100% 像素查看」两态。100% 使用自然合成像素尺寸，内容溢出时
+  可滚动或拖拽，未溢出的轴保持居中；不会引入滚轮自由缩放或第三种 custom 状态。
+- CSS 显示尺寸、Canvas backing store（按 device pixel ratio）和导出像素尺寸分别记录；四条
+  渲染链路继续共用同一份 `RenderRecipe`。
+- 图片区域单独设置方向、比例和完整显示/填满裁切；预览尺寸只影响 CSS 预览框，不改变导出像素。
+  Polaroid 明确划分图片区、内边距、底部文字区和视觉分隔，编辑辅助线不会进入导出。
 
 ### 多选批量工作流
 
@@ -193,7 +214,7 @@ camera-border-app/
 
 最终产品支持范围冻结为：
 
-- 平台：macOS arm64、macOS x64、Windows x64。
+- 平台：正式发布为 macOS arm64；macOS x64 与 Windows x64 为候选包，Windows 的状态固定为 `SIMULATED`。
 - 输入：JPEG、PNG、TIFF、HEIC/HEIF、RAW 内嵌 JPEG 预览。
 - 输出：JPEG 8-bit、PNG 8/16-bit、TIFF 8/16-bit。
 - RAW：只读取内嵌 JPEG，不做真实 RAW 显影；没有内嵌 JPEG 时明确失败。
@@ -210,8 +231,8 @@ camera-border-app/
 解码助手，RAW 当前只能按内嵌 JPEG 预览路径验收，不能以任何真实显影路径作为产品承诺。
 
 打包脚本已支持 macOS `.dmg` 与 Windows x64 `.exe` 的构建链路（`pnpm fetch:runtime && pnpm package`，
-随包 Java Runtime，最终用户无需安装 Java、Node.js 或 Python）。macOS arm64、macOS x64 和
-Windows x64 的安装、离线、样片和干净机器验收仍按
-[docs/release-checklist.md](docs/release-checklist.md) 执行。代码签名、公证不属于当前测试包要求；
+随包 Java Runtime，最终用户无需安装 Java、Node.js 或 Python）。正式发布只等待 macOS arm64 的
+安装、离线、样片和干净机器证据；macOS x64 与 Windows x64 仍按
+[docs/release-checklist.md](docs/release-checklist.md) 记录候选结果，Windows 不得写成平台验收 `PASS`。代码签名、公证不属于当前测试包要求；
 自动更新属于明确不做能力。完整任务拆分见 [docs/tasks.md](docs/tasks.md)，产品规划与优先级见
 [docs/prd.md](docs/prd.md)。

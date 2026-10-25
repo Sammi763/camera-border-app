@@ -405,7 +405,7 @@ export class JavaBridge {
       const child = spawn(javaExecutable, ["-jar", this.#config.jarPath, ...serverArgs], {
         cwd: this.#config.cwd,
         stdio: ["ignore", "pipe", "pipe"],
-        // 注入主进程准备好的环境变量（如随包 LibRaw 路径），不透传无关改动
+        // 注入主进程准备好的随包组件路径，不透传无关改动
         env: { ...process.env, ...(this.#config.env ?? {}) }
       })
 

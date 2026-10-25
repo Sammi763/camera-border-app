@@ -98,13 +98,23 @@ export type BorderStyleConfig = {
 /**
  * 图片解码来源状态（引擎预览/导出响应返回）。
  * - standard：标准格式由 ImageIO 直接读取；
- * - raw-developed：RAW 经 LibRaw 完成真实显影；
- * - embedded-preview-fallback：RAW 降级为嵌入预览，warning 说明原因。
+ * - embedded-jpeg：RAW 只抽取文件内嵌 JPEG，warning 说明像素边界。
  */
 export type SourceDecode = {
-  readonly mode: "standard" | "raw-developed" | "embedded-preview-fallback"
+  readonly mode: "standard" | "embedded-jpeg"
   readonly format: string
   readonly warning: string | null
+  /** 解码边界读取到的 EXIF Orientation。 */
+  readonly orientation?: number
+  /** Orientation 物理处理前后的像素尺寸。 */
+  readonly decodedWidth?: number
+  readonly decodedHeight?: number
+  readonly orientedWidth?: number
+  readonly orientedHeight?: number
+  /** 预览采样前的全分辨率有向源尺寸；RAW 指内嵌 JPEG 尺寸。 */
+  readonly fullWidth?: number
+  readonly fullHeight?: number
+  readonly orientationApplied?: boolean
 }
 
 export type RenderRecipe = {
@@ -133,7 +143,13 @@ export type PreviewResponse = {
   readonly previewUrl: string
   /** 解码来源状态；引擎未返回（旧版本）时为空。 */
   readonly sourceDecode?: SourceDecode | null
+  readonly fidelityReport?: FidelityReport | null
 }
+
+export type FidelityTier = "quick-share" | "standard-delivery" | "high-fidelity-archive" | "custom"
+export type ColorProfilePolicy = "source" | "srgb" | "none"
+export type MetadataPolicy = "preserve" | "remove-location" | "strip"
+export type BitDepthPolicy = "source" | "8"
 
 /**
  * 导出设置，与 RenderRecipe 配合使用。
@@ -152,6 +168,11 @@ export type ExportSettings = {
   readonly preserveColorProfile?: boolean
   /** 专业导出：是否优先保留高位深（>8bit）。 */
   readonly preferHighBitDepth?: boolean
+  /** 阶段五导出档位；新请求必须使用该字段和三个策略字段。 */
+  readonly tier?: FidelityTier
+  readonly colorProfilePolicy?: ColorProfilePolicy
+  readonly metadataPolicy?: MetadataPolicy
+  readonly bitDepthPolicy?: BitDepthPolicy
 }
 
 /**
@@ -172,12 +193,114 @@ export type RenderJobRequest = {
 }
 
 /** 专业能力应用状态（镜像 Java ImageEncoder.FeatureStatus）。 */
-export type FeatureStatus = "NOT_REQUESTED" | "APPLIED" | "SKIPPED" | "DOWNGRADED"
+export type FeatureStatus = "NOT_REQUESTED" | "APPLIED" | "SOURCE_ABSENT" | "UNSUPPORTED" | "DOWNGRADED" | "FAILED"
 
 /** 单项专业能力的应用结果。 */
 export type FeatureResult = {
   readonly status: FeatureStatus
   readonly message: string | null
+}
+
+export type IccFacts = {
+  readonly state?: string | null
+  readonly profileName?: string | null
+  readonly byteLength?: number | null
+  readonly sha256?: string | null
+}
+
+export type MetadataFacts = {
+  readonly exif: boolean
+  readonly xmp: boolean
+  readonly iptc: boolean
+  readonly gps: boolean
+  readonly dpi: boolean
+  readonly thumbnail: boolean
+}
+
+export type FidelityFileFacts = {
+  readonly width: number
+  readonly height: number
+  readonly decodedWidth?: number
+  readonly decodedHeight?: number
+  readonly orientedWidth?: number
+  readonly orientedHeight?: number
+  readonly bitDepth: number
+  readonly colorSpace?: string | null
+  readonly orientation: number
+  readonly icc?: IccFacts | null
+  readonly metadata?: MetadataFacts | null
+}
+
+export type FidelityTransformations = {
+  readonly colorConverted: boolean
+  readonly resized: boolean
+  readonly orientationNormalized: boolean
+  readonly locationPolicy?: string | null
+  readonly thumbnailPolicy?: string | null
+}
+
+export type FidelityReport = {
+  readonly phase: "preflight" | "completed" | string
+  readonly tier?: FidelityTier | string | null
+  readonly format?: string | null
+  readonly verified: boolean
+  readonly fidelityScope?: "full" | "limited" | string
+  readonly pixelSource?: string | null
+  readonly metadataSource?: string | null
+  readonly source?: FidelityFileFacts | null
+  readonly output?: FidelityFileFacts | null
+  readonly transformations?: FidelityTransformations | null
+  readonly features?: Readonly<Record<string, FeatureResult>>
+  readonly warnings?: readonly string[]
+  readonly blockingReasons?: readonly string[]
+}
+
+export type CapabilityComponent = {
+  readonly available: boolean
+  readonly version?: string | null
+  readonly license?: string | null
+  readonly sha256?: string | null
+  readonly reason?: string | null
+}
+
+export type FormatCapability = {
+  readonly available: boolean
+  readonly bitDepths: readonly number[]
+  readonly icc: boolean
+  readonly exif: boolean
+  readonly xmp: boolean
+  readonly iptc: boolean
+  readonly gps: boolean
+  readonly dpi: boolean
+  readonly reason?: string | null
+}
+
+export type TierCapability = {
+  readonly available: boolean
+  readonly defaultFormat?: "png" | "jpeg" | "tiff" | string | null
+  readonly reason?: string | null
+}
+
+export type CapabilitiesResponse = {
+  readonly schemaVersion: number
+  readonly components: Readonly<Record<string, CapabilityComponent>>
+  readonly input: Readonly<Record<string, boolean>>
+  readonly output: Readonly<Record<string, FormatCapability>>
+  readonly tiers: Readonly<Record<FidelityTier, TierCapability>>
+}
+
+export type ExportPreflightItem = {
+  readonly index: number
+  readonly imagePath: string
+  readonly outputPath: string
+  readonly status: "ready" | "blocked"
+  readonly report?: FidelityReport | null
+  readonly blockingReasons: readonly string[]
+}
+
+export type ExportPreflightResponse = {
+  readonly status: "ready" | "blocked"
+  readonly items: readonly ExportPreflightItem[]
 }
 
 /**
@@ -194,6 +317,7 @@ export type RenderJobItemStatus = {
   readonly colorProfilePreservation?: FeatureResult | null
   readonly highBitDepth?: FeatureResult | null
   readonly sourceDecode?: SourceDecode | null
+  readonly fidelityReport?: FidelityReport | null
 }
 
 /**
@@ -224,6 +348,7 @@ export type RenderJobStatusResponse = {
   readonly highBitDepth?: FeatureResult
   /** 解码来源状态；引擎未返回（旧版本）时为空。 */
   readonly sourceDecode?: SourceDecode | null
+  readonly fidelityReport?: FidelityReport | null
 }
 
 /**

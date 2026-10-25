@@ -105,6 +105,17 @@ describe("BUILT_IN_TEMPLATES", () => {
     }
   })
 
+  it("Polaroid 明确声明方形图片区和下边框视觉风格", () => {
+    const template = BUILT_IN_TEMPLATES.find((item) => item.id === "polaroid")
+    expect(template?.settingsPatch.imageArea).toMatchObject({
+      orientation: "square",
+      ratio: "1:1",
+      displayMode: "fit"
+    })
+    expect(template?.settingsPatch.borderBottom).toBeGreaterThan(template?.settingsPatch.borderTop ?? 0)
+    expect(template?.settingsPatch.borderStyle?.id).toBe("polaroid-shadow")
+  })
+
   it("所有模板分类都在预期范围内", () => {
     const validCategories = ["经典", "胶片", "暗房", "档案", "风格"]
     for (const t of BUILT_IN_TEMPLATES) {

@@ -54,6 +54,24 @@ function setupWorkspace() {
     if (url.endsWith("/api/health")) {
       return jsonResponse({ status: "ok", app: "test", version: "0" })
     }
+    if (url.endsWith("/api/capabilities")) {
+      return jsonResponse({
+        schemaVersion: 1,
+        components: {},
+        input: { jpeg: true, png: true, tiff: true, rawEmbeddedJpeg: true },
+        output: {
+          jpeg: { available: true, bitDepths: [8], icc: true, exif: true, xmp: true, iptc: true, gps: true, dpi: true },
+          png: { available: true, bitDepths: [8, 16], icc: true, exif: true, xmp: true, iptc: true, gps: true, dpi: true },
+          tiff: { available: true, bitDepths: [8, 16], icc: true, exif: true, xmp: true, iptc: true, gps: true, dpi: true }
+        },
+        tiers: {
+          "quick-share": { available: true, defaultFormat: "jpeg" },
+          "standard-delivery": { available: true, defaultFormat: "jpeg" },
+          "high-fidelity-archive": { available: true, defaultFormat: "tiff" },
+          custom: { available: true, defaultFormat: "jpeg" }
+        }
+      })
+    }
     if (url.endsWith("/api/dev/photos")) {
       return jsonResponse({ photos: [] })
     }
@@ -75,6 +93,20 @@ function setupWorkspace() {
       }
       // 无 EXIF：引擎返回 500，前端应降级为空、不阻塞整批导出
       return jsonResponse({ error: "no exif for this image" }, 500)
+    }
+    if (url.endsWith("/api/export-preflight") && method === "POST") {
+      const body = JSON.parse(String(init?.body)) as { items: readonly { recipe: { imagePath: string }; export: { outputPath: string } }[] }
+      return jsonResponse({
+        status: "ready",
+        items: body.items.map((item, index) => ({
+          index,
+          imagePath: item.recipe.imagePath,
+          outputPath: item.export.outputPath,
+          status: "ready",
+          blockingReasons: [],
+          report: { phase: "preflight", verified: false, source: { width: 100, height: 100, bitDepth: 8, orientation: 1 } }
+        }))
+      })
     }
     if (url.endsWith("/api/render-jobs") && method === "POST") {
       const body = JSON.parse(String(init?.body)) as {
@@ -350,5 +382,68 @@ describe("WorkspacePage 统一工作台（首屏与默认模板）", () => {
     expect(screen.getByRole("dialog", { name: "资料库" })).toBeTruthy()
     fireEvent.keyDown(screen.getByRole("dialog", { name: "资料库" }), { key: "Escape" })
     expect(screen.queryByRole("dialog", { name: "资料库" })).toBeNull()
+  })
+})
+
+describe("WorkspacePage 帮助与快捷键", () => {
+  beforeEach(() => {
+    localStorage.clear()
+    sessionStorage.clear()
+    vi.stubGlobal("URL.createObjectURL", () => "blob:fake")
+    vi.stubGlobal("URL.revokeObjectURL", () => {})
+  })
+
+  afterEach(() => {
+    teardownWorkspace()
+    vi.restoreAllMocks()
+  })
+
+  it("? 打开快捷键速查面板，再次 ? 或 Esc 关闭；输入控件聚焦时不触发", async () => {
+    setupWorkspace()
+    render(<WorkspacePage runtime={runtime} />)
+    expect(await screen.findByRole("button", { name: "选择照片" })).toBeTruthy()
+
+    // 键位事件从 body 冒泡：同时覆盖 document（面板）与 window（工作台）两级监听
+    fireEvent.keyDown(document.body, { key: "?" })
+    expect(screen.getByText("快捷键速查")).toBeTruthy()
+
+    fireEvent.keyDown(document.body, { key: "?" })
+    expect(screen.queryByText("快捷键速查")).toBeNull()
+
+    fireEvent.keyDown(document.body, { key: "?" })
+    fireEvent.keyDown(document.body, { key: "Escape" })
+    expect(screen.queryByText("快捷键速查")).toBeNull()
+
+    // 输入控件聚焦时 ? 是文本输入，不打开面板
+    const input = document.createElement("input")
+    document.body.appendChild(input)
+    input.focus()
+    fireEvent.keyDown(input, { key: "?" })
+    expect(screen.queryByText("快捷键速查")).toBeNull()
+    input.remove()
+  })
+
+  it("欢迎页显示按 ? 查看快捷键提示", async () => {
+    setupWorkspace()
+    render(<WorkspacePage runtime={runtime} />)
+
+    expect(await screen.findByRole("button", { name: "选择照片" })).toBeTruthy()
+    expect(screen.getByText(/查看快捷键/)).toBeTruthy()
+  })
+
+  it("帮助按钮打开帮助抽屉并渲染关键段落", async () => {
+    setupWorkspace()
+    render(<WorkspacePage runtime={runtime} />)
+
+    expect(await screen.findByRole("button", { name: "选择照片" })).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "打开帮助" }))
+
+    expect(await screen.findByText("四步上手")).toBeTruthy()
+    expect(screen.getByText("支持的输入格式")).toBeTruthy()
+    expect(screen.getByText("三个导出档位")).toBeTruthy()
+    expect(screen.getByText("常见问题")).toBeTruthy()
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭帮助" }))
+    await waitFor(() => expect(screen.queryByText("四步上手")).toBeNull())
   })
 })

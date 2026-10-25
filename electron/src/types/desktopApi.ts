@@ -9,6 +9,17 @@
  * 允许双方各自维护一份轻量类型副本，但字段名必须保持一致。
  */
 
+import type {
+  AnthropicMessageRequest,
+  GeminiGenerateRequest,
+  OpenAiChatRequest,
+  OpenAiImageGenerationRequest,
+  SeedanceCreateTaskRequest
+} from "../ai/aiGatewayTypes.js"
+// ImageEditParams 与 editImage 客户端一起定义在 aiGatewayClient 中。
+import type { ImageEditParams } from "../ai/aiGatewayClient.js"
+import type { AI_GATEWAY_ENDPOINTS, AI_GATEWAY_DEFAULT_MODELS } from "../config/aiGatewayConfig.js"
+
 /**
  * 暴露到 window.desktopRuntime 的启动时静态信息。
  *
@@ -22,6 +33,17 @@ export type DesktopRuntime = {
     /** 桌面壳是否管理引擎生命周期（区别于外部引擎）。 */
     readonly managed: boolean
   }
+}
+
+/** 安装包实际携带的运行时能力快照；不暴露资源绝对路径。 */
+export type PackageCapabilities = {
+  readonly isPackaged: boolean
+  readonly platform: NodeJS.Platform
+  readonly arch: string
+  readonly bundledRuntime: boolean
+  readonly bundledExifTool: boolean
+  readonly bundledHeicDecoder: boolean
+  readonly bundledFonts: readonly string[]
 }
 
 /**
@@ -39,6 +61,10 @@ export type ImageSourceResult = {
 }
 
 export type DesktopApi = {
+  /** 读取当前安装包的真实组件能力，不回退到系统工具。 */
+  readonly getPackageCapabilities: () => Promise<PackageCapabilities>
+  /** 读取当前 BrowserWindow 外框尺寸，用于窗口布局验收；不返回屏幕或文件系统信息。 */
+  readonly getWindowBounds: () => Promise<WindowBounds | null>
   /** 打开原生图片选择器，返回选中的文件绝对路径数组。 */
   readonly selectImages: () => Promise<string[]>
   /**
@@ -144,6 +170,28 @@ export type DesktopApi = {
    * 用于「查看日志」按钮直接打开日志文件本身（而非所在目录）。
    */
   readonly openLogFile: (logPath: string) => Promise<boolean>
+  /**
+   * 读取 AI 网关（Uni Token）状态：密钥是否配置、来源与脱敏预览、端点常量。
+   * 永不返回明文 API Key。
+   */
+  readonly getAiGatewayStatus: () => Promise<AiGatewayStatus>
+  /** 将 API Key 保存到 userData（打包版设置页使用）；空串视为删除，返回是否成功。 */
+  readonly saveAiGatewayApiKey: (apiKey: string) => Promise<boolean>
+  /** 删除 userData 中保存的 API Key，返回是否成功。 */
+  readonly deleteAiGatewayApiKey: () => Promise<boolean>
+  /**
+   * 通过主进程代理调用 AI 网关（七类协议之一）。
+   * 密钥只在主进程拼接；结果统一为 { ok, data | error }，不向渲染进程抛异常。
+   */
+  readonly aiGatewayRequest: (payload: AiGatewayRequestPayload) => Promise<AiGatewayRequestResult>
+}
+
+/** BrowserWindow 的实际外框尺寸（逻辑像素）。 */
+export type WindowBounds = {
+  readonly x: number
+  readonly y: number
+  readonly width: number
+  readonly height: number
 }
 
 /** 本地图片预览结果（dataURL + 尺寸）。 */
@@ -180,6 +228,8 @@ export type EngineDiagnostics = {
  * 避免字符串散落在多处导致不一致。
  */
 export const IPC_CHANNELS = {
+  GET_PACKAGE_CAPABILITIES: "desktop:get-package-capabilities",
+  GET_WINDOW_BOUNDS: "desktop:get-window-bounds",
   SELECT_IMAGES: "desktop:select-images",
   SELECT_IMAGE_SOURCES: "desktop:select-image-sources",
   SELECT_IMAGE_FILES: "desktop:select-image-files",
@@ -207,5 +257,55 @@ export const IPC_CHANNELS = {
   LOAD_LOCAL_IMAGE_PREVIEW: "desktop:load-local-image-preview",
   CHECK_IMAGE_PATHS: "desktop:check-image-paths",
   GET_IMAGE_FILE_VERSIONS: "desktop:get-image-file-versions",
-  OPEN_LOG_FILE: "desktop:open-log-file"
+  OPEN_LOG_FILE: "desktop:open-log-file",
+  AI_GATEWAY_GET_STATUS: "ai-gateway:get-status",
+  AI_GATEWAY_SAVE_API_KEY: "ai-gateway:save-api-key",
+  AI_GATEWAY_DELETE_API_KEY: "ai-gateway:delete-api-key",
+  AI_GATEWAY_REQUEST: "ai-gateway:request"
 } as const
+
+// ---------- AI 网关（联通国际 Uni Token）契约类型（V2 预留） ----------
+
+/** API Key 来源分类。invalid 表示密钥文件存在但格式损坏（需要用户重填）。 */
+export type AiGatewayKeySource = "env" | "local-file" | "user-data" | "none" | "invalid"
+
+/** 网关状态快照：只含脱敏密钥信息与静态端点常量，供设置页/诊断展示。 */
+export type AiGatewayStatus = {
+  readonly configured: boolean
+  readonly source: AiGatewayKeySource
+  readonly maskedKey: string | null
+  readonly baseUrl: string
+  readonly endpoints: typeof AI_GATEWAY_ENDPOINTS
+  readonly defaultModels: typeof AI_GATEWAY_DEFAULT_MODELS
+  readonly envKeyName: string
+}
+
+/** 网关调用失败信息。kind 区分"密钥未配置"与"网关/网络错误"。 */
+export type AiGatewayErrorInfo = {
+  readonly kind: "key-missing" | "gateway"
+  readonly message: string
+  readonly status: number | null
+  readonly bodyExcerpt: string | null
+}
+
+/** 网关调用统一结果：永不 reject，前端按 ok 分支处理。 */
+export type AiGatewayRequestResult =
+  | { readonly ok: true; readonly data: unknown }
+  | { readonly ok: false; readonly error: AiGatewayErrorInfo }
+
+/**
+ * 网关代理请求载荷：按协议判别的联合类型。
+ * params 的字段结构对齐网关文档（详见 ai/aiGatewayTypes.ts）。
+ */
+export type AiGatewayRequestPayload =
+  | { readonly protocol: "openai-chat"; readonly params: OpenAiChatRequest }
+  | { readonly protocol: "openai-image-generate"; readonly params: OpenAiImageGenerationRequest }
+  | { readonly protocol: "openai-image-edit"; readonly params: ImageEditParams }
+  | { readonly protocol: "anthropic-message"; readonly params: AnthropicMessageRequest }
+  | {
+      readonly protocol: "gemini-generate"
+      readonly modelId: string
+      readonly params: GeminiGenerateRequest
+    }
+  | { readonly protocol: "seedance-create"; readonly params: SeedanceCreateTaskRequest }
+  | { readonly protocol: "seedance-query"; readonly taskId: string }

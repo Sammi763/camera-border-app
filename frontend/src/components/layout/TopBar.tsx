@@ -10,6 +10,8 @@ type TopBarProps = {
   readonly onThemeChange: (theme: StudioTheme) => void
   readonly onPickFiles: () => void
   readonly onPickFolder: () => void
+  /** 打开应用内帮助抽屉。 */
+  readonly onOpenHelp: () => void
 }
 
 export const TopBar = ({
@@ -18,7 +20,8 @@ export const TopBar = ({
   theme,
   onThemeChange,
   onPickFiles,
-  onPickFolder
+  onPickFolder,
+  onOpenHelp
 }: TopBarProps): JSX.Element => {
   return (
     <header className="topbar">
@@ -33,6 +36,15 @@ export const TopBar = ({
             <button type="button" className="topbarActionButton" onClick={onPickFolder}>选择文件夹</button>
           </div>
         )}
+        <button
+          type="button"
+          className="topbarActionButton topbarHelpButton"
+          onClick={onOpenHelp}
+          title="帮助与快捷键"
+          aria-label="打开帮助"
+        >
+          帮助
+        </button>
         <label className="topbarThemeControl">
           <span>主题</span>
           <select aria-label="界面主题" value={theme} onChange={(event) => onThemeChange(event.target.value as StudioTheme)}>

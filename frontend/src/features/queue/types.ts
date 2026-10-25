@@ -51,6 +51,8 @@ export type ImportResult = {
   readonly convertedFiles: readonly string[]
   /** 随包解码助手不可用或解码失败时的提示。 */
   readonly heicUnsupported: boolean
+  /** 因已在队列中被跳过的重复路径数（按 sourcePath 反斜杠归一后比较）。 */
+  readonly skippedDuplicateCount: number
 }
 
 /** 队列控制器，暴露给 QueuePanel 使用。 */
@@ -91,6 +93,16 @@ export type QueueController = {
   readonly removeItem: (id: string) => void
   /** 删除所有勾选图片。 */
   readonly removeChecked: () => void
+  /** 关闭除指定图片外的全部图片（保留该条目及其每图覆盖与绑定）。 */
+  readonly removeOthers: (id: string) => void
+  /** 关闭指定图片左侧的全部图片。 */
+  readonly removeLeftOf: (id: string) => void
+  /** 关闭指定图片右侧的全部图片。 */
+  readonly removeRightOf: (id: string) => void
+  /** 将指定图片移动到目标下标（自动钳制；拖回原位不产生撤销历史）。 */
+  readonly reorder: (id: string, toIndex: number) => void
+  /** 按文件名排序队列；稳定排序，同名文件保持原相对顺序。 */
+  readonly sortByName: (direction: "asc" | "desc") => void
   readonly clear: () => void
   /** 撤销/重做队列管理及每图覆盖更改。 */
   readonly undo: () => void

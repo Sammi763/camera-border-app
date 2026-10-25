@@ -112,8 +112,10 @@ public final class DefaultRenderJobService implements RenderJobService {
                 ImageRenderService.ComposeOutcome outcome = imageRenderService.compose(
                         snapshot.getRecipe(), export.getMaxWidth(), export.getMaxHeight());
                 BufferedImage composited = outcome.getImage();
-                ImageEncoder.ExportResult exportResult = imageRenderService.writeToFile(
-                        composited, export, snapshot.getRecipe().getImagePath());
+                ImageEncoder.ExportResult exportResult = outcome.getSourceInfo() == null
+                        ? imageRenderService.writeToFile(composited, export, snapshot.getRecipe().getImagePath())
+                        : imageRenderService.writeToFile(
+                        composited, export, snapshot.getRecipe().getImagePath(), outcome.getSourceInfo());
                 record.completeItem(index, exportResult, outcome.getSourceDecode());
             } catch (RuntimeException exception) {
                 record.failItem(index, safeErrorMessage(exception));

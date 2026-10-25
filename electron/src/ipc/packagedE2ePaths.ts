@@ -6,10 +6,13 @@
  */
 export const composePackagedE2eImagePaths = (
   sample: string | null,
-  retrySample: string | null
+  retrySample: string | null,
+  extraSamples: readonly string[] = []
 ): readonly string[] => {
   if (sample === null) {
     return []
   }
-  return retrySample === null ? [sample] : [sample, retrySample]
+  return retrySample === null
+    ? [sample, ...extraSamples]
+    : [sample, ...extraSamples, retrySample]
 }

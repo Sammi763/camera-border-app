@@ -19,6 +19,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUNDLE="$ROOT/electron/runtime-bundle"
+PROFESSIONAL_TOOLS="$ROOT/professional-tools"
 
 # ---- 目标平台/架构 ---------------------------------------------------------
 HOST_OS="$(uname -s)"
@@ -64,6 +65,21 @@ RUNTIME_DIR="$ROOT/runtime/$RUNTIME_KEY"
 OUTPUT_DIR="$ROOT/electron/release/$RUNTIME_KEY"
 PACKAGE_VERSION="$(node -p 'require("./electron/package.json").version')"
 
+if ! COMMIT="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null)"; then
+  echo "无法读取当前 HEAD commit，拒绝生成不可追溯的发布包" >&2
+  exit 1
+fi
+if [[ ! "$COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
+  echo "当前 HEAD commit 不是完整 40 位 hash，拒绝生成发布包：$COMMIT" >&2
+  exit 1
+fi
+
+if [ "$OS_TAG" = "win" ]; then
+  TARGET_PLATFORM="win32"
+else
+  TARGET_PLATFORM="darwin"
+fi
+
 echo "[package] 目标平台：$RUNTIME_KEY"
 
 # ---- 前置检查 --------------------------------------------------------------
@@ -73,12 +89,35 @@ if [ ! -d "$RUNTIME_DIR" ] || [ -z "$(ls -A "$RUNTIME_DIR")" ]; then
   exit 1
 fi
 
+PROFESSIONAL_TARGET="$OS_TAG"
+if [ "$OS_TAG" = "win" ]; then PROFESSIONAL_TARGET="win-x64"; fi
+if [ "$OS_TAG" = "macos" ]; then PROFESSIONAL_TARGET="macos"; fi
+if [ "$OS_TAG" = "win" ]; then
+  EXIFTOOL_CHECK="$PROFESSIONAL_TOOLS/exiftool/win-x64/exiftool.exe"
+else
+  EXIFTOOL_CHECK="$PROFESSIONAL_TOOLS/exiftool/macos/exiftool"
+fi
+if [ ! -f "$EXIFTOOL_CHECK" ] || [ ! -f "$PROFESSIONAL_TOOLS/components.json" ]; then
+  echo "[package] 缺少锁定的专业组件，开始下载并校验..."
+  TARGETS="$PROFESSIONAL_TARGET" bash "$ROOT/scripts/fetch-professional-tools.sh"
+fi
+
+echo "[package] 准备随包字体、HEIC 许可证和组件清单..."
+bash "$ROOT/scripts/fetch-fonts.sh"
+node "$ROOT/scripts/prepare-package-resources.mjs"
+
 case "$OUTPUT_DIR" in
   "$ROOT/electron/release/"*) ;;
   *) echo "内部错误：输出目录不在 electron/release 下：$OUTPUT_DIR" >&2; exit 1 ;;
 esac
 
 # 每个平台/架构使用独立输出目录，避免旧版本、旧中文包或其它架构产物混入交付目录。
+if [ -d "$BUNDLE" ]; then
+  # 某些随包组件（尤其 Windows ExifTool）以只读权限解压；BUNDLE 是可再生的
+  # 构建目录，清理前只恢复它自身的权限，避免下一次构建被旧产物卡住。
+  find "$BUNDLE" -type d -exec chmod u+rwx {} +
+  find "$BUNDLE" -type f -exec chmod u+rw {} +
+fi
 rm -rf "$OUTPUT_DIR"
 mkdir -p "$OUTPUT_DIR"
 
@@ -97,14 +136,19 @@ mkdir -p "$BUNDLE"
 cp -R "$ROOT/frontend/dist" "$BUNDLE/frontend"
 cp "$ROOT/java-engine/target/camera-border-engine.jar" "$BUNDLE/java-engine.jar"
 cp -R "$RUNTIME_DIR" "$BUNDLE/java-runtime"
+cp -R "$PROFESSIONAL_TOOLS" "$BUNDLE/professional-tools"
 
-if [ "$OS_TAG" = "win" ]; then
-  node "$ROOT/scripts/validate-windows-package.mjs" --bundle "$BUNDLE"
-fi
+node "$ROOT/scripts/validate-package.mjs" \
+  --bundle "$BUNDLE" \
+  --platform "$TARGET_PLATFORM" \
+  --arch "$ARCH" \
+  --version "$PACKAGE_VERSION" \
+  --commit "$COMMIT"
 
-# 清理运行时中的无用文件，缩小安装包体积
+# 清理运行时中的无用文件，缩小安装包体积。release 是阶段 6 的随包运行时
+# 证明材料（版本、厂商、架构），必须保留给安装包校验和发布清单读取。
 find "$BUNDLE/java-runtime" -name "*.dSYM" -type d -exec rm -rf {} + 2>/dev/null || true
-rm -f "$BUNDLE/java-runtime/"NEWS "$BUNDLE/java-runtime/"README "$BUNDLE/java-runtime/"release 2>/dev/null || true
+rm -f "$BUNDLE/java-runtime/"NEWS "$BUNDLE/java-runtime/"README 2>/dev/null || true
 
 # ---- 4. electron-builder --------------------------------------------------
 echo "[package] electron-builder 打包（$OS_TAG ${ARCH}，宿主 ${HOST_OS}）..."
@@ -175,22 +219,13 @@ if [ "${#SIGN_FLAGS[@]}" -gt 0 ]; then
 fi
 npx electron-builder "${BUILDER_ARGS[@]}"
 
-if [ "$OS_TAG" = "win" ]; then
-  # 写入完整 40 位 commit（git rev-parse HEAD），不得用短 hash 或附加 -dirty，
-  # 便于验收方把 manifest.commit 与本阶段 HEAD 精确比对。
-  if ! COMMIT="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null)"; then
-    echo "无法读取当前 HEAD commit，Windows manifest 拒绝继续生成" >&2
-    exit 1
-  fi
-  if [[ ! "$COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
-    echo "当前 HEAD commit 不是完整 40 位 hash，Windows manifest 拒绝继续生成：$COMMIT" >&2
-    exit 1
-  fi
-  node "$ROOT/scripts/validate-windows-package.mjs" \
-    --output "$OUTPUT_DIR" \
-    --version "$PACKAGE_VERSION" \
-    --commit "$COMMIT"
-fi
+node "$ROOT/scripts/validate-package.mjs" \
+  --bundle "$BUNDLE" \
+  --output "$OUTPUT_DIR" \
+  --platform "$TARGET_PLATFORM" \
+  --arch "$ARCH" \
+  --version "$PACKAGE_VERSION" \
+  --commit "$COMMIT"
 
 echo "[package] 完成。产物位于 $OUTPUT_DIR"
 ls -1 "$OUTPUT_DIR" 2>/dev/null || true

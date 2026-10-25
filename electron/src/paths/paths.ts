@@ -15,6 +15,7 @@ import path from "node:path"
  *       frontend/            （前端构建产物，app:// 协议从这里加载）
  *       java-engine/camera-border-engine.jar
  *       java-runtime/        （随包 Java Runtime）
+ *       professional-tools/  （随包 ExifTool 与组件清单）
  */
 export const isPackaged: boolean = app.isPackaged
 
@@ -61,3 +62,8 @@ export const engineCwd = isPackaged
 export const javaRuntimeDir = isPackaged
   ? path.join(resourcesDir, "java-runtime")
   : path.join(projectRoot, "runtime")
+
+/** 随包专业组件目录；缺失时 Java 引擎必须 fail closed。 */
+export const professionalToolsDir = isPackaged
+  ? path.join(resourcesDir, "professional-tools")
+  : path.join(projectRoot, "professional-tools")

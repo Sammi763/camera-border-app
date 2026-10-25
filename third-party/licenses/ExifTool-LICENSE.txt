@@ -1,0 +1,9 @@
+Camera Border bundles ExifTool 13.59.
+
+License: GNU General Public License version 1.0 or later OR Artistic License 1.0 (Perl).
+Official license and source information:
+https://exiftool.org/
+https://sourceforge.net/projects/exiftool/files/
+
+The exact release archive SHA-256 and target platform are recorded in
+professional-tools/components.json and package-manifest.json.

@@ -93,15 +93,77 @@ jobs:
 
       - name: Windows 安装/启动/卸载冒烟
         shell: pwsh
-        run: .\scripts\smoke-test-windows.ps1 -InstallerDirectory "${{ github.workspace }}\electron\release\win-x64"
+        run: .\scripts\smoke-test-windows.ps1 -InstallerDirectory "${{ github.workspace }}\electron\release\win-x64" -InstallDirectory "${{ runner.temp }}\Camera Border Stage6" -KeepInstalled
+
+      - name: 已安装 Windows 应用完整 E2E（CDP + 独立 ExifTool）
+        shell: pwsh
+        env:
+          CAMBORDER_PACKAGED_APP: '${{ runner.temp }}\Camera Border Stage6\Camera Border.exe'
+          CAMBORDER_E2E_INSTALLED_FROM_PACKAGE: '1'
+          CAMBORDER_E2E_ARTIFACT_DIR: '${{ runner.temp }}\Camera Border Stage6 E2E\run-1'
+          CAMBORDER_E2E_USER_DATA_DIR: '${{ runner.temp }}\Camera Border Stage6 User Data\run-1'
+        run: pnpm e2e:packaged
+
+      - name: 已安装 Windows 应用第二次完整 E2E（连续成功门禁）
+        shell: pwsh
+        env:
+          CAMBORDER_PACKAGED_APP: '${{ runner.temp }}\Camera Border Stage6\Camera Border.exe'
+          CAMBORDER_E2E_INSTALLED_FROM_PACKAGE: '1'
+          CAMBORDER_E2E_ARTIFACT_DIR: '${{ runner.temp }}\Camera Border Stage6 E2E\run-2'
+          CAMBORDER_E2E_USER_DATA_DIR: '${{ runner.temp }}\Camera Border Stage6 User Data\run-2'
+        run: pnpm e2e:packaged
+
+      - name: 卸载已安装 Windows 应用
+        if: always()
+        shell: pwsh
+        run: |
+          $installDir = "${{ runner.temp }}\Camera Border Stage6"
+          $uninstaller = Join-Path $installDir "Uninstall Camera Border.exe"
+          if (Test-Path -LiteralPath $uninstaller -PathType Leaf) {
+            $result = Start-Process -FilePath $uninstaller -ArgumentList "/S" -Wait -PassThru
+            if ($result.ExitCode -ne 0) { throw "NSIS 卸载失败，退出码：$($result.ExitCode)" }
+          }
+          if (Test-Path -LiteralPath $installDir) {
+            throw "卸载后安装目录仍存在：$installDir"
+          }
+
+      - name: 记录 Windows x64 安装生命周期证据
+        if: always()
+        shell: pwsh
+        run: |
+          $installDir = "${{ runner.temp }}\Camera Border Stage6"
+          $e2eRoot = Join-Path "${{ runner.temp }}" "Camera Border Stage6 E2E"
+          # packaged E2E 使用显式 --user-data-dir；生命周期证据必须检查同一目录，
+          # 不能回退到 runner 的默认 %APPDATA% 路径，否则会把已保留的数据误判为缺失。
+          $userDataRoot = Join-Path "${{ runner.temp }}" "Camera Border Stage6 User Data\run-2"
+          $manifest = Get-ChildItem -LiteralPath "${{ github.workspace }}\electron\release\win-x64" -Filter "Camera-Border-Setup-*.manifest.json" -File | Select-Object -First 1
+          if ($null -eq $manifest) { throw "未找到包 manifest，无法生成安装生命周期证据。" }
+          $commit = (Get-Content -LiteralPath $manifest.FullName -Raw | ConvertFrom-Json).commit
+          node scripts/write-install-lifecycle-evidence.mjs `
+            --output (Join-Path $e2eRoot "install-lifecycle-result.json") `
+            --platform win32 `
+            --arch x64 `
+            --package-commit $commit `
+            --installed-path $installDir `
+            --user-data-path $userDataRoot
+
+      - name: 生成 Windows x64 发布报告
+        if: always()
+        shell: pwsh
+        run: |
+          $e2eRoot = Join-Path "${{ runner.temp }}" "Camera Border Stage6 E2E"
+          node scripts/generate-release-report.mjs --e2e-artifact-root $e2eRoot --acceptance-root $e2eRoot
 
       - name: 上传单个 Windows 安装包和校验文件
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: Camera-Border-windows-x64
-          if-no-files-found: error
+          if-no-files-found: warn
           path: |
             electron/release/win-x64/Camera-Border-Setup-*.exe
             electron/release/win-x64/Camera-Border-Setup-*.exe.sha256
             electron/release/win-x64/Camera-Border-Setup-*.manifest.json
+            electron/release/release-report.json
+            ${{ runner.temp }}/Camera Border Stage6 E2E/**
           compression-level: 0

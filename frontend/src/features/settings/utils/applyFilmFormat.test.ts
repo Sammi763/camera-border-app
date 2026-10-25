@@ -50,8 +50,6 @@ describe("applyFilmFormatSettings 画幅切换", () => {
     const s = makeSettings()
     const patch = applyFilmFormatSettings(s, "6x10", fmt6x10)
     // 画幅补丁里不应包含裁剪与尺寸字段
-    expect("filmFormat" in patch).toBe(false)
-    expect("autoCrop" in patch).toBe(false)
     expect("outputSizePreset" in patch).toBe(false)
     expect("customOutputLongEdge" in patch).toBe(false)
     // 用户手动设置的边框颜色保持不变
@@ -76,6 +74,5 @@ describe("applyFilmFormatSettings 画幅切换", () => {
     const patch = applyFilmFormatSettings(s, "", undefined)
     expect(patch.layoutPresetId).toBeNull()
     expect(patch.imagePlacement).toMatchObject({ mode: "fit", targetAspectRatio: null })
-    expect("autoCrop" in patch).toBe(false)
   })
 })

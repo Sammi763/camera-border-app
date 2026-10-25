@@ -15,9 +15,9 @@
 import type { BorderStyleSettings, RenderSettings, TextArea, TextLayerSettings } from "../../settings/types"
 import {
   calculateImagePlacementGeometry,
-  normalizeImagePlacement,
   type ImagePlacement
 } from "./imagePlacementGeometry"
+import { imagePlacementFromSettings } from "../../settings/utils/imageArea"
 import { autoContrastColor } from "../../settings/utils/colorContrast"
 
 /** 将 CSS 颜色字符串解析为 Canvas 可用的颜色值。 */
@@ -547,6 +547,13 @@ const drawSpacedTextLines = (
  */
 export type CanvasDrawableSource = HTMLImageElement | HTMLCanvasElement
 
+/** Canvas 的逻辑 CSS 尺寸与 backing store 比例；导出像素不使用这份视口尺寸。 */
+export type CanvasRenderDimensions = {
+  readonly logicalWidth: number
+  readonly logicalHeight: number
+  readonly pixelRatio?: number
+}
+
 /** 读取来源的原始尺寸：图片用 natural*，画布用 width/height。 */
 const getSourceSize = (image: CanvasDrawableSource): { width: number; height: number } =>
   image instanceof HTMLImageElement
@@ -611,8 +618,10 @@ export const calculatePreviewImageLayout = (
   const targetHeight = geometry.targetHeight * viewportScale
   const targetX = left + (availableWidth - targetWidth) / 2
   const targetY = top + (availableHeight - targetHeight) / 2
-  const width = geometry.drawWidth * viewportScale
-  const height = geometry.drawHeight * viewportScale
+  // 诊断区域必须记录旋转后的实际照片包围盒；drawWidth/drawHeight 是旋转前
+  // 原图尺寸，90° 时若直接使用会让像素取样落在照片外的留白中。
+  const width = geometry.rotatedWidth * viewportScale
+  const height = geometry.rotatedHeight * viewportScale
   const x = targetX + geometry.offsetX * viewportScale
   const y = targetY + geometry.offsetY * viewportScale
 
@@ -625,6 +634,93 @@ export const calculatePreviewImageLayout = (
     y,
     width,
     height
+  }
+}
+
+/** Canvas 逻辑坐标中的矩形区域。 */
+export type PreviewRect = {
+  readonly x: number
+  readonly y: number
+  readonly width: number
+  readonly height: number
+}
+
+/**
+ * 在图片区域上绘制编辑态构图辅助线（三分线 + 中心十字）。
+ *
+ * 辅助线是编辑态叠加，不属于 RenderRecipe：只有 Canvas 即时预览调用，
+ * 引擎渲染与导出结果不含网格。rect 为 Canvas 逻辑坐标中的照片区域；
+ * 零尺寸或非法 rect 安全跳过。
+ */
+export const drawImageGridOverlay = (
+  ctx: CanvasRenderingContext2D,
+  rect: PreviewRect
+): void => {
+  if (
+    !Number.isFinite(rect.x) || !Number.isFinite(rect.y)
+    || !Number.isFinite(rect.width) || !Number.isFinite(rect.height)
+    || rect.width <= 0 || rect.height <= 0
+  ) {
+    return
+  }
+  const right = rect.x + rect.width
+  const bottom = rect.y + rect.height
+  ctx.save()
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.65)"
+  // 细微暗色投影保证亮部照片上仍可辨认
+  ctx.shadowColor = "rgba(0, 0, 0, 0.5)"
+  ctx.shadowBlur = 1
+  ctx.lineWidth = 1
+  ctx.beginPath()
+  for (const fraction of [1 / 3, 2 / 3]) {
+    const gridX = rect.x + rect.width * fraction
+    const gridY = rect.y + rect.height * fraction
+    ctx.moveTo(gridX, rect.y)
+    ctx.lineTo(gridX, bottom)
+    ctx.moveTo(rect.x, gridY)
+    ctx.lineTo(right, gridY)
+  }
+  ctx.stroke()
+  // 中心十字：短臂长度取区域短边的 5%
+  const armLength = Math.min(rect.width, rect.height) * 0.05
+  const centerX = rect.x + rect.width / 2
+  const centerY = rect.y + rect.height / 2
+  ctx.beginPath()
+  ctx.moveTo(centerX - armLength, centerY)
+  ctx.lineTo(centerX + armLength, centerY)
+  ctx.moveTo(centerX, centerY - armLength)
+  ctx.lineTo(centerX, centerY + armLength)
+  ctx.stroke()
+  ctx.restore()
+}
+
+/**
+ * 把图片区域内的指针位置换算为归一化构图焦点（focalX/focalY，clamp 到 [0, 1]）。
+ *
+ * 指针在区域外、坐标非法或区域为零尺寸时返回 null，调用方应保持当前焦点不变。
+ * 该换算只服务 Canvas 预览的编辑态拖动，不参与引擎渲染。
+ */
+export const calculateFocalFromPointer = (
+  pointer: { readonly x: number; readonly y: number },
+  rect: PreviewRect
+): { focalX: number; focalY: number } | null => {
+  if (
+    !Number.isFinite(pointer.x) || !Number.isFinite(pointer.y)
+    || !Number.isFinite(rect.x) || !Number.isFinite(rect.y)
+    || !Number.isFinite(rect.width) || !Number.isFinite(rect.height)
+    || rect.width <= 0 || rect.height <= 0
+  ) {
+    return null
+  }
+  if (
+    pointer.x < rect.x || pointer.x > rect.x + rect.width
+    || pointer.y < rect.y || pointer.y > rect.y + rect.height
+  ) {
+    return null
+  }
+  return {
+    focalX: Math.min(1, Math.max(0, (pointer.x - rect.x) / rect.width)),
+    focalY: Math.min(1, Math.max(0, (pointer.y - rect.y) / rect.height))
   }
 }
 
@@ -641,15 +737,27 @@ export const drawPreviewToCanvas = (
   canvas: HTMLCanvasElement,
   image: CanvasDrawableSource,
   settings: RenderSettings,
-  logoImage?: CanvasDrawableSource | null
+  logoImage?: CanvasDrawableSource | null,
+  renderDimensions?: CanvasRenderDimensions
 ): void => {
   const ctx = canvas.getContext("2d")
   if (ctx === null) {
     return
   }
 
-  const cw = canvas.width
-  const ch = canvas.height
+  const pixelRatio = renderDimensions?.pixelRatio !== undefined
+    && Number.isFinite(renderDimensions.pixelRatio)
+    && renderDimensions.pixelRatio > 0
+    ? renderDimensions.pixelRatio
+    : 1
+  const cw = renderDimensions?.logicalWidth ?? canvas.width / pixelRatio
+  const ch = renderDimensions?.logicalHeight ?? canvas.height / pixelRatio
+
+  // backing store 可能是 DPR 的倍数，后续所有 RenderRecipe 几何仍使用 CSS/逻辑像素。
+  ctx.save()
+  if (pixelRatio !== 1) {
+    ctx.scale(pixelRatio, pixelRatio)
+  }
 
   const bt = settings.borderTop
   const bb = settings.borderBottom
@@ -681,6 +789,7 @@ export const drawPreviewToCanvas = (
   ctx.fillRect(0, 0, cw, ch)
 
   const sourceSize = getSourceSize(image)
+  const imagePlacement = imagePlacementFromSettings(settings)
   const imageLayout = calculatePreviewImageLayout(
     cw,
     ch,
@@ -690,18 +799,20 @@ export const drawPreviewToCanvas = (
     bb,
     bl,
     br,
-    settings.imagePlacement
+    imagePlacement
   )
   if (imageLayout === null) {
+    ctx.restore()
     return
   }
 
   const geometry = calculateImagePlacementGeometry(
     sourceSize.width,
     sourceSize.height,
-    normalizeImagePlacement(settings.imagePlacement)
+    imagePlacement
   )
   if (geometry === null) {
+    ctx.restore()
     return
   }
   const availableWidth = Math.max(0, cw - Math.max(0, bl) - Math.max(0, br))
@@ -758,6 +869,7 @@ export const drawPreviewToCanvas = (
   if (settings.logo?.enabled) {
     if (settings.logo.imagePath && logoImage) {
       drawLogoImage(ctx, logoImage, settings, cw, ch, bt, bb, bl, br, scale)
+      ctx.restore()
       return
     }
     let logoText: string
@@ -771,6 +883,7 @@ export const drawPreviewToCanvas = (
       drawLogo(ctx, logoText.trim(), settings, cw, ch, bt, bb, bl, br, scale)
     }
   }
+  ctx.restore()
 }
 
 /** 绘制自定义 PNG/签名；保持原图比例，size 表示最长边像素。 */

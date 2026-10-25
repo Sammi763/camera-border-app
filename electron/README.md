@@ -10,7 +10,7 @@ electron/src/
   main/      应用启动、窗口创建、生命周期编排（main.ts、appLifecycle.ts、createMainWindow.ts、protocol.ts）
   engine/    Java 引擎启动/停止、健康探测、配置、随包运行时解析与托管单例
              （JavaBridge.ts、engineHealth.ts、engineConfig.ts、engineRuntime.ts、managedEngine.ts）
-  ipc/       IPC handler：文件对话框、模板/资产/摄影预设存储、HEIC 转换、引擎诊断与重试
+  ipc/       IPC handler：文件对话框（含对话框目录记忆 dialogMemory）、模板/资产/摄影预设存储、HEIC 转换、引擎诊断与重试
   preload/   preload 脚本，暴露白名单 API（window.desktop / window.desktopRuntime）
   paths/     路径解析（开发 / 打包双模式）
   config/    应用配置（appConfig.ts、devMode.ts）
@@ -23,6 +23,8 @@ electron/src/
   frontend/                            前端构建产物（app:// 协议加载）
   java-engine/camera-border-engine.jar 引擎 jar（JavaBridge spawn）
   java-runtime/                        随包 Java Runtime（Temurin JRE，用户无需安装 Java）
+  professional-tools/                  锁定版本的 ExifTool、HEIC 清单、字体、许可证与校验和
+  package-manifest.json                版本、目标架构、源码 commit 和随包组件 SHA-256
 ```
 ```
 
@@ -82,13 +84,14 @@ JavaBridge 的实际端口只存在于主进程，不通过 preload、IPC 或运
 - `app.getPath("userData")/assets.json` — 摄影资产库
 - `app.getPath("userData")/presets.json` — 摄影预设（P0-05，替代 Roll 成为主流程）
 - `app.getPath("userData")/rolls.json` — 旧版 Roll 数据；仅保留兼容读取与迁移，不再由 UI 使用，也不扩展字段
+- `app.getPath("userData")/dialog-memory.json` — 文件对话框目录记忆（上次导入/导出目录）。读写失败静默回退，绝不阻塞对话框；解析与拼装为纯函数（`ipc/dialogMemory.ts`），打包 E2E 替身路径不读写记忆
 
 文件不存在时读取返回 `"[]"`；读取失败记录日志并返回兜底值。浏览器模式（无 Electron）降级到 localStorage，两种模式数据不互通（[ADR-0006](../docs/adr/0006-three-process-memory-stores.md)）。
 
 ## 验证与已知限制
 
-- 验证：`pnpm typecheck`；冒烟走 `pnpm dev`（开发）或 `pnpm dev:managed`（托管）；打包与干净机器验收见 [docs/release-checklist.md](../docs/release-checklist.md)。当前 macOS arm64 统一工作台的实际应用验收命令为 `pnpm package && pnpm e2e:packaged`；打包 E2E 还会通过真实 preload 文件夹入口导入 100 项、审计首屏/滚动缩略图请求、预览、全尺寸导出与取消；这不宣称 macOS x64 或 Windows x64 已实测。
-- HEIC/HEIF 使用随包解码助手；当前仅在 macOS arm64 验证，Windows x64 与 macOS x64 未覆盖，不能据此宣称其他平台已验收。
+- 验证：`pnpm typecheck`；冒烟走 `pnpm dev`（开发）或 `pnpm dev:managed`（托管）；打包与干净机器验收见 [docs/release-checklist.md](../docs/release-checklist.md)。已安装应用 E2E 必须设置 `CAMBORDER_PACKAGED_APP` 指向实际安装后的可执行文件，再运行 `pnpm e2e:packaged`；脚本会读取包内 manifest、随包能力快照，并用独立 ExifTool 读取输出事实。
+- HEIC/HEIF 只使用安装包内解码助手；`GET /api/capabilities` 与 Electron 能力快照缺少助手时返回 false，UI 不显示可选但不可用的能力。正式目标 macOS arm64 的安装后样片证据进入发布门；macOS x64 / Windows x64 只写入候选报告，Windows 状态固定为 `SIMULATED`。
 - JavaBridge 的监听地址 / 就绪超时配置在 `engine/engineConfig.ts`（默认只绑定 `127.0.0.1:8099`，20s）；地址仅供主进程端口探测和 `app://` 代理使用。
 - 打包模式**必须**使用随包 Java Runtime（`requireBundledRuntime`）：解析不到时进入 `runtime-missing` 诊断，不回退系统 Java；仅开发模式允许回退系统 PATH。最终用户不需要安装 Java、Node.js 或 Python，Electron 自带应用运行时。
 - 引擎 stdout/stderr 落盘到 `userData/logs/engine.log`（启动时自动创建日志目录；目录/权限问题以 logWarning 计入诊断）。启动时写入 `[engine-start]` 横幅（platform / arch / node 版本 / jar 路径 / java 路径 / baseUrl / 时间），子进程退出时写入 `[engine-exit]`（exit code + signal），便于用户反馈日志后直接定位问题；「查看日志」经 `openLogFile` 直接打开该文件。
@@ -100,6 +103,9 @@ JavaBridge 的实际端口只存在于主进程，不通过 preload、IPC 或运
 - **健康探测可取消超时与代次隔离**：`pollEngineHealth` 每次请求带 `AbortSignal.timeout`（连接后长期无响应也能终止，`readyTimeoutMs` 才真正生效）；`waitForReady()` 捕获启动代次，重试/退出后旧探测结果作废，不会把新引擎误标为 unhealthy。
 - **代码签名（env 驱动）**：`electron-builder.yml` 不再写死 `mac.identity: null`；设置 `CSC_LINK`/`CSC_KEY_PASSWORD` 即启用签名（mac 公证另设 `APPLE_*`）。`scripts/package-app.sh` 在未提供证书时对 mac 显式传 `--config.mac.identity=null` 保持本地未签名构建；`build-hooks/afterPack.cjs` **仅当对产物 `codesign -dv` 确认真实开发者签名后才跳过 ad-hoc**（APPLE_ID 只是公证账号，不代表已签名；未签名时仍走 ad-hoc，避免产出未签名应用）。本机无证书，现有产物为未签名（见 release-checklist）。
 - 应用运行**不需要联网**，也不在运行时下载任何文件；图片只在本机处理。
+- 专业导出只使用 `professional-tools/` 中由打包脚本固定注入的 ExifTool 和组件清单；路径
+  缺失或版本/校验和不满足时由 `/api/capabilities` 如实报告不可用，Renderer 不得自行寻找
+  系统工具或下载替代版本。
 - RAW 输入：只接受引擎读取到的内嵌 JPEG 预览；无可读取预览时明确失败。Electron 不携带、注入或启动任何外部 RAW 显影工具。
 - 引擎端口可用环境变量 `CAMBORDER_ENGINE_PORT` 覆盖（默认 8099）。
 - macOS 本地开发：`scripts/prepare-electron-dev.mjs` 会检查 Electron.app 是否完整，并修复 npm 开发副本的 ad-hoc 签名/隔离属性；它只作用于 `node_modules`，不参与正式打包签名。若依赖安装中断，可手动执行根目录 `pnpm prepare:electron-dev`。

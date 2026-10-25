@@ -4,10 +4,10 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.awt.Font;
 import java.awt.GraphicsEnvironment;
 import java.util.Arrays;
 import java.util.List;
+import com.camborder.app.service.impl.BundledFontRegistry;
 
 /**
  * 字体查询接口：GET /api/fonts 返回引擎实际可用的字体族名称列表。
@@ -17,6 +17,12 @@ import java.util.List;
 @RestController
 @RequestMapping("/api")
 public final class FontController {
+
+    private final BundledFontRegistry bundledFontRegistry;
+
+    public FontController(final BundledFontRegistry bundledFontRegistry) {
+        this.bundledFontRegistry = bundledFontRegistry;
+    }
 
     @GetMapping("/fonts")
     public FontListResponse listFonts() {

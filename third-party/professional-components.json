@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "components": {
+    "twelvemonkeys-imageio": {
+      "version": "3.14.0",
+      "license": "BSD-3-Clause",
+      "sha256": "8625f8f5c0cdcbb4489c3b45117af0f2336e278e3de9a6ec1ee073a218acec42",
+      "artifacts": [
+        "com.twelvemonkeys:imageio-core:3.14.0",
+        "com.twelvemonkeys:imageio-metadata:3.14.0",
+        "com.twelvemonkeys:imageio-jpeg:3.14.0",
+        "com.twelvemonkeys:imageio-tiff:3.14.0"
+      ]
+    },
+    "exiftool": {
+      "version": "13.59",
+      "license": "GPL-1.0-or-later OR Artistic-1.0-Perl",
+      "sha256": {
+        "macos": "b7c366eaa6ede74451177128b28e28c8df9ed0505e27ce4492cf5d05b4cc6618",
+        "win-x64": "44b512b25af500724ba579d0a53c8fc5851628b692dd5e5d94ae4a15c2cba9ec"
+      },
+      "sources": {
+        "macos": "https://sourceforge.net/projects/exiftool/files/ExifTool-13.59.pkg/download",
+        "win-x64": "https://sourceforge.net/projects/exiftool/files/exiftool-13.59_64.zip/download"
+      }
+    }
+  }
+}

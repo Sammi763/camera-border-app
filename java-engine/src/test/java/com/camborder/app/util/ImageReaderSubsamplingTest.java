@@ -1,6 +1,5 @@
 package com.camborder.app.util;
 
-import com.camborder.app.service.RawDevelopService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -30,12 +29,14 @@ final class ImageReaderSubsamplingTest {
         graphics.dispose();
         assertThat(ImageIO.write(source, "jpg", imagePath.toFile())).isTrue();
 
-        final ImageReader reader = new ImageReader(new RawDecoder(), unavailableRawDevelopService());
+        final ImageReader reader = new ImageReader(new RawDecoder());
 
         final ImageReader.ReadResult preview = reader.readWithSource(imagePath.toString(), 400, 400);
         assertThat(preview.getImage().getWidth()).isEqualTo(400);
         assertThat(preview.getImage().getHeight()).isEqualTo(300);
         assertThat(preview.getImage().getWidth()).isLessThan(source.getWidth());
+        assertThat(preview.getSourceDecode().getFullWidth()).isEqualTo(1600);
+        assertThat(preview.getSourceDecode().getFullHeight()).isEqualTo(1200);
 
         final ImageReader.ReadResult export = reader.readWithSource(imagePath.toString());
         assertThat(export.getImage().getWidth()).isEqualTo(source.getWidth());
@@ -72,6 +73,31 @@ final class ImageReaderSubsamplingTest {
         assertThat(preview.getHeight()).isEqualTo(150);
     }
 
+    @Test
+    void rawExtensionAlwaysUsesEmbeddedJpegRouteEvenWhenImageIoCanReadTheBytes() throws Exception {
+        final BufferedImage embedded = new BufferedImage(800, 600, BufferedImage.TYPE_INT_RGB);
+        for (int y = 0; y < embedded.getHeight(); y++) {
+            for (int x = 0; x < embedded.getWidth(); x++) {
+                embedded.setRGB(x, y, ((x * 31) & 0xff) << 16
+                        | ((y * 47) & 0xff) << 8 | ((x + y) & 0xff));
+            }
+        }
+        final ByteArrayOutputStream jpeg = new ByteArrayOutputStream();
+        assertThat(ImageIO.write(embedded, "jpg", jpeg)).isTrue();
+        final Path rawPath = tempDir.resolve("jpeg-named-as-raw.nef");
+        Files.write(rawPath, jpeg.toByteArray());
+
+        final ImageReader.ReadResult result = new ImageReader(new RawDecoder())
+                .readWithSource(rawPath.toString());
+
+        assertThat(result.getSourceDecode().getMode()).isEqualTo("embedded-jpeg");
+        assertThat(result.getSourceInfo().getPixelSource()).isEqualTo("embedded-jpeg");
+        assertThat(result.getImage().getWidth()).isEqualTo(800);
+        assertThat(result.getImage().getHeight()).isEqualTo(600);
+        assertThat(result.getSourceDecode().getFullWidth()).isEqualTo(800);
+        assertThat(result.getSourceDecode().getFullHeight()).isEqualTo(600);
+    }
+
     private byte[] concat(final byte[] left, final byte[] right) {
         final byte[] result = new byte[left.length + right.length];
         System.arraycopy(left, 0, result, 0, left.length);
@@ -79,17 +105,4 @@ final class ImageReaderSubsamplingTest {
         return result;
     }
 
-    private RawDevelopService unavailableRawDevelopService() {
-        return new RawDevelopService() {
-            @Override
-            public boolean isConfigured() {
-                return false;
-            }
-
-            @Override
-            public BufferedImage develop(final String rawPath) {
-                throw new AssertionError("标准图片读取不得调用 RAW 显影服务");
-            }
-        };
-    }
 }

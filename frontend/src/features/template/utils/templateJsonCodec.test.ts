@@ -75,7 +75,6 @@ describe("encodeTemplateJson", () => {
     expect(settings).not.toHaveProperty("customOutputLongEdge")
     expect(settings).not.toHaveProperty("preserveMetadata")
     expect(settings).not.toHaveProperty("filmFormat")
-    expect(settings).not.toHaveProperty("autoCrop")
   })
 })
 

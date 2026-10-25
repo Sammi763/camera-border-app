@@ -26,8 +26,10 @@ java-engine/src/main/java/com/camborder/app/
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/health` | 健康检查 |
+| GET | `/api/capabilities` | 探测随包 ImageIO/ExifTool、输入输出格式、位深与三个导出档位的真实能力 |
 | GET | `/api/dev/photos` | 样片浏览器：扫描仓库根 `photos/`（可用 `app.dev.photos-dir` 覆盖） |
 | POST | `/api/preview` | 生成预览，返回预览 id |
+| POST | `/api/export-preflight` | 在导出前校验档位、格式、路径、源事实与运行时能力 |
 | GET | `/previews/{id}` | 获取预览 PNG |
 | POST | `/api/render-jobs` | 提交 1–100 个冻结导出快照，返回 `202 + jobId` |
 | GET | `/api/render-jobs/{jobId}` | 查询总进度、当前项、逐项结果与失败原因 |
@@ -43,6 +45,11 @@ java-engine/src/main/java/com/camborder/app/
 `OPTIONS`。生产 `app://` 请求不依赖 Java CORS，而由 Electron 主进程代理；不得把任意外部
 Origin 加入该配置。
 
+阶段五的专业控件必须先读取 `/api/capabilities`，再提交 `/api/export-preflight`。能力结果
+只来自随包的固定版本组件：缺少 ExifTool 或 TIFF ImageIO 时对应能力为 `false`，不会回退
+到系统 PATH。实际导出由受控 ExifTool 写回并再次独立读取输出文件，完成后在
+`FidelityReport` 中返回实际尺寸、方向、位深、色彩空间、ICC 和 EXIF/XMP/IPTC/GPS 事实。
+
 ## 渲染管线（预览与导出共用）
 
 `ImageReader`（预览/缩略图按目标盒在 ImageIO 解码阶段 subsampling；导出传无约束尺寸；RAW
@@ -52,6 +59,10 @@ Origin 加入该配置。
 → `ImageEncoder`（PNG/JPEG/TIFF）→ `OutputPathValidator`（导出路径校验，父目录可写）。
 
 预览与导出共享同一套 `ImageRenderService` 渲染逻辑，避免「预览对、导出不对」（[ADR-0002](../docs/adr/0002-preview-export-share-recipe.md)）。
+
+`ImageReader` 在解码边界读取并物理应用 EXIF Orientation 1–8，返回有向像素尺寸和
+`orientationApplied` 事实；用户手动旋转仍由 `RenderRecipe.imagePlacement.rotation` 单独处理。
+因此 Canvas、Java 预览、单图导出和批量导出都从同一套有向尺寸与图片区域几何开始。
 
 ### 边框风格（borderStyle）
 
@@ -90,7 +101,9 @@ mvn package              # 打包 target/camera-border-engine.jar（托管模式
 
 ## 已知限制
 
-- 专业导出会按实际编码能力报告 EXIF、ICC 与高位深状态：PNG/JPEG 可写回可读取的 EXIF/ICC；当前 Java2D 合成结果为 8-bit 时，高位深请求明确报告 `DOWNGRADED`，不会伪造保留。未识别或损坏的元数据不会阻断像素导出。
+- 专业导出会按实际文件报告 EXIF、ICC 与位深：JPEG 固定 8-bit，PNG/TIFF 真实支持 8/16-bit；8-bit 源不会报告为有效 16-bit。无 ICC 源按 sRGB 处理并在报告中标记 `sRGB-assumed`，同时写入实际输出 ICC。固定档位无法满足能力时在预检阶段失败，自定义参数才允许明确的 `UNSUPPORTED`/`DOWNGRADED`；不存在 `completed + SKIPPED`。
+- 元数据由受控 ExifTool 复制 EXIF/XMP/IPTC/GPS/ICC/DPI，并重写尺寸、方向、位深、色彩空间标签；分享档移除 GPS/位置，标准交付和归档保留。外部进程超时、非零退出或独立读取失败都会使导出失败并清理临时文件。
 - RAW：仅提取**内嵌 JPEG 预览**（NEF/CR2/CR3/ARW/RAF/DNG/ORF/RW2/PEF）；无可读取内嵌 JPEG 时明确失败，非完整 RAW 解码。
+- `/api/capabilities` 只报告当前随包 TwelveMonkeys、ExifTool、字体和 Electron HEIC 助手真实可用状态；缺组件时固定档位在预检阶段失败，不回退系统工具。完成导出响应中的 `FidelityReport` 来自编码、元数据写回和独立读取后的实际文件事实。
 - 错误语义：4xx=请求不合法、5xx=服务异常；受控异常不 500 堆栈直出（`GlobalExceptionHandler`）。
 - 字体接入流程与授权核验见 `docs/FONT_CANDIDATES.md`。

@@ -3,12 +3,21 @@ import { Panel } from "../../../components/layout/Panel"
 import { useThumbnails } from "../hooks/useThumbnails"
 import { selectVisibleThumbnailPaths } from "../hooks/visibleThumbnailPaths"
 import { toDirPath } from "../../../utils/fileName"
-import { isRawFile, getRawFormatName, getRawTier } from "../../metadata/constants/rawExtensions"
+import { isRawFile, getRawFormatName } from "../../metadata/constants/rawExtensions"
 import { isHeicFile } from "../../metadata/constants/imageFormats"
 import type { QueueController, QueueItem } from "../types"
 
 type QueuePanelProps = {
   readonly queue: QueueController
+}
+
+/** 队列行内拖拽使用的 dataTransfer 类型；文件拖放不会携带该类型，二者在路由上互不干扰。 */
+const QUEUE_ROW_DRAG_TYPE = "application/x-camborder-queue-item"
+
+type QueueContextMenuState = {
+  readonly x: number
+  readonly y: number
+  readonly itemId: string
 }
 
 const QueueRow = ({
@@ -18,7 +27,12 @@ const QueueRow = ({
   isChecked,
   onSelect,
   onToggleCheck,
-  onRemove
+  onRemove,
+  onContextMenu,
+  onRowDragStart,
+  onRowDragOver,
+  onRowDrop,
+  onRowDragEnd
 }: {
   readonly item: QueueItem
   readonly thumbUrl: string | undefined
@@ -27,6 +41,11 @@ const QueueRow = ({
   readonly onSelect: (id: string) => void
   readonly onToggleCheck: (id: string) => void
   readonly onRemove: (id: string) => void
+  readonly onContextMenu: (event: React.MouseEvent<HTMLLIElement>, id: string) => void
+  readonly onRowDragStart: (event: React.DragEvent<HTMLLIElement>, id: string) => void
+  readonly onRowDragOver: (event: React.DragEvent<HTMLLIElement>) => void
+  readonly onRowDrop: (event: React.DragEvent<HTMLLIElement>, targetId: string) => void
+  readonly onRowDragEnd: (event: React.DragEvent<HTMLLIElement>) => void
 }): JSX.Element => {
   const rowClassName = isActive ? "queueItem isActive" : "queueItem"
   const hasPreset = item.presetId !== null
@@ -38,7 +57,13 @@ const QueueRow = ({
       data-queue-item-id={item.id}
       role="button"
       tabIndex={0}
+      draggable
+      onDragStart={(event) => onRowDragStart(event, item.id)}
+      onDragOver={onRowDragOver}
+      onDrop={(event) => onRowDrop(event, item.id)}
+      onDragEnd={onRowDragEnd}
       onClick={() => onSelect(item.id)}
+      onContextMenu={(event) => onContextMenu(event, item.id)}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault()
@@ -73,8 +98,8 @@ const QueueRow = ({
           {isRawFile(item.filePath) && (
             <span className="queueRawBadge" title={getRawFormatName(item.filePath) ?? "RAW 格式"}> RAW</span>
           )}
-          {isRawFile(item.filePath) && getRawTier(item.filePath) === "preview-only" && (
-            <span className="queueRawBadge" title="仅嵌入预览模式，非完整显影"> 预览</span>
+          {isRawFile(item.filePath) && (
+            <span className="queueRawBadge" title="仅使用 RAW 文件内嵌 JPEG 像素；不执行传感器 RAW 显影"> 内嵌 JPEG</span>
           )}
           {item.missing === true && (
             <span className="queueRawBadge" title="恢复工作会话时未找到源文件"> 文件丢失</span>
@@ -115,6 +140,10 @@ export const QueuePanel = ({ queue }: QueuePanelProps): JSX.Element => {
   const [dragActive, setDragActive] = useState(false)
   const queueListRef = useRef<HTMLUListElement>(null)
   const [visibleItemIds, setVisibleItemIds] = useState<ReadonlySet<string>>(() => new Set())
+  /** 自绘右键菜单的受控状态；null 表示关闭。 */
+  const [contextMenu, setContextMenu] = useState<QueueContextMenuState | null>(null)
+  const contextMenuRef = useRef<HTMLDivElement | null>(null)
+  const draggedItemIdRef = useRef<string | null>(null)
 
   // 缩略图只跟随滚动容器中的可见行，避免 100 张队列在导入瞬间全部解码。
   useEffect(() => {
@@ -163,6 +192,74 @@ export const QueuePanel = ({ queue }: QueuePanelProps): JSX.Element => {
   )
 
   const allChecked = !isEmpty && queue.checkedCount === queue.items.length
+
+  // 右键菜单打开时：点击菜单外任意位置或按 Esc 都关闭，不阻塞其余交互。
+  useEffect(() => {
+    if (contextMenu === null) {
+      return
+    }
+    const handlePointerDown = (event: PointerEvent): void => {
+      const menu = contextMenuRef.current
+      if (menu !== null && menu.contains(event.target as Node)) {
+        return
+      }
+      setContextMenu(null)
+    }
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        setContextMenu(null)
+      }
+    }
+    window.addEventListener("pointerdown", handlePointerDown, true)
+    window.addEventListener("keydown", handleKeyDown)
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown, true)
+      window.removeEventListener("keydown", handleKeyDown)
+    }
+  }, [contextMenu])
+
+  /** 打开队列行右键菜单（阻止浏览器默认菜单）。 */
+  const handleRowContextMenu = useCallback((event: React.MouseEvent<HTMLLIElement>, itemId: string): void => {
+    event.preventDefault()
+    setContextMenu({ x: event.clientX, y: event.clientY, itemId })
+  }, [])
+
+  /** 记录被拖拽行，供 drop 时读取（dataTransfer 在 dragover 阶段不可读）。 */
+  const handleRowDragStart = useCallback((event: React.DragEvent<HTMLLIElement>, itemId: string): void => {
+    draggedItemIdRef.current = itemId
+    event.dataTransfer.setData(QUEUE_ROW_DRAG_TYPE, itemId)
+    event.dataTransfer.effectAllowed = "move"
+  }, [])
+
+  /** 行内拖拽只允许移动到队列行上，不触发外层文件拖放高亮。 */
+  const handleRowDragOver = useCallback((event: React.DragEvent<HTMLLIElement>): void => {
+    if (draggedItemIdRef.current === null) {
+      return
+    }
+    event.preventDefault()
+    event.stopPropagation()
+    event.dataTransfer.dropEffect = "move"
+  }, [])
+
+  /** 拖拽落点行即目标下标；拖回原位时 reorder 内部无历史记录。 */
+  const handleRowDrop = useCallback((event: React.DragEvent<HTMLLIElement>, targetId: string): void => {
+    event.preventDefault()
+    event.stopPropagation()
+    const draggedId = draggedItemIdRef.current
+      ?? (event.dataTransfer.getData(QUEUE_ROW_DRAG_TYPE) || null)
+    draggedItemIdRef.current = null
+    if (draggedId === null || draggedId === targetId) {
+      return
+    }
+    const targetIndex = queue.items.findIndex((item) => item.id === targetId)
+    if (targetIndex >= 0) {
+      queue.reorder(draggedId, targetIndex)
+    }
+  }, [queue])
+
+  const handleRowDragEnd = useCallback((): void => {
+    draggedItemIdRef.current = null
+  }, [])
 
   /** 选择文件夹导入，空文件夹时显示中文提示。 */
   const handleAddFolder = useCallback(async (): Promise<void> => {
@@ -244,10 +341,10 @@ export const QueuePanel = ({ queue }: QueuePanelProps): JSX.Element => {
           <p className="panelHint queueFolderHint">{folderHint}</p>
         )}
 
-      {/* HEIC 转换 / 导入结果反馈 */}
+      {/* HEIC 转换 / 去重 / 导入结果反馈 */}
       {queue.lastImportResult !== null && (() => {
         const r = queue.lastImportResult
-        if (r.successCount === 0 && r.failedFiles.length === 0) return null
+        if (r.successCount === 0 && r.failedFiles.length === 0 && r.skippedDuplicateCount === 0) return null
         const parts: string[] = []
         if (r.convertedFiles.length > 0) {
           parts.push(`${r.convertedFiles.length} 张 HEIC/HEIF 已转换为 PNG`)
@@ -257,6 +354,9 @@ export const QueuePanel = ({ queue }: QueuePanelProps): JSX.Element => {
         }
         if (r.failedFiles.length > 0) {
           parts.push(`${r.failedFiles.length} 张导入失败：${r.failedFiles.join("、")}`)
+        }
+        if (r.skippedDuplicateCount > 0) {
+          parts.push(`${r.skippedDuplicateCount} 张已在队列中，已跳过`)
         }
         if (parts.length === 0) return null
         return <p className="panelHint queueImportHint">{parts.join("；")}</p>
@@ -275,10 +375,50 @@ export const QueuePanel = ({ queue }: QueuePanelProps): JSX.Element => {
               onSelect={queue.setActive}
               onToggleCheck={queue.toggleChecked}
               onRemove={queue.removeItem}
+              onContextMenu={handleRowContextMenu}
+              onRowDragStart={handleRowDragStart}
+              onRowDragOver={handleRowDragOver}
+              onRowDrop={handleRowDrop}
+              onRowDragEnd={handleRowDragEnd}
             />
           ))}
         </ul>
       )}
+
+      {/* 右键菜单：队列批量关闭操作（对应 PRD §3.3 待规划项） */}
+      {contextMenu !== null && (() => {
+        const menuItems: readonly { readonly label: string; readonly action: () => void }[] = [
+          { label: "删除此图片", action: () => queue.removeItem(contextMenu.itemId) },
+          { label: "删除其他图片", action: () => queue.removeOthers(contextMenu.itemId) },
+          { label: "删除左侧图片", action: () => queue.removeLeftOf(contextMenu.itemId) },
+          { label: "删除右侧图片", action: () => queue.removeRightOf(contextMenu.itemId) },
+          { label: "清空队列", action: () => queue.clear() }
+        ]
+        return (
+          <div
+            ref={contextMenuRef}
+            className="queueContextMenu"
+            role="menu"
+            aria-label="队列图片操作"
+            style={{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }}
+          >
+            {menuItems.map((menuItem) => (
+              <button
+                key={menuItem.label}
+                type="button"
+                role="menuitem"
+                className="queueContextMenuItem"
+                onClick={() => {
+                  setContextMenu(null)
+                  menuItem.action()
+                }}
+              >
+                {menuItem.label}
+              </button>
+            ))}
+          </div>
+        )
+      })()}
 
       {/* 底部操作：批量选择状态 + 全选/取消全选 + 清空 */}
       {!isEmpty && (
@@ -302,6 +442,22 @@ export const QueuePanel = ({ queue }: QueuePanelProps): JSX.Element => {
           </button>
           <button type="button" className="ghostButton" onClick={queue.clear}>
             清空
+          </button>
+          <button
+            type="button"
+            className="ghostButton queueSortButton"
+            title="按文件名升序排列（稳定排序，同名文件保持原顺序）"
+            onClick={() => queue.sortByName("asc")}
+          >
+            按文件名 ↑
+          </button>
+          <button
+            type="button"
+            className="ghostButton queueSortButton"
+            title="按文件名降序排列（稳定排序，同名文件保持原顺序）"
+            onClick={() => queue.sortByName("desc")}
+          >
+            按文件名 ↓
           </button>
           <button type="button" className="ghostButton" disabled={!queue.canUndo} onClick={queue.undo}>撤销</button>
           <button type="button" className="ghostButton" disabled={!queue.canRedo} onClick={queue.redo}>重做</button>

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import type { RenderSettings, RenderSettingsInput } from "../../settings/types"
+import type { RenderSettings } from "../../settings/types"
 import type { LayoutSettings, Template, TemplateController } from "../types"
 import { toLayoutSettings } from "../utils/templateSettings"
+import { migrateLegacyTemplateLayout } from "../utils/legacyTemplateMigration"
 
 const LS_TEMPLATES_KEY = "camborder-templates"
 const LS_DEFAULT_KEY = "camborder-default-template"
@@ -29,7 +30,7 @@ const normalizeStoredTemplates = (value: unknown): { templates: readonly Templat
       continue
     }
     const originalSettings = candidate["settings"]
-    const settings = toLayoutSettings(originalSettings as RenderSettingsInput)
+    const settings = toLayoutSettings(migrateLegacyTemplateLayout(originalSettings))
     if (JSON.stringify(originalSettings) !== JSON.stringify(settings)) migrated = true
     templates.push({
       id: candidate["id"],

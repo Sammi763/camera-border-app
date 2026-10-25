@@ -4,9 +4,13 @@ import com.camborder.app.exception.PreviewGenerationException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Random;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -85,5 +89,36 @@ class RawDecoderTest {
                 () -> decoder.decode(rafFile.toString())
         );
         assertTrue(ex.getMessage().contains("RAF"));
+    }
+
+    @Test
+    void decode_选择像素面积最大的内嵌JPEG而不是传感器显影() throws IOException {
+        byte[] small = jpeg(120, 80, 7);
+        byte[] large = jpeg(640, 360, 11);
+        ByteArrayOutputStream raw = new ByteArrayOutputStream();
+        raw.write(new byte[]{0x12, 0x34, 0x56, 0x78});
+        raw.write(small);
+        raw.write(new byte[]{0x01, 0x02, 0x03});
+        raw.write(large);
+        Path file = tempDir.resolve("embedded.nef");
+        Files.write(file, raw.toByteArray());
+
+        BufferedImage result = decoder.decode(file.toString());
+
+        assertEquals(640, result.getWidth());
+        assertEquals(360, result.getHeight());
+    }
+
+    private static byte[] jpeg(final int width, final int height, final int seed) throws IOException {
+        BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+        Random random = new Random(seed);
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                image.setRGB(x, y, random.nextInt(0x1000000));
+            }
+        }
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        ImageIO.write(image, "jpeg", output);
+        return output.toByteArray();
     }
 }

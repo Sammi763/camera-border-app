@@ -137,7 +137,8 @@ java-engine/src/main/java/com/camborder/app/
   Canvas 与 Java2D 使用同一套风格 ID 与几何规格（权威定义在
   `java-engine/util/BorderStyleRenderer` 类注释）；未识别 id 或缺省时两端都保持原行为
 - 图片解码来源 `sourceDecode {mode, format, warning}` 随预览/导出响应返回；
-  RAW 显影失败必须显式降级（embedded-preview-fallback + 中文原因），禁止静默伪装
+  RAW 只允许使用文件内嵌 JPEG；报告必须明确像素来源和尺寸，禁止把传感器 RAW
+  当作已完成显影，也不得提供外部显影分支。
 
 ### 4.4 接口风格
 
