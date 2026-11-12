@@ -2,6 +2,8 @@
  * 设置模块的 UI 状态类型。
  */
 
+import type { FilmOutput } from "../../types/imageProcessing"
+
 /**
  * 文字放置区域：
  * - image: 文字绘制在图片区域内
@@ -62,6 +64,7 @@ export type ImageAreaSettings = {
   readonly targetAspectRatioOverride?: number | null
 }
 
+import type { HistoryEntryMeta } from "../../utils/historySequence"
 import type { BitDepthPolicy, ColorProfilePolicy, FidelityTier, ImagePlacement, MetadataPolicy } from "../../types/preview"
 
 /**
@@ -188,6 +191,8 @@ export type RenderSettings = {
   readonly borderStyle: BorderStyleSettings | null
   /** 导出格式：png / jpeg / tiff。 */
   readonly exportFormat: "png" | "jpeg" | "tiff"
+  /** 批量导出命名方式（U13）；缺省按 original-suffix 处理。 */
+  readonly exportNaming?: ExportNaming
   /** JPEG 导出质量（1-100），仅 exportFormat 为 jpeg 时生效。 */
   readonly jpegQuality: number
   /** 输出尺寸预设。 */
@@ -205,6 +210,10 @@ export type RenderSettings = {
   readonly colorProfilePolicy?: ColorProfilePolicy
   readonly metadataPolicy?: MetadataPolicy
   readonly bitDepthPolicy?: BitDepthPolicy
+  /** 底片模式输出组合；普通模式缺省。 */
+  readonly filmOutput?: FilmOutput
+  /** 底片母版是否不带边框/文字/Logo；仅底片模式生效。 */
+  readonly borderlessMaster?: boolean
   /** 品牌标识配置。 */
   readonly logo: LogoConfig
 }
@@ -216,9 +225,21 @@ export type NumberSettingKey = "borderTop" | "borderBottom" | "borderLeft" | "bo
   | "textFontSize" | "jpegQuality" | "customOutputLongEdge"
 
 /** update 的可选参数：historyTag 用于连续手势（如裁切构图拖动）合并撤销历史。 */
+/** 批量导出文件命名方式（U13）。 */
+export type ExportNamingMode = "original-suffix" | "prefix-index"
+
+/** 批量命名配置：原文件名+后缀（默认）或自定义前缀+三位序号。 */
+export type ExportNaming = {
+  readonly mode: ExportNamingMode
+  /** prefix-index 模式的前缀；空串回退为 "export"。 */
+  readonly prefix: string
+}
+
 export type SettingsUpdateOptions = {
   /** 相邻提交携带相同标签时不重复压撤销栈；标签本身不进入设置数据。 */
   readonly historyTag?: string
+  /** 覆盖自动生成的撤销动作描述（用于按钮提示）。 */
+  readonly description?: string
 }
 
 export type SettingsController = {
@@ -242,6 +263,9 @@ export type SettingsController = {
   /** 渲染设置历史（不含每图覆盖；每图覆盖由 QueueController 管理）。 */
   readonly canUndo: boolean
   readonly canRedo: boolean
+  /** 栈顶历史元数据（全局序号 + 动作描述），供工作台协调全局 ⌘Z 与按钮提示。 */
+  readonly topUndo: HistoryEntryMeta | null
+  readonly topRedo: HistoryEntryMeta | null
   readonly undo: () => void
   readonly redo: () => void
 }

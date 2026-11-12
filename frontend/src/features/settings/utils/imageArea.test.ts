@@ -87,9 +87,29 @@ describe("输出像素尺寸与预览 CSS 尺寸隔离", () => {
       borderLeft: 20,
       borderRight: 20
     }
+    // 档位缩小时边框按同一比例缩放：scale = 2048/3000 ≈ 0.6827，
+    // 边框 20 → 14（与引擎 BorderComposer.insets(border, renderScale) 一致）。
     expect(calculateOutputPixelDimensions(4000, 3000, settings)).toEqual({
-      width: 1678,
-      height: 2088
+      width: 1666,
+      height: 2076
+    })
+  })
+
+  it("原图尺寸档位不缩放边框", () => {
+    const imageArea = area({ orientation: "portrait", ratio: "4:5", displayMode: "fit" })
+    const settings = {
+      ...DEFAULT_SETTINGS,
+      imageArea,
+      imagePlacement: imagePlacementFromArea(imageArea),
+      outputSizePreset: "original" as const,
+      borderTop: 20,
+      borderBottom: 20,
+      borderLeft: 20,
+      borderRight: 20
+    }
+    expect(calculateOutputPixelDimensions(4000, 3000, settings)).toEqual({
+      width: 2440,
+      height: 3040
     })
   })
 

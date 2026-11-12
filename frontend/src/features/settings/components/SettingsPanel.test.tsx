@@ -43,6 +43,8 @@ const makeController = (
   resetTextLayers: vi.fn(),
   replaceTextLayers: vi.fn(),
   canUndo: false,
+  topUndo: null,
+  topRedo: null,
   canRedo: false,
   undo: vi.fn(),
   redo: vi.fn()
@@ -60,6 +62,16 @@ describe("SettingsPanel 阶段 2 图片区域与输出格式", () => {
   afterEach(() => {
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
+  })
+
+  it("底片模式只保留实际可用的尺寸和元数据策略，不提供冲突的普通格式与位深", () => {
+    render(<SettingsPanel controller={makeController(vi.fn())} hasSelectedImage={true} selectedFilePath={null}
+      textOverride={null} setTextOverride={vi.fn()} showStyleSettings={false} filmMode={true} capabilities={makeCapabilities()} />)
+    expect(screen.queryByLabelText("输出格式")).toBeNull()
+    expect(screen.queryByLabelText("色彩配置")).toBeNull()
+    expect(screen.queryByLabelText("位深")).toBeNull()
+    expect(screen.getByLabelText("元数据")).toBeTruthy()
+    expect(screen.getByLabelText("尺寸预设")).toBeTruthy()
   })
 
   it("三个固定输出档位都提供 PNG 变体，选择 PNG 不偷偷切到 custom", async () => {

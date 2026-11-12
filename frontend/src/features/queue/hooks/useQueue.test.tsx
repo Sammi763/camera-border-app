@@ -3,6 +3,7 @@ import { act, renderHook, waitFor } from "@testing-library/react"
 import { useQueue } from "./useQueue"
 import type { PhotoAssetStore, ShootingPreset } from "../../metadata/types"
 import type { QueueController } from "../types"
+import type { ImageProcessingConfig } from "../../../types/imageProcessing"
 import { createEmptyAssetStore } from "../../metadata/types"
 
 const makePreset = (id: string): ShootingPreset => ({
@@ -567,4 +568,205 @@ describe("useQueue（预设作用域应用：当前 / 已选 / 全部）", () =>
     expect(withOverride.captureFormat).toBe("6x6")
     expect(withOverride.film).toBe("Kodak Portra 400")
   })
+})
+
+const filmConfig = (exposureEv: number): ImageProcessingConfig => ({
+  schemaVersion: 1,
+  algorithmVersion: "film-digitization-v1",
+  inputMode: "linear-tiff",
+  linearInput: { transferFunction: "linear", colorSpace: "linear-rec2020", bitDepth: 16 },
+  positive: { exposureEv }
+})
+
+describe("useQueue（T08 每图底片状态、恢复与撤销）", () => {
+  afterEach(() => {
+    localStorage.clear()
+    delete (window as unknown as { desktop?: unknown }).desktop
+    vi.restoreAllMocks()
+  })
+
+  it("每图参数独立，切换图片不会串图", async () => {
+    const { result } = renderHook(() => useQueue())
+    await act(async () => {
+      await result.current.addFromPaths(["/photos/a.tif", "/photos/b.tif"])
+    })
+    const [idA, idB] = result.current.items.map((item) => item.id) as [string, string]
+
+    act(() => result.current.setActiveImageProcessing(filmConfig(1)))
+    expect(result.current.activeImageProcessing?.positive?.exposureEv).toBe(1)
+
+    act(() => result.current.setActive(idB))
+    expect(result.current.activeImageProcessing).toBeNull()
+
+    act(() => result.current.setActiveImageProcessing(filmConfig(2)))
+    act(() => result.current.setActive(idA))
+    expect(result.current.activeImageProcessing?.positive?.exposureEv).toBe(1)
+    expect(result.current.getEffectiveImageProcessing(idB)?.positive?.exposureEv).toBe(2)
+  })
+
+  it("撤销/重做与同一 historyTag 的手势合并", async () => {
+    const { result } = renderHook(() => useQueue())
+    await act(async () => {
+      await result.current.addFromPaths(["/photos/a.tif"])
+    })
+
+    act(() => result.current.setActiveImageProcessing(filmConfig(0.5), { historyTag: "curve-drag" }))
+    act(() => result.current.setActiveImageProcessing(filmConfig(1.5), { historyTag: "curve-drag" }))
+    expect(result.current.activeImageProcessing?.positive?.exposureEv).toBe(1.5)
+
+    act(() => result.current.undo())
+    // 整段拖动只压一条历史，撤销回到拖动前的关闭处理。
+    expect(result.current.activeImageProcessing).toBeNull()
+
+    act(() => result.current.redo())
+    expect(result.current.activeImageProcessing?.positive?.exposureEv).toBe(1.5)
+  })
+
+  it("写入时深复制，外部修改不会污染队列内的配置", async () => {
+    const { result } = renderHook(() => useQueue())
+    await act(async () => {
+      await result.current.addFromPaths(["/photos/a.tif"])
+    })
+    const source = filmConfig(0.75);
+
+    act(() => result.current.setActiveImageProcessing(source));
+    (source.positive as { exposureEv?: number }).exposureEv = 99
+    expect(result.current.activeImageProcessing?.positive?.exposureEv).toBe(0.75)
+    const read = result.current.getEffectiveImageProcessing(result.current.items[0]!.id)!
+    ;(read.positive as { exposureEv?: number }).exposureEv = 42
+    expect(result.current.activeImageProcessing?.positive?.exposureEv).toBe(0.75)
+  })
+
+  it("刷新后恢复每图配置", async () => {
+    const first = renderHook(() => useQueue())
+    await act(async () => {
+      await first.result.current.addFromPaths(["/photos/a.tif"])
+    })
+    act(() => first.result.current.setActiveImageProcessing(filmConfig(0.4)))
+    await waitFor(() => expect(localStorage.getItem("workspace.queue-session.v1")).not.toBeNull())
+    first.unmount()
+
+    const second = renderHook(() => useQueue())
+    expect(second.result.current.activeImageProcessing?.positive?.exposureEv).toBe(0.4)
+  })
+
+  it("旧会话缺少 imageProcessing 时迁移为普通模式", () => {
+    localStorage.setItem("workspace.queue-session.v1", JSON.stringify({
+      items: [{
+        id: "old-1",
+        filePath: "/photos/old.jpg",
+        fileName: "old.jpg",
+        sourcePath: "/photos/old.jpg",
+        sourceFormat: "jpg",
+        converted: false,
+        workingFormat: "jpg"
+      }],
+      activeItemId: "old-1",
+      checkedItemIds: []
+    }))
+
+    const { result } = renderHook(() => useQueue())
+    expect(result.current.items).toHaveLength(1)
+    expect(result.current.activeImageProcessing).toBeNull()
+    expect(result.current.activeImageProcessingError).toBeNull()
+  })
+
+  it("损坏/未知版本的配置不被静默当作已调好", () => {
+    localStorage.setItem("workspace.queue-session.v1", JSON.stringify({
+      items: [{
+        id: "bad-1",
+        filePath: "/photos/bad.tif",
+        fileName: "bad.tif",
+        sourcePath: "/photos/bad.tif",
+        sourceFormat: "tif",
+        converted: false,
+        workingFormat: "tif",
+        imageProcessing: { schemaVersion: 99, algorithmVersion: "film-digitization-v1", inputMode: "sensor-raw" }
+      }],
+      activeItemId: "bad-1",
+      checkedItemIds: []
+    }))
+
+    const { result } = renderHook(() => useQueue())
+    expect(result.current.activeImageProcessing).toBeNull()
+    expect(result.current.activeImageProcessingError).toContain("版本")
+  })
+
+  it("存储写入失败不影响当前编辑会话", async () => {
+    const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("quota")
+    })
+    const { result } = renderHook(() => useQueue())
+    await act(async () => {
+      await result.current.addFromPaths(["/photos/a.tif"])
+    })
+    act(() => result.current.setActiveImageProcessing(filmConfig(0.9)))
+    expect(result.current.activeImageProcessing?.positive?.exposureEv).toBe(0.9)
+    setItem.mockRestore()
+  })
+
+  it("选择性同步只改勾选字段，一次撤销恢复全部目标", async () => {
+    const { result } = renderHook(() => useQueue())
+    await act(async () => {
+      await result.current.addFromPaths(["/photos/a.tif", "/photos/b.tif", "/photos/c.tif"])
+    })
+    const [idA, idB, idC] = result.current.items.map((item) => item.id) as [string, string, string]
+
+    act(() => result.current.setActive(idA))
+    const sourceA: ImageProcessingConfig = {
+      ...filmConfig(1.2),
+      negative: {
+        enabled: true,
+        lightSource: { kind: "camera-white-balance" },
+        filmBase: { kind: "manual", rgb: [0.8, 0.7, 0.6], stage: "linear-working" },
+        density: { min: 0, max: 3 },
+        profile: "generic-color-negative-v1"
+      },
+      positive: {
+        ...filmConfig(1.2).positive,
+        masterCurve: { interpolation: "linear", points: [{ x: 0, y: 0 }, { x: 0.5, y: 0.7 }, { x: 1, y: 1 }] }
+      }
+    }
+    act(() => result.current.setActiveImageProcessing(sourceA))
+    act(() => result.current.setActive(idB))
+    const sourceB = filmConfig(-0.5)
+    act(() => result.current.setActiveImageProcessing(sourceB))
+    act(() => result.current.setActive(idC))
+
+    act(() => result.current.syncImageProcessing("all", sourceA, ["positive", "curves"]))
+
+    expect(result.current.items[0]!.imageProcessing?.positive?.exposureEv).toBe(1.2)
+    expect(result.current.items[1]!.imageProcessing?.positive?.exposureEv).toBe(1.2)
+    expect(result.current.items[2]!.imageProcessing?.positive?.exposureEv).toBe(1.2)
+    // 未勾选的片基/光源保留 B 的普通模式空配置；A 的底片参数不被反向覆盖。
+    expect(result.current.getEffectiveImageProcessing(idB)?.negative?.filmBase).toBeUndefined()
+    expect(result.current.getEffectiveImageProcessing(idA)?.negative?.filmBase).toEqual(sourceA.negative?.filmBase)
+
+    act(() => result.current.undo())
+    // 一条历史撤销全部目标。
+    expect(result.current.getEffectiveImageProcessing(idB)?.positive?.exposureEv).toBe(-0.5)
+    expect(result.current.getEffectiveImageProcessing(idC)?.positive?.exposureEv).toBeUndefined()
+  })
+
+  it("同步深复制，源配置后续修改不污染目标", async () => {
+    const { result } = renderHook(() => useQueue())
+    await act(async () => {
+      await result.current.addFromPaths(["/photos/a.tif", "/photos/b.tif"])
+    })
+    const source = filmConfig(0.6)
+    act(() => result.current.syncImageProcessing("all", source, ["positive"]))
+    ;(source.positive as { exposureEv?: number }).exposureEv = 9
+    expect(result.current.items[0]!.imageProcessing?.positive?.exposureEv).toBe(0.6)
+    expect(result.current.items[1]!.imageProcessing?.positive?.exposureEv).toBe(0.6)
+  })
+  it("跨输入类型同步不会把 RAW 配方套到普通 JPEG 或线性 TIFF", async () => {
+    const { result } = renderHook(() => useQueue())
+    await act(async () => { await result.current.addFromPaths(["/photos/a.ARW", "/photos/b.jpg", "/photos/c.tif"]) })
+    const source: ImageProcessingConfig = { schemaVersion: 1, algorithmVersion: "film-digitization-v1", inputMode: "sensor-raw", raw: {}, positive: { exposureEv: 1 } }
+    act(() => result.current.syncImageProcessing("all", source, ["positive"]))
+    expect(result.current.items[0]!.imageProcessing?.positive?.exposureEv).toBe(1)
+    expect(result.current.items[1]!.imageProcessing).toBeNull()
+    expect(result.current.items[2]!.imageProcessing).toBeNull()
+  })
+
 })

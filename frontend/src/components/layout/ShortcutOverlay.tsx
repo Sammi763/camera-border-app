@@ -43,6 +43,35 @@ export const ShortcutOverlay = ({ open, onClose }: ShortcutOverlayProps): JSX.El
     }
   }, [open, onClose])
 
+  /**
+   * 简单焦点圈定：Tab 在面板内首尾循环，避免焦点跑到背景控件后
+   * `?` 被输入控件守卫拦截、面板关不掉的不一致状态。
+   */
+  const handleTabTrap = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+    if (event.key !== "Tab") {
+      return
+    }
+    const panel = dialogRef.current
+    if (panel === null) {
+      return
+    }
+    const focusables = Array.from(panel.querySelectorAll<HTMLElement>("button, a, input, select, textarea"))
+      .filter((element) => !element.hasAttribute("disabled") && element.tabIndex !== -1)
+    if (focusables.length === 0) {
+      return
+    }
+    const first = focusables[0]!
+    const last = focusables[focusables.length - 1]!
+    const active = document.activeElement
+    if (event.shiftKey && (active === first || active === panel)) {
+      event.preventDefault()
+      last.focus()
+    } else if (!event.shiftKey && (active === last || active === panel)) {
+      event.preventDefault()
+      first.focus()
+    }
+  }
+
   if (!open) {
     return null
   }
@@ -64,6 +93,7 @@ export const ShortcutOverlay = ({ open, onClose }: ShortcutOverlayProps): JSX.El
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
+        onKeyDown={handleTabTrap}
       >
         <header className="shortcutOverlayHeader">
           <h2 id={titleId} className="shortcutOverlayTitle">快捷键速查</h2>

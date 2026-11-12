@@ -810,7 +810,9 @@ const selectQueueItemByFileName = async (client, fileName) => await evaluate(cli
     item.querySelector('.queueName')?.textContent?.includes(${JSON.stringify(fileName)})
   );
   if (row === undefined) return false;
-  row.click();
+  const main = row.querySelector('.queueItemMain');
+  if (main instanceof HTMLElement) main.click();
+  else row.click();
   return true;
 })()`)
 
@@ -1015,6 +1017,13 @@ const exportCurrentSelection = async (client, output, artifactRoot, label) => {
     (sizes) => sizes.firstSize > 0 && sizes.firstSize === sizes.secondSize,
     120_000
   )
+  // 文件出现不等于异步导出任务已终态；等待 Dock 退出导出中状态，避免下一档位按钮仍禁用。
+  await waitFor(
+    `${label}导出任务结束`,
+    () => readExportReadiness(client),
+    (readiness) => readiness?.disabled === false,
+    120_000
+  )
   const data = readFileSync(output)
   const dimensions = readImageDimensions(data)
   assert.notEqual(dimensions, null, `${label}导出不是可识别图片`)
@@ -1191,7 +1200,7 @@ const readQueueViewport = async (client) => await evaluate(client, `(() => {
     })
     .map((row) => ({
       id: row.dataset.queueItemId ?? '',
-      path: row.querySelector('.queueSub')?.getAttribute('title') ?? ''
+      path: row.querySelector('.queueItemMain')?.getAttribute('data-working-path') ?? ''
     }));
   return {
     total: list.querySelectorAll('[data-queue-item-id]').length,
@@ -1251,7 +1260,11 @@ const readWorkspaceResponsiveMetrics = async (client) => await evaluate(client, 
   const previewBackground = previewClass.match(/previewBackground(Black|Gray|White)/)?.[1]?.toLowerCase() ?? ''
   return {
     window: { width: window.outerWidth, height: window.outerHeight },
+    viewport: { width: window.innerWidth, height: window.innerHeight },
     preview: rect('.previewCanvasWrapper'),
+    previewPanel: rect('.previewPanel'),
+    workspaceCenter: rect('.workspaceCenter'),
+    exportDock: rect('.workspaceExportDock'),
     horizontalOverflow: {
       document: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1
         || document.body.scrollWidth > document.body.clientWidth + 1,
@@ -1429,12 +1442,32 @@ const restoreWindowBounds = async (client, bounds) => {
 }
 
 const resizeWindowToBounds = async (client, width, height) => {
-  await evaluate(client, `window.resizeTo(${width}, ${height})`)
-  return await waitFor(
-    `${width}×${height} 窗口`,
-    () => readRendererWindowBounds(client),
-    (bounds) => exactWindowSize(bounds, width, height)
+  // 先清除上一次可能使用的视口模拟，避免影响真实窗口尺寸判断。
+  await client.call("Emulation.clearDeviceMetricsOverride").catch(() => {})
+  const available = await evaluate(client, `({ width: screen.availWidth, height: screen.availHeight })`)
+  const needsEmulation = width > available.width || height > available.height
+  if (!needsEmulation) {
+    await evaluate(client, `window.resizeTo(${width}, ${height})`)
+    const bounds = await waitFor(
+      `${width}×${height} 窗口`,
+      () => readRendererWindowBounds(client),
+      (value) => exactWindowSize(value, width, height)
+    )
+    return { emulated: false, bounds }
+  }
+  // 物理屏幕小于验收尺寸时，用 CDP 视口模拟验证响应式布局，不伪称 BrowserWindow 已达到该尺寸。
+  await client.call("Emulation.setDeviceMetricsOverride", {
+    width,
+    height,
+    deviceScaleFactor: 1,
+    mobile: false
+  })
+  const viewport = await waitFor(
+    `${width}×${height} 模拟视口`,
+    () => evaluate(client, `({ width: window.innerWidth, height: window.innerHeight })`),
+    (value) => value?.width === width && value?.height === height
   )
+  return { emulated: true, available, viewport }
 }
 
 const waitForDevTools = async (port, child, logs) => await waitFor(
@@ -1661,6 +1694,15 @@ const run = async () => {
     await evaluate(client, "fetch('/api/health').then((response) => response.status)")
     await waitFor("JavaBridge 健康端点 HTTP 200", () => readAppHealthStatus(client), isHealthyHttpStatus)
 
+    assert.equal(await evaluate(client, "document.querySelectorAll('.queueItem').length"), 0, "独立验收用户目录必须从空队列启动")
+    await evaluate(client, `(() => {
+      window.__e2eClicks = [];
+      document.addEventListener('click', (event) => {
+        const button = event.target?.closest?.('button');
+        if (button) window.__e2eClicks.push({ text: button.textContent?.trim(), trusted: event.isTrusted });
+      }, true);
+    })()`)
+
     await clickButton(client, `(() => { const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === '选择照片'); if (button === undefined) return false; button.click(); return true })()`, "选择照片按钮")
     await waitFor(
       "固定样片进入队列",
@@ -1668,6 +1710,7 @@ const run = async () => {
       (text) => realImportSamplePaths.every((filePath) => text.includes(path.basename(filePath)))
         && text.includes(path.basename(retryFailureSample))
     )
+    report(`初始导入点击证据：${JSON.stringify(await evaluate(client, "window.__e2eClicks"))}`)
     await waitFor(
       "固定样片队列数量",
       () => evaluate(client, "document.querySelectorAll('.queueItem').length"),
@@ -1727,7 +1770,7 @@ const run = async () => {
         const row = [...document.querySelectorAll('.queueItem')].find((item) => item.querySelector('.queueName')?.textContent?.includes(${JSON.stringify(heicFileName)}));
         return row === undefined ? null : {
           sourceName: row.querySelector('.queueName')?.textContent?.trim() ?? '',
-          workingPath: row.querySelector('.queueSub')?.getAttribute('title') ?? '',
+          workingPath: row.querySelector('.queueItemMain')?.getAttribute('data-working-path') ?? '',
           converted: row.querySelector('.queueRawBadge')?.textContent?.includes('HEIC→PNG') ?? false
         };
       })()`),
@@ -1802,7 +1845,7 @@ const run = async () => {
         (value) => value === nextTheme
       )
       for (const size of STAGE2_RESPONSIVE_WINDOW_SIZES) {
-        await resizeWindowToBounds(client, size.width, size.height)
+        const resizeEvidence = await resizeWindowToBounds(client, size.width, size.height)
         await waitFor(
           `${nextTheme}主题导出状态可用`,
           async () => ({ healthStatus: await readAppHealthStatus(client), readiness: await readExportReadiness(client) }),
@@ -1819,12 +1862,28 @@ const run = async () => {
           () => readWorkspaceResponsiveMetrics(client),
           responsiveLayoutPasses
         )
-        const actualBounds = await readRendererWindowBounds(client)
-        assert.equal(
-          exactWindowSize(actualBounds, size.width, size.height),
-          true,
-          `${size.width}×${size.height} 没有取得 BrowserWindow 与 Renderer 的同尺寸证据：${JSON.stringify(actualBounds)}`
-        )
+        if (size.width === 1200) {
+          const compact = await evaluate(client, `(() => {
+            const bar = document.querySelector('.previewMetaBar');
+            const controls = document.querySelector('.previewViewportControls');
+            return { height: bar?.getBoundingClientRect().height,
+              padding: bar ? getComputedStyle(bar).paddingTop : null,
+              controlsPosition: controls ? getComputedStyle(controls).position : null };
+          })()`)
+          assert.equal(compact.height, 24, `最小窗口元信息条未保持24px：${JSON.stringify(compact)}`)
+          assert.equal(compact.padding, "2px", "窄窗口样式被通用样式覆盖")
+          assert.equal(compact.controlsPosition, "absolute", "最小窗口控件未悬浮")
+        }
+        if (!resizeEvidence.emulated) {
+          const actualBounds = await readRendererWindowBounds(client)
+          assert.equal(
+            exactWindowSize(actualBounds, size.width, size.height),
+            true,
+            `${size.width}×${size.height} 没有取得 BrowserWindow 与 Renderer 的同尺寸证据：${JSON.stringify(actualBounds)}`
+          )
+        } else {
+          report(`${size.width}×${size.height} 使用 CDP 视口模拟（物理屏幕 ${resizeEvidence.available.width}×${resizeEvidence.available.height} 不足）`)
+        }
         const contrast = await readThemeContrastMetrics(client)
         const contrastValues = Object.values(contrast.contrast).filter((value) => typeof value === "number")
         assert.ok(contrastValues.length >= 4, `${nextTheme}主题没有取得完整文字对比度指标`)
@@ -1839,7 +1898,14 @@ const run = async () => {
           `${size.width}x${size.height}-${nextTheme}`
         )
         const evidenceKey = `${size.width}x${size.height}-${nextTheme}`
-        responsiveEvidence[evidenceKey] = { actualBounds, metrics, contrast, screenshotPath }
+        responsiveEvidence[evidenceKey] = {
+          actualBounds: resizeEvidence.emulated
+            ? { emulated: true, available: resizeEvidence.available, viewport: resizeEvidence.viewport }
+            : resizeEvidence.bounds,
+          metrics,
+          contrast,
+          screenshotPath
+        }
         report(`${evidenceKey}：预览=${metrics.preview.width}×${metrics.preview.height}；截图=${screenshotPath}；对比度=${JSON.stringify(contrast.contrast)}`)
       }
     }
@@ -2020,12 +2086,15 @@ const run = async () => {
     })()`
     await clickButton(client, presetLibraryOpener, "拍摄信息预设入口")
     await waitFor("拍摄信息预设抽屉", () => evaluate(client, "document.querySelector('[role=dialog] .presetTextComposer') !== null"), (visible) => visible === true)
-    await clickButton(client, `(() => {
-      const button = [...document.querySelectorAll('[role=dialog] button')].find((item) => item.textContent?.trim() === '开始录入');
-      if (button === undefined) return false;
-      button.click();
-      return true;
-    })()`, "文字录入预设按钮")
+    // 当前 UI 默认直接展开录入表单；只有旧版折叠态才需要点“开始录入”。
+    if (!(await evaluate(client, "Boolean(document.querySelector('[role=dialog] .presetTextComposerForm'))"))) {
+      await clickButton(client, `(() => {
+        const button = [...document.querySelectorAll('[role=dialog] button')].find((item) => item.textContent?.trim() === '开始录入');
+        if (button === undefined) return false;
+        button.click();
+        return true;
+      })()`, "文字录入预设按钮")
+    }
     await waitFor("文字录入预设表单", () => evaluate(client, "Boolean(document.querySelector('[role=dialog] .presetTextComposerForm'))"), (visible) => visible === true)
     assert.equal(
       await setFormControlValue(client, '[role=dialog] .presetTextComposerForm input[placeholder="例如：135 Portra 日常"]', "打包 E2E 预设", "input"),
@@ -2200,6 +2269,16 @@ const run = async () => {
       return true;
     })()`, "输出页签")
     await waitFor("输出档位面板", () => evaluate(client, "document.querySelector('[data-testid=export-tier-standard-delivery]') !== null"), (visible) => visible === true)
+    // 当前工作台每个范围只有一个主按钮；单图档位验收先明确切到“当前图片”范围。
+    await clickButton(client, `(() => {
+      const button = document.querySelector('[data-testid="export-scope-active"]');
+      if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
+      button.click();
+      return true;
+    })()`, "导出范围当前图片")
+    await waitFor("导出范围当前图片生效", () => evaluate(client,
+      "document.querySelector('[data-testid=export-scope-active]')?.getAttribute('aria-pressed')"),
+      (pressed) => pressed === "true")
     const chooseTier = async (tier) => {
       await clickButton(client, `(() => {
         const button = document.querySelector('[data-testid="export-tier-${tier}"]');
@@ -2485,9 +2564,27 @@ const run = async () => {
       rasterComparison: lightRasterComparison
     }
 
+    // Logo 验收在“输出”页完成；切回“样式”页才能操作摄影信息卡变体。
     await clickButton(client, `(() => {
-      const card = document.querySelector('.templateGalleryInfoCard');
-      const button = [...(card?.querySelectorAll('button.templateGalleryVariantButton') ?? [])]
+      const tab = [...document.querySelectorAll('[role="tab"]')].find((item) => item.textContent?.trim() === '样式');
+      if (tab === undefined) return false;
+      tab.click();
+      return true;
+    })()`, "样式页签")
+    await waitFor("摄影信息卡恢复入口", () => evaluate(client,
+      "document.querySelector('.templateGalleryInfoCard') !== null"), (visible) => visible === true)
+    // 先应用摄影信息卡（默认白边），版式设置分组才会出现。
+    await clickButton(client, `(() => {
+      const button = document.querySelector('.templateGalleryInfoCard .templateGalleryApplyButton');
+      if (!(button instanceof HTMLButtonElement)) return false;
+      button.click();
+      return true;
+    })()`, "应用摄影信息卡")
+    await waitFor("摄影信息卡版式设置", () => evaluate(client,
+      "document.querySelector('.templateGalleryLayoutSettings') !== null"), (visible) => visible === true)
+    await clickButton(client, `(() => {
+      const settings = document.querySelector('.templateGalleryLayoutSettings');
+      const button = [...(settings?.querySelectorAll('button.templateGalleryVariantButton') ?? [])]
         .find((item) => item.textContent?.trim() === '黑边');
       if (button === undefined) return false;
       button.click();
@@ -2497,8 +2594,8 @@ const run = async () => {
       "深色摄影信息卡应用完成",
       async () => ({
         active: await evaluate(client, `(() => {
-          const card = document.querySelector('.templateGalleryInfoCard');
-          const blackButton = [...(card?.querySelectorAll('button.templateGalleryVariantButton') ?? [])]
+          const settings = document.querySelector('.templateGalleryLayoutSettings');
+          const blackButton = [...(settings?.querySelectorAll('button.templateGalleryVariantButton') ?? [])]
             .find((item) => item.textContent?.trim() === '黑边');
           return blackButton?.classList.contains('templateGalleryVariantActive') ?? false;
         })()`),
@@ -2640,24 +2737,24 @@ const run = async () => {
     })()`, "展开右侧面板按钮")
     await waitFor("右侧面板恢复", () => evaluate(client, "document.querySelector('.workspaceInspector') !== null"), (visible) => visible === true)
 
-    const activePathBeforeKeyboard = await evaluate(client, "document.querySelector('.queueItem.isActive .queueSub')?.getAttribute('title') ?? ''")
+    const activePathBeforeKeyboard = await evaluate(client, "document.querySelector('.queueItem.isActive .queueItemMain')?.getAttribute('data-working-path') ?? ''")
     await dispatchRendererKey(client, "ArrowDown")
     await waitFor(
       "方向键切换队列当前项",
-      () => evaluate(client, "document.querySelector('.queueItem.isActive .queueSub')?.getAttribute('title') ?? ''"),
+      () => evaluate(client, "document.querySelector('.queueItem.isActive .queueItemMain')?.getAttribute('data-working-path') ?? ''"),
       (value) => value.length > 0 && value !== activePathBeforeKeyboard
     )
     await dispatchRendererKey(client, "ArrowUp")
     await waitFor(
       "方向键切回原当前项",
-      () => evaluate(client, "document.querySelector('.queueItem.isActive .queueSub')?.getAttribute('title') ?? ''"),
+      () => evaluate(client, "document.querySelector('.queueItem.isActive .queueItemMain')?.getAttribute('data-working-path') ?? ''"),
       (value) => value === activePathBeforeKeyboard
     )
     await dispatchRendererKey(client, " ")
     await waitFor(
       "空格勾选当前项但不切换预览",
       () => evaluate(client, `({
-        activePath: document.querySelector('.queueItem.isActive .queueSub')?.getAttribute('title') ?? '',
+        activePath: document.querySelector('.queueItem.isActive .queueItemMain')?.getAttribute('data-working-path') ?? '',
         checked: (document.querySelector('.queueItem.isActive .queueItemCheck') instanceof HTMLInputElement)
           ? document.querySelector('.queueItem.isActive .queueItemCheck').checked
           : false
@@ -2675,7 +2772,16 @@ const run = async () => {
     await dispatchRendererKey(client, "z", { metaKey: true })
     await waitFor("Cmd/Ctrl+Z 恢复删除", () => evaluate(client, "document.querySelectorAll('.queueItem').length"), (count) => count === itemCountBeforeDeleteUndo)
     await clickButton(client, `(() => {
-      const button = [...document.querySelectorAll('.queueActions button')].find((item) => item.textContent?.trim() === '清空');
+      const button = document.querySelector('.queueMoreButton');
+      if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
+      button.click();
+      return true;
+    })()`, "更多队列操作按钮")
+    await waitFor("队列更多菜单", () => evaluate(client,
+      "document.querySelector('[data-testid=queue-more-menu]') !== null"), (visible) => visible === true)
+    await clickButton(client, `(() => {
+      const button = [...document.querySelectorAll('[data-testid=queue-more-menu] button')]
+        .find((item) => item.textContent?.trim() === '清空队列');
       if (button === undefined) return false;
       button.click();
       return true;
@@ -2684,15 +2790,25 @@ const run = async () => {
     await dispatchRendererKey(client, "z", { metaKey: true })
     await waitFor("撤销清空队列", () => evaluate(client, "document.querySelectorAll('.queueItem').length"), (count) => count === itemCountBeforeDeleteUndo)
 
+    // 批量导出全部图片：当前工作台每个范围只有一个主按钮，先切到“全部图片”。
+    await clickButton(client, `(() => {
+      const button = document.querySelector('[data-testid="export-scope-all"]');
+      if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
+      button.click();
+      return true;
+    })()`, "导出范围全部图片")
+    await waitFor("导出范围全部图片生效", () => evaluate(client,
+      "document.querySelector('[data-testid=export-scope-all]')?.getAttribute('aria-pressed')"),
+      (pressed) => pressed === "true")
     // 真实失败闸门：首轮导入一个从真实 JPEG 截断的失败文件。专业档位的预检
     // 必须在提交 render-jobs 前 fail-closed，不能把坏源图变成 completed 或其它伪成功状态。
     // 后面的完整批量与取消路径另行使用有效样片验证。
     await waitFor(
       "批量导出全部图片按钮",
-      () => evaluate(client, `(() => { const button = [...document.querySelectorAll('button.exportDockButton')].find((item) => item.textContent?.includes('批量导出 ${initialQueueCount} 张')); return button !== undefined && !button.disabled })()`),
+      () => evaluate(client, `(() => { const button = document.querySelector('[data-testid=export-batch]'); return button instanceof HTMLButtonElement && !button.disabled })()`),
       (available) => available === true
     )
-    await clickButton(client, `(() => { const button = [...document.querySelectorAll('button.exportDockButton')].find((item) => item.textContent?.includes('批量导出 ${initialQueueCount} 张')); if (button === undefined || button.disabled) return false; button.click(); return true })()`, "批量导出全部图片按钮")
+    await clickButton(client, `(() => { const button = document.querySelector('[data-testid=export-batch]'); if (!(button instanceof HTMLButtonElement) || button.disabled) return false; button.click(); return true })()`, "批量导出全部图片按钮")
     const batchFirstRun = await waitFor(
       "批量导出被真实预检阻断",
       () => evaluate(client, "document.querySelector('.exportDockStatus')?.textContent ?? ''"),
@@ -2708,12 +2824,21 @@ const run = async () => {
     const retryExportOutput = "未生成（预检阻断）"
     const retryExportDimensions = { width: 0, height: 0 }
 
+    await clickButton(client, `(() => {
+      const button = document.querySelector('[data-testid="export-scope-active"]');
+      if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
+      button.click();
+      return true;
+    })()`, "导出范围当前图片")
+    await waitFor("导出范围当前图片生效", () => evaluate(client,
+      "document.querySelector('[data-testid=export-scope-active]')?.getAttribute('aria-pressed')"),
+      (pressed) => pressed === "true")
     await waitFor(
       "单图导出按钮可用",
-      () => evaluate(client, "(() => { const button = [...document.querySelectorAll('button.exportDockButton')].find((item) => item.textContent?.includes('导出原图')); return button !== undefined && !button.disabled })()"),
+      () => evaluate(client, "(() => { const button = document.querySelector('[data-testid=export-single]'); return button instanceof HTMLButtonElement && !button.disabled })()"),
       (available) => available === true
     )
-    await clickButton(client, `(() => { const button = [...document.querySelectorAll('button.exportDockButton')].find((item) => item.textContent?.includes('导出原图')); if (button === undefined || button.disabled) return false; button.click(); return true })()`, "导出原图按钮")
+    await clickButton(client, `(() => { const button = document.querySelector('[data-testid=export-single]'); if (!(button instanceof HTMLButtonElement) || button.disabled) return false; button.click(); return true })()`, "单图导出按钮")
     await waitFor("导出文件写盘", () => existsSync(output), (exists) => exists === true)
     const exportFileSize = await waitFor(
       "导出文件写入完成",
@@ -2741,7 +2866,7 @@ const run = async () => {
     const sourceShaAfter = sourceShaAfterByPath[sample]
     assert.deepEqual(sourceShaAfterByPath, sourceShaBeforeByPath, "导出前后固定样片 SHA-256 不一致")
 
-    // 真实 UI 性能闸门：通过 preload 的文件夹选择入口导入 100 个约 20MP 路径，
+    // 真实 UI 闸门：通过 preload 文件夹入口导入 100 个独立的小型 PNG 路径，
     // 只观察 CDP 实际发出的 120px 缩略图请求，不向 Java API 直接注入队列。
     const objectUrlProbeInstalled = await evaluate(client, `(() => {
       const urlApi = window.URL;
@@ -2757,7 +2882,16 @@ const run = async () => {
     })()`)
     assert.equal(objectUrlProbeInstalled, true, "无法安装打包 E2E object URL 释放探针")
     await clickButton(client, `(() => {
-      const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === '清空');
+      const button = document.querySelector('.queueMoreButton');
+      if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
+      button.click();
+      return true;
+    })()`, "更多队列操作按钮（缩略图卸载）")
+    await waitFor("队列更多菜单（缩略图卸载）", () => evaluate(client,
+      "document.querySelector('[data-testid=queue-more-menu]') !== null"), (visible) => visible === true)
+    await clickButton(client, `(() => {
+      const button = [...document.querySelectorAll('[data-testid=queue-more-menu] button')]
+        .find((item) => item.textContent?.trim() === '清空队列');
       if (button === undefined) return false;
       button.click();
       return true;
@@ -2874,7 +3008,7 @@ const run = async () => {
     assert.ok(newlyVisiblePath !== undefined, "滚动后未找到新的可见图片用于预览验证")
     await clickButton(client, `(() => {
       const row = [...document.querySelectorAll('.queueItem')].find((item) =>
-        item.querySelector('.queueSub')?.getAttribute('title') === ${JSON.stringify(newlyVisiblePath)}
+        item.querySelector('.queueItemMain')?.getAttribute('data-working-path') === ${JSON.stringify(newlyVisiblePath)}
       );
       if (row === undefined) return false;
       row.click();
@@ -2888,18 +3022,24 @@ const run = async () => {
       button.click();
       return true;
     })()`, "100 项全选按钮")
+    await clickButton(client, `(() => {
+      const button = document.querySelector('[data-testid="export-scope-all"]');
+      if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
+      button.click();
+      return true;
+    })()`, "100 项导出范围全部图片")
+    await waitFor("100 项导出范围全部图片生效", () => evaluate(client,
+      "document.querySelector('[data-testid=export-scope-all]')?.getAttribute('aria-pressed')"),
+      (pressed) => pressed === "true")
     await waitFor(
       "100 项批量导出按钮",
-      () => evaluate(client, `(() => {
-        const button = [...document.querySelectorAll('button.exportDockButton')].find((item) => item.textContent?.includes('批量导出 ${UI_PERFORMANCE_QUEUE_COUNT} 张'));
-        return button !== undefined && !button.disabled;
-      })()`),
+      () => evaluate(client, "(() => { const button = document.querySelector('[data-testid=export-batch]'); return button instanceof HTMLButtonElement && !button.disabled })()"),
       (available) => available === true,
       120_000
     )
     await clickButton(client, `(() => {
-      const button = [...document.querySelectorAll('button.exportDockButton')].find((item) => item.textContent?.includes('批量导出 ${UI_PERFORMANCE_QUEUE_COUNT} 张'));
-      if (button === undefined || button.disabled) return false;
+      const button = document.querySelector('[data-testid=export-batch]');
+      if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
       button.click();
       return true;
     })()`, "100 项批量导出按钮")
@@ -2931,8 +3071,8 @@ const run = async () => {
       unlinkSync(path.join(retryOutputDirectory, name))
     }
     await clickButton(client, `(() => {
-      const button = [...document.querySelectorAll('button.exportDockButton')].find((item) => item.textContent?.includes('批量导出 ${UI_PERFORMANCE_QUEUE_COUNT} 张'));
-      if (button === undefined || button.disabled) return false;
+      const button = document.querySelector('[data-testid=export-batch]');
+      if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
       button.click();
       return true;
     })()`, "100 项取消测试批量导出按钮")
@@ -3160,6 +3300,8 @@ const run = async () => {
       platform: process.platform,
       arch: process.arch,
       packageCommit: packageManifest.commit,
+      packageManifestSha256: sha256File(packageManifestPath),
+      responsiveEvidence,
       executable,
       completedAt: new Date().toISOString(),
       checks: {

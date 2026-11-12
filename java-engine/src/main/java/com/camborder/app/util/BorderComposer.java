@@ -35,7 +35,7 @@ public final class BorderComposer {
      * 在缩放图外层扩展画布并填充纯色边框，返回新画布（不启用渐变）。
      */
     public BufferedImage compose(final BufferedImage scaled, final BorderConfig border) {
-        return compose(scaled, border, null);
+        return compose(scaled, border, null, 1.0);
     }
 
     /**
@@ -47,7 +47,21 @@ public final class BorderComposer {
      */
     public BufferedImage compose(final BufferedImage scaled, final BorderConfig border,
                                  final GradientConfig gradient) {
-        int[] insets = insets(border);
+        return compose(scaled, border, gradient, 1.0);
+    }
+
+    /**
+     * 按渲染比例缩放边框后合成画布。
+     *
+     * 配方像素语义以全分辨率有向源图为基准；预览与档位导出把照片等比缩小时，
+     * 边框必须按同一 renderScale 缩放，保证任何输出尺寸下「边框:照片」比例
+     * 与原图尺寸导出一致（预览与导出同源一致）。renderScale=1 时行为不变。
+     *
+     * @param renderScale 照片当前宽度相对全分辨率目标宽度的比例，必须为正
+     */
+    public BufferedImage compose(final BufferedImage scaled, final BorderConfig border,
+                                 final GradientConfig gradient, final double renderScale) {
+        int[] insets = insets(border, renderScale);
         int top = insets[0];
         int bottom = insets[1];
         int left = insets[2];
@@ -91,14 +105,31 @@ public final class BorderComposer {
      * 返回数组顺序为 {top, bottom, left, right}，供文字绘制器定位区域使用。
      */
     public static int[] insets(final BorderConfig border) {
+        return insets(border, 1.0);
+    }
+
+    /**
+     * 按渲染比例缩放后的边框内边距；语义同 {@link #insets(BorderConfig)}。
+     * renderScale 非有限或非正时按 1 处理，保证异常输入不放大边框。
+     */
+    public static int[] insets(final BorderConfig border, final double renderScale) {
         if (border == null) {
             return new int[]{0, 0, 0, 0};
         }
+        final double scale = safeScale(renderScale);
         return new int[]{
-                Math.max(0, border.getTop()),
-                Math.max(0, border.getBottom()),
-                Math.max(0, border.getLeft()),
-                Math.max(0, border.getRight())
+                scaleInset(border.getTop(), scale),
+                scaleInset(border.getBottom(), scale),
+                scaleInset(border.getLeft(), scale),
+                scaleInset(border.getRight(), scale)
         };
+    }
+
+    private static double safeScale(final double renderScale) {
+        return Double.isFinite(renderScale) && renderScale > 0 ? renderScale : 1.0;
+    }
+
+    private static int scaleInset(final int value, final double scale) {
+        return Math.max(0, (int) Math.round(value * scale));
     }
 }

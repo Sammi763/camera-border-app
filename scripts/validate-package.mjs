@@ -223,6 +223,22 @@ const validateBundle = async ({ bundleDir, platform, arch, installed = false }) 
   const exifTool = filePath(bundleDir, ...exifToolRelativePath(platform))
   if (platform === "win32") await requirePeX64(exifTool, "professional-tools/exiftool/win-x64/exiftool.exe")
   else await requireFile(exifTool, "professional-tools/exiftool/macos/exiftool")
+  if (platform === "darwin" && arch === "arm64") {
+    const librawHelper = filePath(bundleDir, "professional-tools", "libraw", "macos-arm64", "film-raw-helper")
+    await requireFile(librawHelper, "professional-tools/libraw/macos-arm64/film-raw-helper")
+    await requireMachOArch(librawHelper, arch, "professional-tools/libraw/macos-arm64/film-raw-helper")
+    const librawManifest = await readJson(
+      filePath(bundleDir, "professional-tools", "libraw", "macos-arm64", "helper.json"),
+      "professional-tools/libraw/macos-arm64/helper.json"
+    )
+    if (librawManifest.component !== "libraw" || librawManifest.librawVersion !== "0.22.3") {
+      throw new Error("LibRaw helper 清单版本不匹配")
+    }
+    if (typeof librawManifest.binarySha256 !== "string"
+        || await sha256File(librawHelper) !== librawManifest.binarySha256) {
+      throw new Error("LibRaw helper SHA-256 不匹配")
+    }
+  }
   const components = await readJson(
     filePath(bundleDir, "professional-tools", "components.json"),
     "professional-tools/components.json"

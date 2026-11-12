@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { fetchCapabilities } from "../../../services/engine/capabilitiesApi"
 import type { CapabilitiesResponse } from "../../../types/preview"
 import type { PackageCapabilities } from "../../../types/runtime"
@@ -50,12 +50,23 @@ const applyPackageGates = (
   }
 }
 
+export type EngineCapabilitiesController = {
+  readonly state: EngineCapabilitiesState
+  /** 重新探测能力快照；用于「请求失败 / 缺少组件」后的手动恢复入口。 */
+  readonly recheck: () => void
+}
+
 /** 引擎未 ready 时保持 fail closed；ready 后读取并缓存当前进程能力快照。 */
-export const useEngineCapabilities = (engineAvailable: boolean): EngineCapabilitiesState => {
+export const useEngineCapabilities = (engineAvailable: boolean): EngineCapabilitiesController => {
   const [state, setState] = useState<EngineCapabilitiesState>({
     kind: "unavailable",
     message: "本地引擎尚未就绪"
   })
+  // recheck 令牌：变化即重新触发探测，供界面在失败后手动恢复。
+  const [recheckToken, setRecheckToken] = useState(0)
+  const recheck = useCallback((): void => {
+    setRecheckToken((token) => token + 1)
+  }, [])
 
   useEffect(() => {
     let active = true
@@ -75,7 +86,7 @@ export const useEngineCapabilities = (engineAvailable: boolean): EngineCapabilit
       }
     })
     return () => { active = false }
-  }, [engineAvailable])
+  }, [engineAvailable, recheckToken])
 
-  return state
+  return { state, recheck }
 }

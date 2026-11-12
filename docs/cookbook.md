@@ -8,15 +8,16 @@
 
 任何涉及导入、渲染、导出、元数据或界面术语的任务，先读 [docs/prd.md §0](prd.md)。
 本手册不得自行增加支持范围。正式发布目标仅为 macOS arm64；macOS x64 和 Windows x64 为候选目标，
-其中 Windows 状态固定为 `SIMULATED`；输入为
+其中 Windows 状态固定为 `SIMULATED`；普通模式输入为
 JPEG、PNG、TIFF、HEIC/HEIF 和 RAW 内嵌 JPEG 预览；输出为 JPEG 8-bit、PNG 8/16-bit、
 TIFF 8/16-bit。
 
 导出只能围绕三个固定档位验收：快速分享（JPEG 92、长边 2048、sRGB、移除 GPS/位置）、
 标准交付（JPEG 95、原图尺寸、8-bit、源 ICC 和全部元数据，保留 GPS/位置）和高保真归档
 （TIFF、原图尺寸、源位深、源 ICC 和全部元数据，保留 GPS/位置）。统一术语为版式、
-拍摄信息预设、拍摄画幅、边框布局建议。修图、云同步、登录、自动更新和真实 RAW 显影
-不在产品范围内。
+拍摄信息预设、拍摄画幅、边框布局建议。普通模式不做修图、云同步、登录、自动更新和真实
+RAW 显影；底片数字化模式是显式开启的独立范围，当前实施中，见
+[ADR-0007](adr/0007-explicit-film-digitization-mode.md)。
 
 PNG 是必须提供的同档位输出格式变体，不是第四个档位。快速分享和标准交付允许 JPEG 或
 PNG 8-bit；高保真归档允许 TIFF 或按源位深输出 PNG 8/16-bit。输出格式选择不得改变所选
@@ -317,8 +318,11 @@ grep -rn '](\.' README.md AGENTS.md CONTRIBUTING.md ARCHITECTURE.md DESIGN.md do
 
 ## 验证 RAW 输入契约
 
-RAW 是最终支持的输入格式，但产品只读取文件内可读取的内嵌 JPEG 预览，不做真实显影。
-因此不能新增、启用或验收外部 RAW 显影子进程作为产品能力。
+普通模式只读取文件内可读取的内嵌 JPEG 预览，不做真实显影。因此普通模式不能新增、启用或
+验收外部 RAW 显影子进程。底片数字化模式是显式开启的独立范围，使用受控随包 helper 读取
+真实传感器 RAW，实施与验收按 [执行方案](opencode-film-digitization-plan.md) 和
+[ADR-0007](adr/0007-explicit-film-digitization-mode.md) 推进；在对应任务完成前不得把该模式
+写进支持矩阵。
 
 RAW 验收扩展名冻结为 NEF、CR2、CR3、ARW、RAF、DNG、ORF、RW2、PEF。每个扩展名都要按
 [`docs/test-samples.md`](test-samples.md) 的固定文件名准备一正一负两份真实相机样片。
@@ -327,6 +331,52 @@ RAW 验收扩展名冻结为 NEF、CR2、CR3、ARW、RAF、DNG、ORF、RW2、PEF
 2. 验证带预览样片的导入、预览、单图导出和批量导出；结果必须明确标识“内嵌 JPEG 预览”。
 3. 验证无预览样片返回明确失败，不得静默使用传感器数据显影、其他缩略图或伪装成完整 RAW。
 4. 在 macOS arm64 正式目标执行；macOS x64 / Windows x64 作为候选分别执行，开发机上的单平台或交叉构建结果不能替代对应目标验收。
+5. 底片数字化模式另需真实彩负片边/片基、光源参考、Gold 200/Portra 160 样片和参考成片；
+   缺少时对应项保持 `NOT_RUN`，不能用普通 RAW 样片替代。
+
+## 底片调参合并、内存预算与阶段缓存
+
+权威决策见 [ADR-0008](adr/0008-tuning-coalescing-memory-and-stage-cache.md)。
+
+1. **前端调度**：底片模式下所有引擎请求经 `services/engine/tuningScheduler.ts`。新增控件时只更新设置状态，
+   不要另起 `setTimeout` 防抖；需要立即提交的手势在 `pointerup`/`focusout`/`change`/Enter 后调用 `flush()`。
+2. **共享快照**：主预览、阶段对比和直方图读取 `PreviewState.engineRecipe` / `engineClientId` /
+   `engineGeneration`；不要在组件内重新构造一份配方或自增代次。
+3. **取消**：切换图片、关闭底片模式或卸载时由调度器 `dispose()` 返回最后代次，前端调用
+   `DELETE /api/film-requests/{clientId}?generation=n`；取消结果不得展示为引擎故障。
+4. **内存预算**：新增阶段分配前先用 `FilmInputProbe` 探测尺寸；`FilmProcessingPipeline.Processed`
+   必须 try-with-resources 关闭，预算租约才会覆盖到编码/写出结束。
+5. **阶段键**：修改算法参数时同步 `FilmStageKeys`；几何、边框、文字、Logo、输出格式不得进入照片
+   阶段键。参考帧必须记录真实内容版本，不得只比较路径/mtime/大小。
+6. **缓存回归**：用 `app.film.stage-cache.enabled=false` 与默认开启两条路径比较阶段浮点结果，
+   要求逐位一致；缓存关闭只影响命中率。
+7. **性能证据**：
+   ```bash
+   # 引擎已启动且随包 ExifTool/字体/RAW helper 可用（否则底片导出预检 409），
+   # 本机有真实 ARW 样片。
+   pnpm perf:smoke --count 2 --film-sample photos/DSC04875.ARW \
+     --film-tuning-count 8 --film-export-count 5
+   ```
+   输出包含冷/热预览与导出耗时、`/api/film-stage-cache` 命中率、Java 引擎 RSS。
+   没有 16GB 实机或所需样片时把对应项标记 `NOT_RUN`，不能用 32GB 机器结果替代。
+
+## 构建与验证真实 RAW helper（T03）
+
+只在 macOS arm64 正式目标构建；版本/源码 SHA-256 固定在
+`scripts/build-libraw-helper.sh`，产物不提交到仓库，运行时不下载、不搜索 PATH。
+
+```bash
+bash scripts/build-libraw-helper.sh
+cd java-engine && mvn test -Dtest='FilmRawDecoderTest,FilmRawDecoderNativeTest'
+```
+
+- 产物：`professional-tools/libraw/macos-arm64/film-raw-helper` + `helper.json`（二进制 SHA-256、
+  LibRaw 版本、架构、许可证）。
+- 能力探测：Electron 只注入 `CAMBORDER_LIBRAW_HELPER_PATH`；Java 读取同目录 `helper.json`，
+  校验和/版本/架构不符时 `components.libraw.available=false`。
+- 失败路径：缺 helper、不可执行、超时、非零退出、非法输出、源文件变化都必须明确失败；
+  不允许回退内嵌 JPEG 或把传感器 RAW 标成已显影。真实 ARW 集成测试在无样片/非 macOS arm64
+  时跳过，不能把替身测试当作真实解码证据。
 
 ## 打包与冒烟
 
@@ -359,12 +409,113 @@ CAMBORDER_SMOKE_PORT=8091 bash scripts/smoke-test.sh <app 可执行文件>
 ### 队列批量操作与排序（frontend queue）
 
 - `useQueue` 新增 `removeOthers / removeLeftOf / removeRightOf / reorder / sortByName`，全部走现有撤销历史；`reorder` 拖回原位与无效 id/NaN 不产生历史条目，`sortByName` 为稳定排序（同名文件保持原相对顺序）且已有序时不产生历史。
-- QueuePanel 行右键为自绘受控菜单（删除此图/其他/左侧/右侧、清空）；行 HTML5 拖拽排序的 dataTransfer 类型为 `application/x-camborder-queue-item`，与根级文件拖放路由（按 `dataTransfer.files` 判别）天然隔离。
+- QueuePanel 行右键为自绘受控菜单（删除此图/其他/左侧/右侧、清空），坐标按视口边缘钳制避免溢出屏幕；行 HTML5 拖拽排序的 dataTransfer 类型为 `application/x-camborder-queue-item`，与根级文件拖放路由（按 `dataTransfer.files` 判别）天然隔离，拖动行降透明度、悬停落点行虚线高亮（drop/dragEnd/dragleave 后清除）。
+
+### 预览几何同源与 100% 像素查看（frontend preview / java-engine render）
+
+- Canvas 预览几何入口是 `canvasRenderer.calculateCompositionLayout`：以方向归一后的原图尺寸建立逻辑合成空间
+  （照片目标区域＋配方边框），fit 模式把整个合成等比缩放并居中放进画布（合成外是工作台背景，不再把边框撑满视口），
+  actual（100%）模式 viewScale=1、按视口偏移平移只绘制可视区域。返回的 `CompositionLayout` 同时驱动绘制、
+  构图辅助线、焦点拖动换算与诊断 dataset，保证四处共用同一份几何。
+- `drawPreviewToCanvas(canvas, image, settings, logo, renderDimensions, sourceDimensions, viewport)`：
+  `sourceDimensions` 是原图事实（引擎 sourceDecode.fullWidth/Height 或预检 oriented 尺寸）；代理图只替代像素来源。
+  全部绘制在合成局部空间完成；文字缩放 = viewScale（替代旧的 cw/800 独立路径），边距/字距/描边同比例缩放。
+- Java 侧等价实现：`Java2DImageRenderService.resolveRenderScale` 按「当前照片宽度 / 全分辨率目标宽度」缩放
+  边框、文字、Logo 与边框风格参数；原图尺寸导出（0/0）固定 1。两端用 `PreviewGeometryConsistencyTest`（真实渲染像素）
+  与前端 `calculateCompositionLayout` 测试交叉验收。
+- 100% 原图像素：`useActualSizePreview` 在进入 actual 模式时请求引擎「裸图」预览（上限 8192px，缓存/取消/失败降级），
+  加载期间 Canvas 继续显示代理像素并给出「100% · 代理像素」徽标；就绪后切换为「100% · 原图像素」。
+  合成最长边超过上限时保持代理态并如实说明（超大图不做一次性全分辨率展开）。
+- 输出尺寸估算 `calculateOutputPixelDimensions`：档位缩小时边框按同一比例缩放（与引擎 insets(border, renderScale) 一致）。
+
+### 全局撤销协调（frontend workspace/queue/settings）
+
+- 队列与设置撤销栈的条目统一携带 `{ seq, description }`（`utils/historySequence.ts` 提供进程内单调序号）；
+  工作台 `coordinatedUndo/Redo` 比较两栈顶 seq 选择最近一次操作，不引入全局状态框架。
+- 手势合并语义不变：`options.historyTag` 相邻同标签提交只保留一条快照；描述可经 `update(patch, { description })` 覆盖，
+  缺省按 patch 键归纳（修改边框/文字/图片区域…）。队列各操作压栈时带中文描述（删除图片、拖动排序…），
+  QueuePanel/SettingsPanel 撤销按钮以 title 显示栈顶动作。
+
+### 导出取消与状态待确认（frontend export）
+
+- 准备阶段（尚未取得 jobId）：`cancelActiveExport` 置本地令牌，EXIF/选择器/预检返回后不得再提交；
+  提交竞速期间已请求取消的，jobId 产生后立即转引擎 DELETE。
+- 提交/轮询链路断线或超时：进入 `unconfirmed` 状态（保留 jobId 与冻结批次）；有 jobId 可「重新查询任务状态」
+  （404 = 引擎重启内存记录失效，如实解释并指向输出目录核对）；无 jobId = 提交响应丢失，明确「不会自动重复提交」。
+- 引擎给出确定性拒绝响应（EngineHttpError）仍按普通失败处理；取消请求失败只置 notice，不覆盖运行中的任务状态。
+
+### 能力反馈与档位守门（frontend output）
+
+- `useEngineCapabilities` 返回 `{ state, recheck }`；输出页区分检查中/已就绪/缺组件/请求失败，
+  缺组件列出组件 id 与原因并提供「重新检查」。
+- 当前档位在能力快照中不可用时，Dock 主按钮在选择保存位置之前禁用并给出原因
+  （`tierUnavailableReason`）；后端预检仍是最终防线。
+
+### 丢失文件重定位（frontend queue / electron ipc）
+
+- Electron 白名单新增 `pickReplacementFile(missingFilePath)`：单选对话框默认定位到原文件目录，仅返回路径。
+- `useQueue.relocateItem(id, newPath)`：保留条目 id、每图覆盖、预设绑定、排序与选中，仅更新路径并按 HEIC 规则重建工作文件，进入撤销历史。
+- `relocateMissingFromFolder(candidatePaths)`：按文件名匹配；同名唯一自动绑定，同名多个候选**不静默绑定**，
+  在 `ambiguous` 中返回候选清单由用户逐个确认（QueuePanel 内联确认区）。
+- 队列缺失横幅显示恢复/缺失数量，提供「从文件夹重新定位」与「仅看缺失」筛选。
+
+### 批量命名与结果展示（frontend export/queue）
+
+- `RenderSettings.exportNaming`：`original-suffix`（原文件名＋-border 后缀，默认）或 `prefix-index`（自定义前缀＋三位序号）；
+  输出页提供实际文件名样例预览（`buildNamingPreview`）。同名冲突仍由预检默认阻断，不静默覆盖。
+- ExportDock 逐文件失败/摘要折叠为 `<details>` 列表；Dock 保留紧凑摘要。
+- 队列新增按文件名筛选（子串、大小写不敏感）。
 
 ### 预览编辑态辅助（frontend preview）
 
 - 网格辅助线：`canvasRenderer.drawImageGridOverlay(ctx, rect)`（三分线 + 中心十字，零尺寸 rect 安全跳过），由 CanvasPreview 在 `drawPreviewToCanvas` 之后按图片区域叠加；开关只在预览元信息栏。
-- 按住查看原图：`\` 键或工具栏「原图」按钮按住时叠加无边框原图 `<img>`，松开恢复；切换图片或窗口失焦自动退出；模态对话框打开期间不触发。
+- 按住查看原图：`\` 键或工具栏「原图」按钮按住时叠加无边框原图 `<img>`，松开恢复；未按住时切换图片自动退出，按住期间切图继续显示新图原图；窗口失焦自动退出；模态对话框打开期间不触发。
 - 裁切构图拖动：`canvasRenderer.calculateFocalFromPointer` 把图片区域内指针换算为 `focalX/focalY`（区域外忽略、clamp 0–1），经 `onUpdateImagePlacement` 走 `settingsController.update` 标记 userModified；非裁切模式保持画布平移。
 - 撤销语义：连续手势类设置更新必须携带 `options.historyTag`（如 `image-placement-drag-{手势序号}`）。`useSettings.commitSettings` 对相邻同标签提交只保留手势开始前的一条撤销快照——一次拖动一次 ⌘Z 即可回到拖动前；每次按下手势递增序号，两次拖动不合并；undo/redo 后标签重置，手势不会跨撤销边界合并。普通设置更新不传标签，行为不变。
 - 共同约束：辅助内容只画在 Canvas 即时预览上，引擎渲染与导出结果不含网格/原图叠加；新增辅助线时同样遵守「编辑态叠加、不进 RenderRecipe」。
+
+### 调整玻璃主题与视觉 token（frontend styles）
+
+- 视觉 token 只在 `frontend/src/styles/styles.css` 顶部定义；组件引用 `--surface-*`、`--text-*`、`--glass-*`、
+  `--radius-*` 等语义别名，不在组件里写死新颜色。
+- 浅色主题内部值仍是 `data-theme="warm"`（兼容已保存偏好），界面文案为「浅色玻璃」；新用户默认 `system`。
+  新增主题时必须同时补齐 `[data-theme]` 与 `prefers-color-scheme: light` 下的 token 映射。
+- 玻璃模糊只用于主要外壳（顶栏、左右侧栏、Dock、抽屉、弹窗、预览工具条）。队列条目、模板卡片和照片画布
+  不叠加 `backdrop-filter`；表单与文字密集区使用 `--glass-bg-strong` 或更高不透明度。
+- 动效只使用 `transform / opacity`；新增按压或抽屉动画时同步补 `prefers-reduced-motion` 覆盖。
+- 不支持 `backdrop-filter` 的运行时由文件末尾 `@supports not (...)` 回退为高不透明度面板，不要移除该兜底。
+
+### 工作台页签键盘导航（frontend layout）
+
+页签组件 `frontend/src/components/layout/WorkspaceTabs.tsx` 同时承担视觉选中底座与 WAI-ARIA 页签语义：
+
+1. **数据来源**：页签 id、标签和内容由 `WorkspacePage` 的 `workspaceTabs` 传入；组件只负责选中态、ARIA 关联和键盘交互，不复制业务配置。
+2. **roving tabindex**：只有 `activeTab` 对应的按钮 `tabIndex=0`，其余为 `-1`；Tab 键进出页签组只停留一次。
+3. **键盘映射**：页签按钮收到 `ArrowLeft / ArrowRight` 时循环切换，`Home / End` 跳到首尾；采用自动激活模式（立即调用 `onChange`）并把焦点移到目标页签。按键处理只挂在页签按钮上，面板内输入控件不受影响。
+4. **ARIA 关联**：`role="tablist"`（`aria-orientation="horizontal"`）→ `role="tab"`（`aria-selected`）→ `role="tabpanel"`（`aria-labelledby`）；只有当前选中页签设置 `aria-controls`，并与当前 panel 的 `aria-labelledby` 成对。非活动面板未挂载，非活动页签不设置 `aria-controls`，避免悬空引用。
+5. **安全回退**：`tabs` 为空时只渲染空 `.workspaceTabs` 容器；`activeTab` 不在列表中时回退首个页签并保持 ARIA 一致。
+6. **验证**：`pnpm --filter frontend test -- src/components/layout/WorkspaceTabs.test.tsx` 覆盖选中索引、左右循环、Home/End、点击切换、空列表、无效 `activeTab` 和面板内输入控件；样式改动同时跑 `pnpm --filter frontend typecheck`。
+7. **样式约束**：选中底座仍由 `--tab-index` / `--tab-count` 驱动的 `transform` 动画，不要改成左侧定位；动效覆盖在 `frontend/src/styles/styles.css` 的 `prefers-reduced-motion` 中维护。
+
+### 第二轮 UI 收口：模板、队列与中性背景（frontend）
+
+- **模板卡片**：常驻缩略图、名称、推荐/已应用、应用按钮；说明与字段进入 `templateGalleryDetails`，默认 `hidden`，展开只改本地状态。摄影信息卡变体设置在网格下方 `templateGalleryLayoutSettings`，仅 `activePresetId` 属于四个信息卡变体时渲染；布局/边框切换必须保留另一维。
+- **当前模板可见性**：收起精选时，若 `activePresetId` 是非信息卡变体的内置模板，必须并入可见集合；否则应用非精选模板后收起会丢失“已应用”状态。
+- **队列导入入口**：`QueuePanel` 的唯一参数 `showImportActions?: boolean` 默认 `true`；工作台传 `false`，由顶栏/欢迎页承担导入。独立挂载仍保留导入、空文件夹提示和失败反馈。
+- **队列底部**：有图片时数量/全选/撤销/重做常驻；排序、删除已选、清空进入 `.queueMoreMenu` 普通按钮浮层。浮层 Portal 到 `body`，支持 Escape、外部点击、焦点恢复；不要改成不完整 `role=menu`。
+- **队列行**：文件名用 `.queueFileName` 单行省略，主体按钮用原生可访问名称保留完整文件名、无预览状态与徽标，`title` 提供完整路径；不要用仅含文件名的 `aria-label` 覆盖可见状态。RAW/HEIC/缺失/T-P-I 徽标在 `.queueName` flex 容器中换行，不裁切；右键菜单也 Portal 到 body，避免玻璃侧栏裁剪。
+- **菜单与筛选回归**：右键菜单支持 Shift+F10／菜单键、上下/Home/End、Escape 恢复焦点；Portal 浮层须实测宽高并钳制，检查 Tab／Shift+Tab 默认续行与窗口失焦。筛选变更后重新观察实际挂载行，保留仍可见的缩略图缓存，不在每次输入时清空全部可见 ID。
+- **预览背景**：`--studio-preview-black/gray/white` 为 `#111111 / #4F4F4F / #F7F7F7`，浅深主题共用；只改 UI token，不进入 `RenderRecipe`。
+- **字号和快捷键**：正文/控件/页签/字段标签不低于 14px，12px 仅元数据/徽标；全局单键快捷键在按钮、链接、页签、菜单项、分栏手柄等交互目标上让行。
+- **验证入口**：[docs/ui-glass-verification-20261110.md](ui-glass-verification-20261110.md) §5–6；第二轮截图/动效在 `docs/ui-glass-20261110/second-round/`，后续复核证据在 `docs/ui-glass-20261110/review-fixes/`。
+
+
+### 数码翻拍彩负：底片工作流
+
+1. 导入真实 RAW，在「底片」主动启用处理；TIFF 只在确定是 16-bit 线性数据时勾选确认，并选择真实输入空间，普通调色后 TIFF 不能假设为线性。
+2. 选择翻拍白平衡；需要时选择独立光源参考。点击「框选片基」在完整负片片边拖动未曝光区域，或通过桌面文件选择器选择同卷片基参考帧。
+3. 切换原始负片/基础转正/当前结果，查看真实 RGB 直方图；调整密度、曝光、RGB、黑白点、曲线与饱和度。曲线可双击加点、选择内点后删除、方向键调整。片基取样不受之后裁切/校平影响。
+4. 为同卷校准命名并保存；保存的是引擎解析后的片基与光源数值。应用或选择性同步到兼容图片，保留不勾选的逐图调整；空间不匹配明确拒绝。点击「100% 像素」检查实际分辨率，超预算时明确提示。
+5. 输出页选择 sRGB JPEG、16-bit sRGB TIFF 或 16-bit **线性** Rec.2020 TIFF，再设置带框/无框、尺寸、命名及元数据。目标 ICC 随实际编码嵌入；预检失败先修正原因，完成后查看回读报告。
+
+当前为通用彩负转换；Gold 200/Portra 160 的真实还原需片基、光源及参考样片验收。源码验证与未验收边界见 [底片复核记录](film-digitization-review.md)。本轮按用户要求不打包。

@@ -1,11 +1,15 @@
-import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react"
+import { FilmWorkspacePreview } from "../../editing/components/FilmWorkspacePreview"
+import type { ImageProcessingConfig } from "../../../types/imageProcessing"
 import { Panel } from "../../../components/layout/Panel"
 import {
+  calculateCompositionLayout,
   calculateFocalFromPointer,
-  calculatePreviewImageLayout,
+  drawBorderStyle,
   drawImageGridOverlay,
   drawPreviewToCanvas,
   type CanvasDrawableSource,
+  type CompositionLayout,
   type PreviewRect
 } from "../canvas/canvasRenderer"
 import { calculateImagePlacementGeometry } from "../canvas/imagePlacementGeometry"
@@ -15,6 +19,7 @@ import {
   summarizeImageArea
 } from "../../settings/utils/imageArea"
 import { usePreviewViewport } from "../hooks/usePreviewViewport"
+import { useActualSizePreview } from "../hooks/useActualSizePreview"
 import { buildResolvedRenderSettings } from "../../settings/utils/buildTexts"
 import { sourceDecodeLabel } from "../hooks/useExportController"
 import { ExportDock } from "./ExportDock"
@@ -27,6 +32,9 @@ export { sourceDecodeLabel } from "../hooks/useExportController"
 export type { ResolvedQueueItem } from "../hooks/useExportController"
 
 type PreviewPanelProps = {
+  readonly imageProcessing?: ImageProcessingConfig | null
+  readonly onUpdateImageProcessing?: (config: ImageProcessingConfig, options?: { historyTag?: string; description?: string }) => void
+  readonly onSourceVersion?: (version: string) => void
   readonly state: PreviewState
   readonly settings: RenderSettings
   readonly hasSelectedImage: boolean
@@ -137,30 +145,20 @@ const LoadingView = ({ filePath }: { readonly filePath: string }): JSX.Element =
   </div>
 )
 
-/** 将图片区域和边框信息暴露给可访问性提示与打包回归。 */
+/** 将合成几何信息暴露给可访问性提示与打包回归。 */
 const writeCanvasPreviewDiagnostics = (
   canvas: HTMLCanvasElement,
-  image: HTMLImageElement,
+  layout: CompositionLayout | null,
   settings: RenderSettings,
+  sourceDimensions: { readonly width: number; readonly height: number },
   logicalWidth: number,
   logicalHeight: number,
   pixelRatio: number
 ): boolean => {
   const placement = imagePlacementFromSettings(settings)
   const placementGeometry = calculateImagePlacementGeometry(
-    image.naturalWidth,
-    image.naturalHeight,
-    placement
-  )
-  const layout = calculatePreviewImageLayout(
-    logicalWidth,
-    logicalHeight,
-    image.naturalWidth,
-    image.naturalHeight,
-    settings.borderTop,
-    settings.borderBottom,
-    settings.borderLeft,
-    settings.borderRight,
+    sourceDimensions.width,
+    sourceDimensions.height,
     placement
   )
   canvas.dataset["previewBorderColor"] = settings.borderColor
@@ -173,8 +171,8 @@ const writeCanvasPreviewDiagnostics = (
   canvas.dataset["previewCanvasBackingWidth"] = String(canvas.width)
   canvas.dataset["previewCanvasBackingHeight"] = String(canvas.height)
   canvas.dataset["previewCanvasPixelRatio"] = String(pixelRatio)
-  canvas.dataset["previewSourceWidth"] = String(image.naturalWidth)
-  canvas.dataset["previewSourceHeight"] = String(image.naturalHeight)
+  canvas.dataset["previewSourceWidth"] = String(sourceDimensions.width)
+  canvas.dataset["previewSourceHeight"] = String(sourceDimensions.height)
   canvas.dataset["previewPlacementMode"] = placement.mode
   canvas.dataset["previewPlacementRotation"] = String(placement.rotation)
   canvas.dataset["previewCropAllowed"] = String(placement.mode === "fill")
@@ -182,16 +180,18 @@ const writeCanvasPreviewDiagnostics = (
     && placement.mode === "fill"
     && (placementGeometry.rotatedWidth * placementGeometry.scale > placementGeometry.targetWidth + 0.01
       || placementGeometry.rotatedHeight * placementGeometry.scale > placementGeometry.targetHeight + 0.01))
+  // 自然合成尺寸 = 原图空间的目标区域 + 边框（与引擎导出构图语义一致）
   canvas.dataset["previewNaturalCanvasWidth"] = placementGeometry === null
     ? ""
     : String(Math.max(1, Math.round(placementGeometry.targetWidth + settings.borderLeft + settings.borderRight)))
   canvas.dataset["previewNaturalCanvasHeight"] = placementGeometry === null
     ? ""
     : String(Math.max(1, Math.round(placementGeometry.targetHeight + settings.borderTop + settings.borderBottom)))
-  canvas.dataset["previewImageX"] = layout === null ? "" : String(layout.x)
-  canvas.dataset["previewImageY"] = layout === null ? "" : String(layout.y)
-  canvas.dataset["previewImageWidth"] = layout === null ? "" : String(layout.width)
-  canvas.dataset["previewImageHeight"] = layout === null ? "" : String(layout.height)
+  canvas.dataset["previewViewScale"] = layout === null ? "" : String(layout.viewScale)
+  canvas.dataset["previewImageX"] = layout === null ? "" : String(layout.photoRect.x)
+  canvas.dataset["previewImageY"] = layout === null ? "" : String(layout.photoRect.y)
+  canvas.dataset["previewImageWidth"] = layout === null ? "" : String(layout.photoRect.width)
+  canvas.dataset["previewImageHeight"] = layout === null ? "" : String(layout.photoRect.height)
   return layout !== null
 }
 
@@ -204,33 +204,18 @@ type CanvasRenderState = {
 /** 在 Canvas 上按图片区域叠加构图辅助线（仅编辑态；引擎渲染与导出不经过此函数）。 */
 const drawGridOverlayOnCanvas = (
   canvas: HTMLCanvasElement,
-  image: HTMLImageElement,
-  currentSettings: RenderSettings,
-  renderDimensions: CanvasRenderState
+  layout: CompositionLayout,
+  pixelRatio: number
 ): void => {
   const ctx = canvas.getContext("2d")
   if (ctx === null) {
     return
   }
-  const layout = calculatePreviewImageLayout(
-    renderDimensions.logicalWidth,
-    renderDimensions.logicalHeight,
-    image.naturalWidth,
-    image.naturalHeight,
-    currentSettings.borderTop,
-    currentSettings.borderBottom,
-    currentSettings.borderLeft,
-    currentSettings.borderRight,
-    imagePlacementFromSettings(currentSettings)
-  )
-  if (layout === null) {
-    return
-  }
   ctx.save()
-  if (renderDimensions.pixelRatio !== 1) {
-    ctx.scale(renderDimensions.pixelRatio, renderDimensions.pixelRatio)
+  if (pixelRatio !== 1) {
+    ctx.scale(pixelRatio, pixelRatio)
   }
-  drawImageGridOverlay(ctx, layout)
+  drawImageGridOverlay(ctx, layout.photoRect)
   ctx.restore()
 }
 
@@ -274,7 +259,6 @@ const CanvasPreview = ({
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const drawFnRef = useRef<(() => void) | null>(null)
   const dragStartRef = useRef<{ x: number; y: number } | null>(null)
-  const imageRef = useRef<HTMLImageElement | null>(null)
   const logoImageRef = useRef<CanvasDrawableSource | null>(null)
   const [logoImage, setLogoImage] = useState<HTMLImageElement | null>(null)
   const settingsRef = useRef(settings)
@@ -288,18 +272,26 @@ const CanvasPreview = ({
   const [showGrid, setShowGrid] = useState(false)
   /** 裁切模式下按住拖动 = 更新构图焦点，而非平移画布。 */
   const focalDragRef = useRef(false)
+  /** 焦点拖动进行中：用于光标反馈（ref 不触发重绘）。 */
+  const [isFocalDragging, setIsFocalDragging] = useState(false)
   /** 焦点拖动手势序号：每次按下递增，两次独立拖动不合并进同一条撤销历史。 */
   const focalGestureRef = useRef(0)
+  /** \ 键当前是否被按住：切图后据此决定是否继续显示新图的无边框原图。 */
+  const originalKeyHeldRef = useRef(false)
   /** drawFn 闭包读取的最新网格开关（闭包每次渲染重建，ref 保证读取到当前值）。 */
   const gridEnabledRef = useRef(showGrid)
   gridEnabledRef.current = showGrid
   settingsRef.current = settings
-  imageRef.current = state.currentImage
   logoImageRef.current = logoImage
 
   const viewport = usePreviewViewport(state.filePath)
   const viewportState = viewport.state
   const { resetToFit, resetToActual, handleDoubleClick, setDimensions } = viewport
+  // 绘制闭包经 ref 读取最新视口状态，避免拖动平移时每次重建回调。
+  const viewportStateRef = useRef(viewportState)
+  viewportStateRef.current = viewportState
+  // 绘制闭包读取的最新像素来源（真实原图像素优先，否则代理图）。
+  const pixelImageRef = useRef<HTMLImageElement | null>(null)
 
   useEffect(() => {
     const logoPath = settings.logo.imagePath ?? null
@@ -339,17 +331,21 @@ const CanvasPreview = ({
       if (isEditableTarget(event.target) || document.querySelector('[role="dialog"]') !== null) {
         return
       }
+      originalKeyHeldRef.current = true
       setShowOriginal(true)
     }
     const handleKeyUp = (event: KeyboardEvent): void => {
       if (event.key === "\\") {
+        originalKeyHeldRef.current = false
         setShowOriginal(false)
       }
     }
     // 窗口失焦（如 Cmd+Tab 切走）收不到 keyup，必须显式退出叠加，避免原图卡住。
     const handleBlur = (): void => {
+      originalKeyHeldRef.current = false
       setShowOriginal(false)
       focalDragRef.current = false
+      setIsFocalDragging(false)
     }
     window.addEventListener("keydown", handleKeyDown)
     window.addEventListener("keyup", handleKeyUp)
@@ -361,15 +357,36 @@ const CanvasPreview = ({
     }
   }, [])
 
-  // 切换图片时退出原图叠加，避免旧图残留。
+  // 切换图片时旧图叠加不残留；若 \ 仍被按住则继续显示新图的无边框原图。
   useEffect(() => {
-    setShowOriginal(false)
+    setShowOriginal(originalKeyHeldRef.current)
   }, [state.filePath])
 
-  const naturalCanvasDimensions = useCallback((image: HTMLImageElement, currentSettings: RenderSettings): { width: number; height: number } => {
+  /**
+   * 自然合成尺寸：原图空间的目标照片区域 + 边框（RenderRecipe 语义）。
+   * 100% 模式的坐标契约 = 1 原图像素 : 1 CSS px，视口状态据此钳制平移范围。
+   * 源尺寸未知（引擎事实缺失）时退化为代理图尺寸，与旧几何语义一致。
+   */
+  const naturalCanvasDimensions = useCallback((currentSettings: RenderSettings): { width: number; height: number } => {
+    const source = outputSourceDimensions
+    if (source === null) {
+      const image = state.currentImage
+      if (image === null) return { width: 0, height: 0 }
+      const geometry = calculateImagePlacementGeometry(
+        image.naturalWidth,
+        image.naturalHeight,
+        imagePlacementFromSettings(currentSettings)
+      )
+      return geometry === null
+        ? { width: 0, height: 0 }
+        : {
+          width: Math.max(1, Math.round(geometry.targetWidth + currentSettings.borderLeft + currentSettings.borderRight)),
+          height: Math.max(1, Math.round(geometry.targetHeight + currentSettings.borderTop + currentSettings.borderBottom))
+        }
+    }
     const geometry = calculateImagePlacementGeometry(
-      image.naturalWidth,
-      image.naturalHeight,
+      source.width,
+      source.height,
       imagePlacementFromSettings(currentSettings)
     )
     if (geometry === null) {
@@ -379,7 +396,7 @@ const CanvasPreview = ({
       width: Math.max(1, Math.round(geometry.targetWidth + currentSettings.borderLeft + currentSettings.borderRight)),
       height: Math.max(1, Math.round(geometry.targetHeight + currentSettings.borderTop + currentSettings.borderBottom))
     }
-  }, [])
+  }, [outputSourceDimensions, state.currentImage])
 
   useEffect(() => {
     if (viewportCommand?.type === "fit") {
@@ -389,25 +406,51 @@ const CanvasPreview = ({
     }
   }, [viewport.resetToActual, viewport.resetToFit, viewportCommand?.sequence, viewportCommand?.type])
 
+  // 100% 模式按需加载原图像素；几何始终使用原图坐标，像素来源如实标注。
+  const naturalComposition = useMemo(() => naturalCanvasDimensions(settings), [naturalCanvasDimensions, settings])
+  const actualPixels = useActualSizePreview(
+    state.filePath,
+    outputSourceDimensions === null ? null : naturalComposition,
+    viewportState.mode === "actual"
+  )
+  // 像素来源：真实原图像素优先；未就绪/失败/超出预算时退回代理图，界面如实标注。
+  const pixelImage = actualPixels.image ?? state.currentImage
+  const pixelsAreProxy = actualPixels.image === null
+  pixelImageRef.current = pixelImage
+
   useEffect(() => {
     const canvas = canvasRef.current
-    const image = state.currentImage
+    const image = pixelImage
     if (canvas === null || image === null) {
       drawFnRef.current = null
       return
     }
     drawFnRef.current = () => {
-      const currentImage = imageRef.current
+      const currentImage = pixelImageRef.current
       if (currentImage === null) return
       const sourceDecode = state.engineResponse?.sourceDecode
       canvas.dataset["previewSourceDecodeMode"] = sourceDecode?.mode ?? ""
       canvas.dataset["previewSourceOrientation"] = String(sourceDecode?.orientation ?? 1)
       canvas.dataset["previewOrientationApplied"] = String(sourceDecode?.orientationApplied === true)
       const renderDimensions = renderDimensionsRef.current
+      // 源尺寸优先取引擎/预检事实；不可用时退化为像素来源自身尺寸（代理语义）。
+      const sourceDimensions = outputSourceDimensions
+        ?? { width: currentImage.naturalWidth, height: currentImage.naturalHeight }
+      const currentSettings = settingsRef.current
+      const layout = calculateCompositionLayout(
+        renderDimensions.logicalWidth,
+        renderDimensions.logicalHeight,
+        sourceDimensions.width,
+        sourceDimensions.height,
+        currentSettings,
+        imagePlacementFromSettings(currentSettings),
+        { mode: viewportStateRef.current.mode, offsetX: viewportStateRef.current.offsetX, offsetY: viewportStateRef.current.offsetY }
+      )
       const canDrawPhoto = writeCanvasPreviewDiagnostics(
         canvas,
-        currentImage,
-        settingsRef.current,
+        layout,
+        currentSettings,
+        sourceDimensions,
         renderDimensions.logicalWidth,
         renderDimensions.logicalHeight,
         renderDimensions.pixelRatio
@@ -418,9 +461,17 @@ const CanvasPreview = ({
         canvas.width = canvas.width
         return
       }
-      drawPreviewToCanvas(canvas, currentImage, settingsRef.current, logoImageRef.current, renderDimensions)
-      if (gridEnabledRef.current) {
-        drawGridOverlayOnCanvas(canvas, currentImage, settingsRef.current, renderDimensions)
+      drawPreviewToCanvas(
+        canvas,
+        currentImage,
+        currentSettings,
+        logoImageRef.current,
+        renderDimensions,
+        sourceDimensions,
+        { mode: viewportStateRef.current.mode, offsetX: viewportStateRef.current.offsetX, offsetY: viewportStateRef.current.offsetY }
+      )
+      if (gridEnabledRef.current && layout !== null) {
+        drawGridOverlayOnCanvas(canvas, layout, renderDimensions.pixelRatio)
       }
     }
   })
@@ -441,13 +492,15 @@ const CanvasPreview = ({
 
     const updateLayout = (): void => {
       const rect = container.getBoundingClientRect()
-      const image = imageRef.current
       const currentSettings = settingsRef.current
-      const natural = image === null ? { width: 0, height: 0 } : naturalCanvasDimensions(image, currentSettings)
+      const natural = naturalCanvasDimensions(currentSettings)
       setDimensions(rect.width, rect.height, natural.width, natural.height)
-      const logical = viewportState.mode === "actual"
-        ? natural
-        : { width: Math.max(1, Math.round(rect.width)), height: Math.max(1, Math.round(rect.height)) }
+      // 两种模式下 Canvas 元素都等于容器尺寸：fit 由渲染器缩放合成，actual
+      // 以 1:1 原图坐标平移绘制可视区域，backing store 始终受容器 × DPR 约束。
+      const logical = {
+        width: Math.max(1, Math.round(rect.width)),
+        height: Math.max(1, Math.round(rect.height))
+      }
       const nextRenderDimensions = configureCanvas(canvas, logical.width, logical.height)
       renderDimensionsRef.current = nextRenderDimensions
       setRenderDimensions((previous) => previous.logicalWidth === nextRenderDimensions.logicalWidth
@@ -462,37 +515,40 @@ const CanvasPreview = ({
     const observer = new ResizeObserver(updateLayout)
     observer.observe(container)
     return () => observer.disconnect()
-  }, [naturalCanvasDimensions, setDimensions, state.currentImage, settings, viewportState.mode])
+  }, [naturalCanvasDimensions, setDimensions])
 
   useEffect(() => {
     drawFnRef.current?.()
-  }, [settings, state.currentImage, state.engineResponse])
+  }, [settings, pixelImage, state.engineResponse, viewportState])
 
+  // 焦点拖动/引导覆盖层需要的照片目标区域：与绘制完全同一份合成布局，
+  // 但跳过最小可见边长保护——交互换算在极小视口下也必须成立。
   const placement = imagePlacementFromSettings(settings)
-  const placementGeometry = state.currentImage === null
+  const interactionSource = outputSourceDimensions
+    ?? (pixelImage === null ? null : { width: pixelImage.naturalWidth, height: pixelImage.naturalHeight })
+  const layoutForInteraction = pixelImage === null || interactionSource === null
     ? null
-    : calculateImagePlacementGeometry(state.currentImage.naturalWidth, state.currentImage.naturalHeight, placement)
-  const targetRect = placementGeometry === null
+    : calculateCompositionLayout(
+      renderDimensions.logicalWidth,
+      renderDimensions.logicalHeight,
+      interactionSource.width,
+      interactionSource.height,
+      settings,
+      placement,
+      { mode: viewportState.mode, offsetX: viewportState.offsetX, offsetY: viewportState.offsetY },
+      { skipMinVisibleGuard: true }
+    )
+  const targetRect = layoutForInteraction === null
     ? null
-    : (() => {
-        const borderLeft = Math.max(0, settings.borderLeft)
-        const borderRight = Math.max(0, settings.borderRight)
-        const borderTop = Math.max(0, settings.borderTop)
-        const borderBottom = Math.max(0, settings.borderBottom)
-        const availableWidth = Math.max(0, renderDimensions.logicalWidth - borderLeft - borderRight)
-        const availableHeight = Math.max(0, renderDimensions.logicalHeight - borderTop - borderBottom)
-        if (availableWidth <= 0 || availableHeight <= 0) return null
-        const viewportScale = Math.min(
-          availableWidth / placementGeometry.targetWidth,
-          availableHeight / placementGeometry.targetHeight
-        )
-        return {
-          left: borderLeft + (availableWidth - placementGeometry.targetWidth * viewportScale) / 2,
-          top: borderTop + (availableHeight - placementGeometry.targetHeight * viewportScale) / 2,
-          width: placementGeometry.targetWidth * viewportScale,
-          height: placementGeometry.targetHeight * viewportScale
-        }
-      })()
+    : {
+      left: layoutForInteraction.targetRect.x,
+      top: layoutForInteraction.targetRect.y,
+      width: layoutForInteraction.targetRect.width,
+      height: layoutForInteraction.targetRect.height
+    }
+  const placementGeometry = interactionSource === null
+    ? null
+    : calculateImagePlacementGeometry(interactionSource.width, interactionSource.height, placement)
   const cropApplied = placementGeometry !== null
     && placement.mode === "fill"
     && (placementGeometry.rotatedWidth * placementGeometry.scale > placementGeometry.targetWidth + 0.01
@@ -545,6 +601,7 @@ const CanvasPreview = ({
         const focal = calculateFocalFromPointer(pointerToCanvasLogical(event, canvas), targetRectRef.current)
         if (focal !== null) {
           focalDragRef.current = true
+          setIsFocalDragging(true)
           // 每次按下手势递增：两次独立拖动不得合并进同一条撤销历史。
           focalGestureRef.current += 1
           applyFocalFromEvent(event)
@@ -561,6 +618,7 @@ const CanvasPreview = ({
       // 防御：指针上已无按键（如原生拖拽逃逸后重入）时立即结束手势。
       if (event.buttons === 0) {
         focalDragRef.current = false
+        setIsFocalDragging(false)
         return
       }
       applyFocalFromEvent(event)
@@ -575,6 +633,7 @@ const CanvasPreview = ({
 
   const handleMouseUp = useCallback((): void => {
     focalDragRef.current = false
+    setIsFocalDragging(false)
     dragStartRef.current = null
     viewport.endDrag()
   }, [viewport.endDrag])
@@ -586,7 +645,7 @@ const CanvasPreview = ({
       <div
         ref={containerRef}
         className={`previewCanvasWrapper previewBackground${previewBackground.charAt(0).toUpperCase()}${previewBackground.slice(1)}`}
-        style={{ overflow: "auto", position: "relative", cursor: viewport.isDragging ? "grabbing" : "grab" }}
+        style={{ overflow: "hidden", position: "relative", cursor: viewport.isDragging || isFocalDragging ? "grabbing" : "grab" }}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
@@ -596,7 +655,7 @@ const CanvasPreview = ({
         <canvas
           ref={canvasRef}
           className="previewCanvas"
-          style={{ position: "absolute", transform: `translate(${viewportState.offsetX}px, ${viewportState.offsetY}px)`, left: 0, top: 0 }}
+          style={{ position: "absolute", left: 0, top: 0 }}
         />
         {activeTemplateId === "polaroid" && targetRect !== null && (
           <div
@@ -607,8 +666,7 @@ const CanvasPreview = ({
               left: `${targetRect.left}px`,
               top: `${targetRect.top}px`,
               width: `${targetRect.width}px`,
-              height: `${targetRect.height}px`,
-              transform: `translate(${viewportState.offsetX}px, ${viewportState.offsetY}px)`
+              height: `${targetRect.height}px`
             }}
           >
             <span>图片区</span>
@@ -650,6 +708,25 @@ const CanvasPreview = ({
           <span className={engineSyncClassName(state.engineSyncStatus)}>{engineSyncLabel(state.engineSyncStatus)}</span>
         )}
         <DecodeSourceBadge sourceDecode={state.engineResponse?.sourceDecode ?? null} />
+        {viewportState.mode === "actual" && (
+          <span
+            className={pixelsAreProxy
+              ? "decodeBadge decodeBadgeFallback"
+              : "decodeBadge decodeBadgeDeveloped"}
+            data-testid="preview-pixel-source"
+            title={pixelsAreProxy
+              ? actualPixels.status === "loading"
+                ? "正在加载原图像素，当前为代理图插值放大，不能用于原图细节判断"
+                : actualPixels.status === "over-budget"
+                  ? "合成尺寸超出 100% 真实像素上限，当前为代理图插值放大"
+                  : "原图像素暂不可用，当前为代理图插值放大，不能用于原图细节判断"
+              : "1 原图像素 = 1 CSS 像素，引擎真实像素"}
+          >
+            {pixelsAreProxy
+              ? actualPixels.status === "loading" ? "100% · 加载原图像素…" : "100% · 代理像素"
+              : "100% · 原图像素"}
+          </span>
+        )}
         <span className="previewViewportControls">
           <button
             type="button"
@@ -695,6 +772,9 @@ export const PreviewPanel = ({
   activeTemplateId = null,
   outputSourceDimensions = null,
   onUpdateImagePlacement,
+  imageProcessing = null,
+  onUpdateImageProcessing,
+  onSourceVersion,
   showExportControls = true
 }: PreviewPanelProps): JSX.Element => {
   const resolvedSettings = buildResolvedRenderSettings(settings, resolvedTextOverride, resolvedTextLayers, resolvedBrand)
@@ -725,8 +805,12 @@ export const PreviewPanel = ({
     <Panel label="预览" title="预览区域" className="previewPanel">
       <div className={`previewFrame previewBackground${previewBackground.charAt(0).toUpperCase()}${previewBackground.slice(1)}`}>
         {state.kind === "idle" && <IdleView />}
-        {state.kind === "active" && state.currentImage === null && <LoadingView filePath={state.filePath} />}
-        {state.kind === "active" && state.currentImage !== null && (
+        {state.kind === "active" && state.filmMode === true && (
+          <FilmWorkspacePreview state={state} settings={resolvedSettings} config={imageProcessing}
+            onChange={onUpdateImageProcessing} onSourceVersion={onSourceVersion} viewportCommand={viewportCommand} />
+        )}
+        {state.kind === "active" && state.filmMode !== true && state.currentImage === null && <LoadingView filePath={state.filePath} />}
+        {state.kind === "active" && state.filmMode !== true && state.currentImage !== null && (
           <CanvasPreview
             state={state}
             settings={resolvedSettings}

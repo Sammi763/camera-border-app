@@ -20,6 +20,21 @@ public final class RenderRecipeValidator {
     private RenderRecipeValidator() {
     }
 
+    /** 普通模式与底片模式共用的完整配方结构校验（不含能力可用性）。 */
+    public static void validateRecipe(final RenderRecipe recipe, final String prefix) {
+        validateImagePlacement(recipe, prefix);
+        ImageProcessingValidator.validate(recipe.getImageProcessing(), prefix);
+    }
+
+    /**
+     * 生产入口校验：结构合法后再检查处理能力是否已落地。
+     * T02 阶段底片处理尚未实现，合法配置返回 501，不能静默忽略。
+     */
+    public static void validateRecipeForProduction(final RenderRecipe recipe, final String prefix) {
+        validateRecipe(recipe, prefix);
+        ImageProcessingValidator.ensureFilmProcessingAvailable(recipe.getImageProcessing());
+    }
+
     /** 校验图片放置配置；旧请求缺失 imagePlacement 时使用模型默认值。 */
     public static void validateImagePlacement(final RenderRecipe recipe, final String prefix) {
         if (recipe == null) {

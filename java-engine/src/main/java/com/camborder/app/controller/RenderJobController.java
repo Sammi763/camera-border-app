@@ -72,7 +72,7 @@ public final class RenderJobController {
         }
 
         if (snapshots.stream().anyMatch(snapshot -> snapshot != null && snapshot.getExport() != null
-                && snapshot.getExport().hasProfessionalPolicy())) {
+                && (snapshot.getExport().hasProfessionalPolicy() || snapshot.getExport().hasFilmPolicy()))) {
             final var preflight = exportPreflightService.preflight(request);
             if (!"ready".equals(preflight.getStatus())) {
                 throw new ApiException("export preflight blocked", HttpStatus.CONFLICT);
@@ -92,11 +92,14 @@ public final class RenderJobController {
             throw new ApiException(prefix + "imagePath is required", HttpStatus.BAD_REQUEST);
         }
 
-        RenderRecipeValidator.validateImagePlacement(recipe, prefix);
+        RenderRecipeValidator.validateRecipe(recipe, prefix);
 
         ExportSettings export = snapshot.getExport();
         if (export == null || export.getOutputPath() == null || export.getOutputPath().isBlank()) {
             throw new ApiException(prefix + "outputPath is required", HttpStatus.BAD_REQUEST);
+        }
+        if (recipe.getImageProcessing() != null) {
+            com.camborder.app.util.ImageProcessingValidator.validateFilmOutput(export, recipe.getImageProcessing(), prefix);
         }
         if (export.getFormat() != null && !VALID_FORMATS.contains(export.getFormat())) {
             throw new ApiException(prefix + "format must be png, jpeg or tiff", HttpStatus.BAD_REQUEST);

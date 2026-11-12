@@ -1,0 +1,18 @@
+{
+  "date": "2026-11-10T12:51:10.081Z",
+  "browser": "独立 Chromium，非 Electron",
+  "edge": {
+    "left": 1224,
+    "top": 720.03125,
+    "right": 1392,
+    "bottom": 912,
+    "width": 168,
+    "height": 191.96875
+  },
+  "keyboardMenu": true,
+  "tabExit": true,
+  "shiftTabExit": true,
+  "moreFocusExit": true,
+  "restoredThumbnails": 7,
+  "narrowOverflow": false
+}

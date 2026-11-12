@@ -253,9 +253,13 @@ P0-01
 历史实验代码，非产品能力，不纳入打包、验收或用户界面。本条不是待完成任务，也不是
 待验收任务，不得放入任务状态统计或发布阻塞项。
 
-产品 RAW 口径只有一条：只读取 NEF、CR2、CR3、ARW、RAF、DNG、ORF、RW2、PEF 文件中可
-读取的内嵌 JPEG 预览；无可读取内嵌 JPEG 时明确失败。外部显影子进程、随包显影工具和
-任何真实 RAW 显影路径均不属于产品能力。
+普通模式的 RAW 口径只有一条：只读取 NEF、CR2、CR3、ARW、RAF、DNG、ORF、RW2、PEF 文件中
+可读取的内嵌 JPEG 预览；无可读取内嵌 JPEG 时明确失败。普通模式不使用外部显影子进程、
+随包显影工具或任何真实 RAW 显影路径。
+
+底片数字化是独立显式模式，真实传感器 RAW、彩负转正和校色按
+[执行方案](opencode-film-digitization-plan.md) 与
+[ADR-0007](adr/0007-explicit-film-digitization-mode.md) 实施；验收前不得写成产品已支持。
 
 RAW 正向/失败样片及其全部 `NOT_RUN` 状态统一见 [`docs/test-samples.md`](test-samples.md)，
 不因历史代码存在而提前标记格式支持。
@@ -322,3 +326,71 @@ ExifTool 复核输出事实。
 
 签名、公证和自动更新不属于 T-06 发布清单；P0/P1/P2 必须为零，P3 只能保留不影响理解和使用
 的纯视觉项并记录在最终报告。
+
+## 7. 本轮新增任务：调参合并、内存准入与阶段缓存
+
+> 状态：代码已实现，自动化覆盖已通过；16GB 实机/安装包性能证据按环境标记。决策见
+> [ADR-0008](adr/0008-tuning-coalescing-memory-and-stage-cache.md)。
+
+### T-10 调参合并与取消 ✅ 代码完成，安装包性能待 16GB 实机
+
+- 前端 `TuningScheduler`：拖动最多每 250ms 提交一次，松手/失焦/确认输入立即提交最终快照；
+  每视图一份在途 + 一份最新待提交，相同快照不重复。
+- 主预览、阶段对比和直方图共享 `engineRecipe` / `engineClientId` / `engineGeneration`；
+  移除底片预览组件独立的 250ms 防抖计时。
+- 后端 `FilmTaskScheduler` 统一预览、分析、预检和导出项；等待上限 16，交互优先且导出等待时
+  最多连续两个交互；新代次取消旧代次等待与执行中计算。
+- 新增 `DELETE /api/film-requests/{clientId}?generation=n`，幂等 `204`；取消/被替代不显示
+  「引擎不可达」。
+- 验证：`FilmTaskSchedulerImplTest`、`FilmRequestControllerTest`、前端 `tuningScheduler.test.ts`、
+  `usePreview.film.test.ts`、`FilmWorkspacePreview.test.tsx`。
+
+### T-11 内存准入与输入探测 ✅ 代码完成，16GB 实机待验收
+
+- `FilmInputProbe`：TIFF 头信息；RAW helper `--probe --input <path>` 只读尺寸/源事实。
+- `FilmMemoryEstimator` + `DefaultFilmMemoryBudgetService`：B/H/C 自动公式、25% 余量、
+  原生 helper 计入总预算、可注入机器数据、整数溢出与 422/429 失败路径。
+- 预算租约覆盖解码、分析、编码与写出；`Processed.close()` 统一释放；不调用 `System.gc()`。
+- 验证：`FilmInputProbeTest`、`DefaultFilmMemoryBudgetServiceTest`、`FilmStageCachePipelineTest`
+  的超预算用例；`FilmRawDecoderNativeTest` 继续覆盖 helper 超时/取消。
+
+### T-12 分阶段缓存 ✅ 代码完成，16GB 实机待验收
+
+- `FilmStageCache`：`raw-linear` / `base-positive` / `current-positive`，字节有界、租约固定、
+  current 优先淘汰、同级 LRU、空闲 120 秒回收、超预算跳过、进程退出清空。
+- `FilmStageKeys` 使用规范化有效参数 + 上游键 + 源/参考帧 SHA-256 + 算法版本 + 工作空间 +
+  实际尺寸；几何/边框/文字/Logo/输出格式不使照片阶段失效。
+- 关闭配置 `app.film.stage-cache.enabled=false`；诊断 `GET /api/film-stage-cache`。
+- 验证：`FilmStageKeysTest`、`FilmStageCacheTest`、`FilmStageCachePipelineTest`（阶段计数、
+  缓存开关逐位一致、上游不被原地修改）；`FilmReferenceTest` 覆盖参考帧替换。
+
+### 性能与验收
+
+- `pnpm perf:smoke` 保留原有两轮百图内存闸门；追加
+  `--film-sample <RAW> --film-tuning-count 8 --film-export-count 5` 记录冷/热缓存、阶段命中率、
+  连续调参和批量导出耗时及 Java 引擎 RSS。
+- 16GB 实机与 24–45MP 多样片验收未执行；32GB 安装包 E2E 证据见下文，不替代 16GB 结果。
+  对应状态保持 `NOT_RUN`，直到在 16GB 目标机完成 [release-checklist](release-checklist.md) 验收。
+- 当前 32GB 开发机的工程记录见 [film-performance-20261112.md](film-performance-20261112.md)；
+  仅证明代码路径、命中率和每轮 2 项的缩小 smoke，不作为完整百图或 16GB 验收。
+
+### 安装包验收状态（2026-11-12）
+
+- `ARCH=arm64 pnpm package` 成功产出 `Camera-Border-0.1.0-arm64.dmg` 与校验和/manifest
+  （复核后最终校验和 `3bc418535804d1cd669ca19b6591c38a3fb3ed776fec5f7a31a0cb9c19c5947b`）；
+  包内 `professional-tools/libraw/macos-arm64/helper.json` 为 1.1.0，包含 `probe: true`。
+- `scripts/smoke-test.sh` 在停止开发引擎后单独运行托管安装包，引擎由随包 JRE 启动并通过健康检查。
+- `pnpm e2e:packaged` **通过**。修复了既有 E2E 选择器漂移（HEIC 工作路径、队列行点击、预设默认
+  展开、范围主按钮、队列更多菜单、信息卡变体位置等），并收口最小窗口布局：`1101–1280px` 时预览
+  元信息压成单行、适应/100% 控件浮到照片右下角，左右栏默认 260/360px。实测三尺寸：
+  - 1200×760：预览 `524×536`（阈值 `520×480`）；
+  - 1400×863：预览 `724×560`；
+  - 1920×1080：本次物理屏幕可用尺寸 1512×865，使用 CDP 视口模拟，预览 `1244×830`，证据中标注
+    `emulated`，没有伪称 BrowserWindow 达到 1920。
+  深色/浅色主题对比度、HEIC/RAW/JPEG、三档导出、100 项批量/取消、引擎重启与源图 SHA-256
+  均通过；CSP 与网络断言通过。
+- 复核修复：紧凑布局规则移至通用样式之后，增加实际计算样式断言；Canvas 每帧清空整个物理
+  画布，避免切换拍立得等窄构图时残留旧照片；迟到旧代次不再移除更新代次的排队任务。
+  对应成功/失败路径回归、前端构建、Java 回归及脚本检查通过，安装包 E2E 重新通过。
+- 本轮已补齐 32GB 安装包的 Electron/Renderer/Java/helper 独立 RSS 采样；证据及限制见性能记录。
+- 16GB 实机、24–45MP 多份真实 RAW/负片及默认两轮百图引擎内存仍为 `NOT_RUN`，不能用缩小 smoke 或 32GB 结果替代。

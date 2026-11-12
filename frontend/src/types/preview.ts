@@ -7,6 +7,8 @@
  * 约定（`imagePath`、`previewUrl`）。
  */
 
+import type { FilmOutput, ImageProcessingConfig } from "./imageProcessing"
+
 export type BorderConfig = {
   readonly top: number
   readonly bottom: number
@@ -101,7 +103,7 @@ export type BorderStyleConfig = {
  * - embedded-jpeg：RAW 只抽取文件内嵌 JPEG，warning 说明像素边界。
  */
 export type SourceDecode = {
-  readonly mode: "standard" | "embedded-jpeg"
+  readonly mode: "standard" | "embedded-jpeg" | "sensor-raw" | "linear-tiff"
   readonly format: string
   readonly warning: string | null
   /** 解码边界读取到的 EXIF Orientation。 */
@@ -115,6 +117,8 @@ export type SourceDecode = {
   readonly fullWidth?: number
   readonly fullHeight?: number
   readonly orientationApplied?: boolean
+  /** 传感器有效位深（已知时）；与输出 bitDepth 分开。 */
+  readonly sensorBitDepth?: number | null
 }
 
 export type RenderRecipe = {
@@ -128,9 +132,16 @@ export type RenderRecipe = {
   readonly logo?: LogoConfig | null
   /** 边框风格；缺省/null/未识别 id 时引擎保持原始渲染行为。 */
   readonly borderStyle?: BorderStyleConfig | null
+  /** 底片数字化处理；缺省/null 时保持普通模式。 */
+  readonly imageProcessing?: ImageProcessingConfig | null
 }
 
 export type PreviewRequest = {
+  readonly actualPixels?: boolean
+  readonly clientId?: string
+  readonly generation?: number
+  readonly stage?: import("./imageProcessing").ImageAnalysisStage
+  readonly sourceCoordinates?: boolean
   readonly recipe: RenderRecipe
   readonly maxWidth: number
   readonly maxHeight: number
@@ -173,6 +184,10 @@ export type ExportSettings = {
   readonly colorProfilePolicy?: ColorProfilePolicy
   readonly metadataPolicy?: MetadataPolicy
   readonly bitDepthPolicy?: BitDepthPolicy
+  /** 底片模式输出组合；普通模式必须缺省/null。 */
+  readonly filmOutput?: FilmOutput | null
+  /** 是否输出不带框母版；true 时全部装饰必须显式禁用。 */
+  readonly borderlessMaster?: boolean
 }
 
 /**
@@ -180,6 +195,8 @@ export type ExportSettings = {
  * 后续编辑工作台不会改变已经被引擎接受的任务。
  */
 export type RenderJobSnapshot = {
+  /** 可选源版本；引擎接受底片任务时会冻结并在实际读取前核对。 */
+  readonly sourceVersion?: string | null
   readonly recipe: RenderRecipe
   readonly export: ExportSettings
 }
@@ -229,6 +246,16 @@ export type FidelityFileFacts = {
   readonly orientation: number
   readonly icc?: IccFacts | null
   readonly metadata?: MetadataFacts | null
+  /** 传感器有效位深（已知时）；与输出 bitDepth 分开。 */
+  readonly sensorBitDepth?: number | null
+  /** 工作数据类型与处理尺寸。 */
+  readonly workingDataType?: string | null
+  readonly processingWidth?: number | null
+  readonly processingHeight?: number | null
+  /** 底片模式算法版本、配方签名与源版本；普通模式为空。 */
+  readonly algorithmVersion?: string | null
+  readonly recipeSignature?: string | null
+  readonly sourceVersion?: string | null
 }
 
 export type FidelityTransformations = {
@@ -240,6 +267,7 @@ export type FidelityTransformations = {
 }
 
 export type FidelityReport = {
+  readonly outputClipping?: Readonly<Record<string, readonly number[]>>
   readonly phase: "preflight" | "completed" | string
   readonly tier?: FidelityTier | string | null
   readonly format?: string | null
@@ -287,6 +315,20 @@ export type CapabilitiesResponse = {
   readonly input: Readonly<Record<string, boolean>>
   readonly output: Readonly<Record<string, FormatCapability>>
   readonly tiers: Readonly<Record<FidelityTier, TierCapability>>
+  /** 底片数字化能力；组件缺失时必须 available=false。 */
+  readonly filmDigitization?: FilmDigitizationCapability | null
+}
+
+export type FilmDigitizationCapability = {
+  readonly available: boolean
+  readonly decoder?: string | null
+  readonly version?: string | null
+  readonly license?: string | null
+  readonly sha256?: string | null
+  readonly inputModes: readonly string[]
+  readonly analysisStages: readonly string[]
+  readonly outputs: Readonly<Record<string, boolean>>
+  readonly reason?: string | null
 }
 
 export type ExportPreflightItem = {

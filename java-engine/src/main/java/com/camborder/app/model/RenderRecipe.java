@@ -19,6 +19,8 @@ public final class RenderRecipe {
     private LogoConfig logo;
     /** 可选边框风格；null 或未识别 id 时保持原始渲染行为。 */
     private BorderStyle borderStyle;
+    /** 可选底片数字化处理；null/缺省时保持普通模式。 */
+    private ImageProcessingConfig imageProcessing;
 
     public RenderRecipe() {
     }
@@ -114,5 +116,13 @@ public final class RenderRecipe {
 
     public void setBorderStyle(final BorderStyle borderStyle) {
         this.borderStyle = borderStyle;
+    }
+
+    public ImageProcessingConfig getImageProcessing() {
+        return imageProcessing;
+    }
+
+    public void setImageProcessing(final ImageProcessingConfig imageProcessing) {
+        this.imageProcessing = imageProcessing;
     }
 }

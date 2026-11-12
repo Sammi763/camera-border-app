@@ -11,6 +11,8 @@ public final class CapabilitiesResponse {
     private Map<String, Boolean> input = new LinkedHashMap<>();
     private Map<String, FormatCapability> output = new LinkedHashMap<>();
     private Map<String, TierCapability> tiers = new LinkedHashMap<>();
+    /** 底片数字化能力；T03 起由真实随包 helper 探测填充。 */
+    private FilmDigitizationCapability filmDigitization = new FilmDigitizationCapability();
 
     public int getSchemaVersion() { return schemaVersion; }
     public void setSchemaVersion(final int schemaVersion) { this.schemaVersion = schemaVersion; }
@@ -22,6 +24,10 @@ public final class CapabilitiesResponse {
     public void setOutput(final Map<String, FormatCapability> output) { this.output = output; }
     public Map<String, TierCapability> getTiers() { return tiers; }
     public void setTiers(final Map<String, TierCapability> tiers) { this.tiers = tiers; }
+    public FilmDigitizationCapability getFilmDigitization() { return filmDigitization; }
+    public void setFilmDigitization(final FilmDigitizationCapability filmDigitization) {
+        this.filmDigitization = filmDigitization;
+    }
 
     public static final class Component {
         private boolean available;
@@ -101,6 +107,44 @@ public final class CapabilitiesResponse {
         public void setAvailable(final boolean available) { this.available = available; }
         public String getDefaultFormat() { return defaultFormat; }
         public void setDefaultFormat(final String defaultFormat) { this.defaultFormat = defaultFormat; }
+        public String getReason() { return reason; }
+        public void setReason(final String reason) { this.reason = reason; }
+    }
+
+    /** 底片数字化能力；缺少 helper/版本/架构不符时必须 available=false 并给出原因。 */
+    public static final class FilmDigitizationCapability {
+        private boolean available;
+        private String decoder;
+        private String version;
+        private String license;
+        private String sha256;
+        private java.util.List<String> inputModes = new java.util.ArrayList<>();
+        private java.util.List<String> analysisStages = new java.util.ArrayList<>();
+        private Map<String, Boolean> outputs = new LinkedHashMap<>();
+        private String reason;
+
+        public boolean isAvailable() { return available; }
+        public void setAvailable(final boolean available) { this.available = available; }
+        public String getDecoder() { return decoder; }
+        public void setDecoder(final String decoder) { this.decoder = decoder; }
+        public String getVersion() { return version; }
+        public void setVersion(final String version) { this.version = version; }
+        public String getLicense() { return license; }
+        public void setLicense(final String license) { this.license = license; }
+        public String getSha256() { return sha256; }
+        public void setSha256(final String sha256) { this.sha256 = sha256; }
+        public java.util.List<String> getInputModes() { return inputModes; }
+        public void setInputModes(final java.util.List<String> inputModes) {
+            this.inputModes = inputModes == null ? new java.util.ArrayList<>() : inputModes;
+        }
+        public java.util.List<String> getAnalysisStages() { return analysisStages; }
+        public void setAnalysisStages(final java.util.List<String> analysisStages) {
+            this.analysisStages = analysisStages == null ? new java.util.ArrayList<>() : analysisStages;
+        }
+        public Map<String, Boolean> getOutputs() { return outputs; }
+        public void setOutputs(final Map<String, Boolean> outputs) {
+            this.outputs = outputs == null ? new LinkedHashMap<>() : outputs;
+        }
         public String getReason() { return reason; }
         public void setReason(final String reason) { this.reason = reason; }
     }

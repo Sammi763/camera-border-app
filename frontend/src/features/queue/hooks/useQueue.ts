@@ -7,7 +7,11 @@ import { createEmptyIdentity } from "../../metadata/types"
 import { mergeIdentityChain, resolvePresetIdentity } from "../../metadata/utils/resolveIdentity"
 import type { PhotoAssetStore, PhotoIdentity, ShootingPreset } from "../../metadata/types"
 import type { PhotoMetadata } from "../../../types/preview"
-import type { ImportResult, OperationScope, QueueController, QueueItem } from "../types"
+import type { ImportResult, OperationScope, QueueController, QueueItem, FilmSyncField } from "../types"
+import type { ImageProcessingConfig, MonotonicCurve } from "../../../types/imageProcessing"
+import { createDefaultFilmProcessing } from "../../editing/defaults"
+import { cloneImageProcessing, migrateImageProcessing } from "../imageProcessingSession"
+import { nextHistorySeq, type HistoryEntryMeta } from "../../../utils/historySequence"
 import { resolveIdentityFieldSources } from "../../metadata/utils/resolveIdentityFieldSources"
 
 /** 工作会话只保存可恢复的队列状态，不保存二进制预览或临时 object URL。 */
@@ -33,7 +37,7 @@ const snapshotsEqual = (left: QueueSnapshot, right: QueueSnapshot): boolean =>
   && left.activeItemId === right.activeItemId
   && left.checkedItemIds === right.checkedItemIds
 
-const isPersistedQueueItem = (value: unknown): value is QueueItem => {
+const isPersistedQueueItem = (value: unknown): boolean => {
   if (value === null || typeof value !== "object") return false
   const item = value as Record<string, unknown>
   return typeof item["id"] === "string"
@@ -45,6 +49,38 @@ const isPersistedQueueItem = (value: unknown): value is QueueItem => {
     && typeof item["workingFormat"] === "string"
 }
 
+/**
+ * 旧会话迁移：缺 imageProcessing 视为普通模式；损坏/未知版本保留错误解释并关闭处理，
+ * 不能静默恢复成一张“看似已调好”的图。
+ */
+const normalizePersistedQueueItem = (value: unknown): QueueItem | null => {
+  if (!isPersistedQueueItem(value)) return null
+  const item = value as Record<string, unknown>
+  const migrated = migrateImageProcessing(item["imageProcessing"])
+  const rawText = item["textOverride"]
+  const rawPreset = item["presetId"]
+  const rawIdentity = item["identityOverride"]
+  return {
+    id: item["id"] as string,
+    filePath: item["filePath"] as string,
+    fileName: item["fileName"] as string,
+    sourcePath: item["sourcePath"] as string,
+    sourceFormat: item["sourceFormat"] as string,
+    converted: item["converted"] as boolean,
+    workingFormat: item["workingFormat"] as string,
+    textOverride: typeof rawText === "string" ? rawText : null,
+    presetId: typeof rawPreset === "string" ? rawPreset : null,
+    identityOverride: rawIdentity !== null && typeof rawIdentity === "object"
+      ? rawIdentity as Partial<PhotoIdentity>
+      : null,
+    imageProcessing: migrated.config,
+    imageProcessingError: migrated.error
+      ?? (typeof item["imageProcessingError"] === "string" ? item["imageProcessingError"] : null),
+    sourceVersion: typeof item["sourceVersion"] === "string" ? item["sourceVersion"] : null,
+    ...(item["missing"] === true ? { missing: true } : {})
+  }
+}
+
 /** 从本地会话恢复队列；损坏数据仅回退为空队列，不影响工作台启动。 */
 const readPersistedSnapshot = (): QueueSnapshot => {
   try {
@@ -54,7 +90,9 @@ const readPersistedSnapshot = (): QueueSnapshot => {
     if (parsed === null || typeof parsed !== "object") return EMPTY_SNAPSHOT
     const record = parsed as Record<string, unknown>
     if (!Array.isArray(record["items"])) return EMPTY_SNAPSHOT
-    const items = record["items"].filter(isPersistedQueueItem)
+    const items = record["items"]
+      .map(normalizePersistedQueueItem)
+      .filter((item): item is QueueItem => item !== null)
     const validIds = new Set(items.map((item) => item.id))
     const activeItemId = typeof record["activeItemId"] === "string" && validIds.has(record["activeItemId"])
       ? record["activeItemId"]
@@ -113,6 +151,70 @@ const selectAvailableAfterMissing = (items: readonly QueueItem[], activeItemId: 
   return before?.id ?? null
 }
 
+/** 按字段组合并底片配置；只复制用户选中的组，未选中的每图覆盖保留。 */
+const mergeFilmProcessing = (
+  source: ImageProcessingConfig,
+  target: ImageProcessingConfig,
+  fields: ReadonlySet<FilmSyncField>
+): ImageProcessingConfig => {
+  const result = JSON.parse(JSON.stringify(target)) as unknown as {
+    -readonly [K in keyof ImageProcessingConfig]: ImageProcessingConfig[K]
+  }
+  if (fields.has("lightSource") || fields.has("filmBase") || fields.has("density")) {
+    const sourceNegative = source.negative
+    const targetNegative = result.negative ?? (sourceNegative === null || sourceNegative === undefined
+      ? null
+      : JSON.parse(JSON.stringify(sourceNegative)))
+    if (targetNegative !== null && sourceNegative !== null && sourceNegative !== undefined) {
+      result.negative = {
+        ...targetNegative,
+        ...((fields.has("lightSource") || fields.has("filmBase")) ? { calibrationSpaceKey: sourceNegative.calibrationSpaceKey ?? null } : {}),
+        ...(fields.has("lightSource") && sourceNegative.lightSource !== undefined
+          ? { lightSource: JSON.parse(JSON.stringify(sourceNegative.lightSource)) }
+          : {}),
+        ...(fields.has("filmBase") && sourceNegative.filmBase !== undefined
+          ? { filmBase: JSON.parse(JSON.stringify(sourceNegative.filmBase)) }
+          : {}),
+        ...(fields.has("density") && sourceNegative.density !== undefined
+          ? { density: JSON.parse(JSON.stringify(sourceNegative.density)) }
+          : {})
+      }
+    }
+  }
+  if (fields.has("positive") || fields.has("curves")) {
+    const sourcePositive = source.positive
+    const targetPositive = result.positive ?? {}
+    result.positive = {
+      ...targetPositive,
+      ...(fields.has("positive") && sourcePositive !== undefined && sourcePositive !== null
+        ? {
+          ...(sourcePositive.exposureEv !== undefined ? { exposureEv: sourcePositive.exposureEv } : {}),
+          ...(sourcePositive.rgbBalanceEv !== undefined
+            ? { rgbBalanceEv: [...sourcePositive.rgbBalanceEv] as [number, number, number] } : {}),
+          ...(sourcePositive.blackPoint !== undefined ? { blackPoint: sourcePositive.blackPoint } : {}),
+          ...(sourcePositive.whitePoint !== undefined ? { whitePoint: sourcePositive.whitePoint } : {}),
+          ...(sourcePositive.saturation !== undefined ? { saturation: sourcePositive.saturation } : {})
+        }
+        : {}),
+      ...(fields.has("curves") && sourcePositive !== undefined && sourcePositive !== null
+        ? {
+          ...(sourcePositive.masterCurve !== undefined ? { masterCurve: cloneCurve(sourcePositive.masterCurve) } : {}),
+          ...(sourcePositive.redCurve !== undefined ? { redCurve: cloneCurve(sourcePositive.redCurve) } : {}),
+          ...(sourcePositive.greenCurve !== undefined ? { greenCurve: cloneCurve(sourcePositive.greenCurve) } : {}),
+          ...(sourcePositive.blueCurve !== undefined ? { blueCurve: cloneCurve(sourcePositive.blueCurve) } : {})
+        }
+        : {})
+    }
+  }
+  if (fields.has("sourceGeometry") && source.sourceGeometry !== undefined) {
+    result.sourceGeometry = JSON.parse(JSON.stringify(source.sourceGeometry))
+  }
+  return result
+}
+
+const cloneCurve = (curve: MonotonicCurve | null): MonotonicCurve | null =>
+  curve === null ? null : JSON.parse(JSON.stringify(curve)) as MonotonicCurve
+
 const removeItemsFromSnapshot = (snapshot: QueueSnapshot, ids: ReadonlySet<string>): QueueSnapshot => {
   if (ids.size === 0) return snapshot
   const items = snapshot.items.filter((item) => !ids.has(item.id))
@@ -140,12 +242,15 @@ const neighborIds = (snapshot: QueueSnapshot, id: string, side: "left" | "right"
  */
 export const useQueue = (): QueueController => {
   const snapshotRef = useRef<QueueSnapshot>(readPersistedSnapshot())
-  const undoStackRef = useRef<QueueSnapshot[]>([])
-  const redoStackRef = useRef<QueueSnapshot[]>([])
+  // 历史条目携带全局序号与动作描述，供工作台在队列/设置两套历史间按最近操作协调 ⌘Z。
+  const undoStackRef = useRef<Array<{ snapshot: QueueSnapshot; meta: HistoryEntryMeta }>>([])
+  const redoStackRef = useRef<Array<{ snapshot: QueueSnapshot; meta: HistoryEntryMeta }>>([])
   const [items, setItems] = useState<readonly QueueItem[]>(() => snapshotRef.current.items)
   const [activeItemId, setActiveItemId] = useState<string | null>(() => snapshotRef.current.activeItemId)
   const [checkedItemIds, setCheckedItemIds] = useState<readonly string[]>(() => snapshotRef.current.checkedItemIds)
   const [lastImportResult, setLastImportResult] = useState<ImportResult | null>(null)
+  /** 最近一次提交的合并标签；相邻同标签手势共用一条撤销历史。 */
+  const lastHistoryTagRef = useRef<string | null>(null)
   // 历史实际存放在 ref，revision 仅用于让 canUndo/canRedo 同步重渲染。
   const [, setHistoryRevision] = useState(0)
   const isBrowserMode = window.desktop === undefined
@@ -157,15 +262,26 @@ export const useQueue = (): QueueController => {
     setCheckedItemIds(next.checkedItemIds)
   }, [])
 
-  const commit = useCallback((mutate: (snapshot: QueueSnapshot) => QueueSnapshot, trackHistory = true): void => {
+  const commit = useCallback((
+    mutate: (snapshot: QueueSnapshot) => QueueSnapshot,
+    trackHistory = true,
+    description = "队列操作",
+    historyTag?: string
+  ): void => {
     const previous = snapshotRef.current
     const next = mutate(previous)
     if (snapshotsEqual(previous, next)) return
     if (trackHistory) {
-      undoStackRef.current = [...undoStackRef.current, cloneSnapshot(previous)].slice(-HISTORY_LIMIT)
+      const coalesce = historyTag !== undefined && historyTag === lastHistoryTagRef.current
+      if (!coalesce) {
+        const meta: HistoryEntryMeta = { seq: nextHistorySeq(), description }
+        undoStackRef.current = [...undoStackRef.current, { snapshot: cloneSnapshot(previous), meta }]
+          .slice(-HISTORY_LIMIT)
+      }
       redoStackRef.current = []
       setHistoryRevision((version) => version + 1)
     }
+    lastHistoryTagRef.current = historyTag ?? null
     syncSnapshot(next)
   }, [syncSnapshot])
 
@@ -263,13 +379,16 @@ export const useQueue = (): QueueController => {
       textOverride: null,
       presetId: null,
       identityOverride: null,
+      imageProcessing: null,
+      imageProcessingError: null,
+      sourceVersion: null,
       missing: false
     }))
     commit((previous) => ({
       items: [...previous.items, ...added],
       activeItemId: previous.items.length === 0 ? added[0]!.id : previous.activeItemId,
       checkedItemIds: previous.checkedItemIds
-    }))
+    }), true, "导入图片")
   }, [commit])
 
   /** Electron 模式使用原生选择器；浏览器开发模式回退到引擎样片。 */
@@ -343,11 +462,11 @@ export const useQueue = (): QueueController => {
   }, [commit])
 
   const removeItem = useCallback((id: string): void => {
-    commit((previous) => removeItemsFromSnapshot(previous, new Set([id])))
+    commit((previous) => removeItemsFromSnapshot(previous, new Set([id])), true, "删除图片")
   }, [commit])
 
   const removeChecked = useCallback((): void => {
-    commit((previous) => removeItemsFromSnapshot(previous, new Set(previous.checkedItemIds)))
+    commit((previous) => removeItemsFromSnapshot(previous, new Set(previous.checkedItemIds)), true, "删除已选图片")
   }, [commit])
 
   const removeOthers = useCallback((id: string): void => {
@@ -360,15 +479,15 @@ export const useQueue = (): QueueController => {
         activeItemId: id,
         checkedItemIds: previous.checkedItemIds.includes(id) ? [id] : []
       }
-    })
+    }, true, "删除其他图片")
   }, [commit])
 
   const removeLeftOf = useCallback((id: string): void => {
-    commit((previous) => removeItemsFromSnapshot(previous, neighborIds(previous, id, "left")))
+    commit((previous) => removeItemsFromSnapshot(previous, neighborIds(previous, id, "left")), true, "删除左侧图片")
   }, [commit])
 
   const removeRightOf = useCallback((id: string): void => {
-    commit((previous) => removeItemsFromSnapshot(previous, neighborIds(previous, id, "right")))
+    commit((previous) => removeItemsFromSnapshot(previous, neighborIds(previous, id, "right")), true, "删除右侧图片")
   }, [commit])
 
   const reorder = useCallback((id: string, toIndex: number): void => {
@@ -381,7 +500,7 @@ export const useQueue = (): QueueController => {
       const [moved] = items.splice(fromIndex, 1)
       items.splice(targetIndex, 0, moved!)
       return { ...previous, items }
-    })
+    }, true, "拖动排序")
   }, [commit])
 
   const sortByName = useCallback((direction: "asc" | "desc"): void => {
@@ -395,28 +514,30 @@ export const useQueue = (): QueueController => {
       // 已是目标顺序时不产生新数组引用，避免留下无意义的撤销历史。
       const sameOrder = items.every((item, index) => item === previous.items[index])
       return sameOrder ? previous : { ...previous, items }
-    })
+    }, true, "按文件名排序")
   }, [commit])
 
   const clear = useCallback((): void => {
-    commit(() => EMPTY_SNAPSHOT)
+    commit(() => EMPTY_SNAPSHOT, true, "清空队列")
   }, [commit])
 
   const undo = useCallback((): void => {
-    const previous = undoStackRef.current.at(-1)
-    if (previous === undefined) return
+    const entry = undoStackRef.current.at(-1)
+    if (entry === undefined) return
     undoStackRef.current = undoStackRef.current.slice(0, -1)
-    redoStackRef.current = [...redoStackRef.current, cloneSnapshot(snapshotRef.current)].slice(-HISTORY_LIMIT)
-    syncSnapshot(cloneSnapshot(previous))
+    const meta: HistoryEntryMeta = { seq: entry.meta.seq, description: entry.meta.description }
+    redoStackRef.current = [...redoStackRef.current, { snapshot: cloneSnapshot(snapshotRef.current), meta }].slice(-HISTORY_LIMIT)
+    syncSnapshot(cloneSnapshot(entry.snapshot))
     setHistoryRevision((version) => version + 1)
   }, [syncSnapshot])
 
   const redo = useCallback((): void => {
-    const next = redoStackRef.current.at(-1)
-    if (next === undefined) return
+    const entry = redoStackRef.current.at(-1)
+    if (entry === undefined) return
     redoStackRef.current = redoStackRef.current.slice(0, -1)
-    undoStackRef.current = [...undoStackRef.current, cloneSnapshot(snapshotRef.current)].slice(-HISTORY_LIMIT)
-    syncSnapshot(cloneSnapshot(next))
+    const meta: HistoryEntryMeta = { seq: entry.meta.seq, description: entry.meta.description }
+    undoStackRef.current = [...undoStackRef.current, { snapshot: cloneSnapshot(snapshotRef.current), meta }].slice(-HISTORY_LIMIT)
+    syncSnapshot(cloneSnapshot(entry.snapshot))
     setHistoryRevision((version) => version + 1)
   }, [syncSnapshot])
 
@@ -439,7 +560,7 @@ export const useQueue = (): QueueController => {
         ...previous,
         items: previous.items.map((item) => targetIds.has(item.id) ? { ...item, presetId } : item)
       }
-    })
+    }, true, presetId === null ? "移除拍摄信息预设" : "应用拍摄信息预设")
   }, [commit, resolveScopeIds])
 
   const clearPresetFromScope = useCallback((scope: OperationScope): void => {
@@ -450,15 +571,76 @@ export const useQueue = (): QueueController => {
     commit((previous) => ({
       ...previous,
       items: previous.items.map((item) => item.presetId === presetId ? { ...item, presetId: null } : item)
-    }))
+    }), true, "解除预设绑定")
   }, [commit])
 
   const setActiveTextOverride = useCallback((text: string | null): void => {
     commit((previous) => ({
       ...previous,
       items: previous.items.map((item) => item.id === previous.activeItemId ? { ...item, textOverride: text } : item)
-    }))
+    }), true, text === null ? "清除快捷文字" : "修改快捷文字")
   }, [commit])
+
+  /**
+   * 每图底片配置是队列快照的一部分，因此和每图文字/身份一样共享同一撤销历史。
+   * historyTag 让一次曲线拖动只留下一条历史（栈顶是拖动前快照）。
+   */
+  const setActiveImageProcessing = useCallback((
+    config: ImageProcessingConfig | null,
+    options?: { readonly historyTag?: string; readonly description?: string }
+  ): void => {
+    const cloned = cloneImageProcessing(config)
+    commit((previous) => ({
+      ...previous,
+      items: previous.items.map((item) => item.id === previous.activeItemId
+        ? { ...item, imageProcessing: cloned, imageProcessingError: null }
+        : item)
+    }), true, options?.description ?? "修改底片处理", options?.historyTag)
+  }, [commit])
+
+  const recordSourceVersion = useCallback((id: string, version: string): void => {
+    const previous = snapshotRef.current
+    const item = previous.items.find((candidate) => candidate.id === id)
+    if (item === undefined || item.sourceVersion === version) return
+    // 引擎事实更新不结束用户正在进行的编辑手势，也不新增撤销历史。
+    syncSnapshot({ ...previous, items: previous.items.map((candidate) => candidate.id === id
+      ? { ...candidate, sourceVersion: version } : candidate) })
+  }, [syncSnapshot])
+
+  const getEffectiveImageProcessing = useCallback((id: string): ImageProcessingConfig | null => {
+    const item = snapshotRef.current.items.find((candidate) => candidate.id === id)
+    return cloneImageProcessing(item?.imageProcessing)
+  }, [])
+
+  /**
+   * 只合并指定字段组；目标已有配置时保留其他组，新建目标以源配置为骨架。
+   * 每个目标独立深复制，后续修改任意一张不会污染其他图。
+   */
+  const syncImageProcessing = useCallback((
+    scope: OperationScope,
+    source: ImageProcessingConfig,
+    fields: readonly FilmSyncField[]
+  ): void => {
+    if (fields.length === 0) return
+    const selected = new Set(fields)
+    const sourceClone = cloneImageProcessing(source)
+    if (sourceClone === null) return
+    commit((previous) => {
+      const targetIds = new Set(resolveScopeIds(scope, previous))
+      let changed = false
+      const items = previous.items.map((item) => {
+        if (!targetIds.has(item.id) || item.imageProcessingError != null) return item
+        const defaults = createDefaultFilmProcessing(item.sourcePath)
+        if (defaults === null || defaults.inputMode !== sourceClone.inputMode) return item
+        const base = cloneImageProcessing(item.imageProcessing) ?? defaults
+        const next = mergeFilmProcessing(sourceClone, base, selected)
+        if (JSON.stringify(next) === JSON.stringify(item.imageProcessing)) return item
+        changed = true
+        return { ...item, imageProcessing: next, imageProcessingError: null }
+      })
+      return changed ? { ...previous, items } : previous
+    }, true, "同步底片配置")
+  }, [commit, resolveScopeIds])
 
   const setActiveIdentityOverride = useCallback((patch: Partial<PhotoIdentity>): void => {
     commit((previous) => ({
@@ -469,15 +651,94 @@ export const useQueue = (): QueueController => {
         const cleaned = Object.fromEntries(Object.entries(merged).filter(([, value]) => value !== "")) as Partial<PhotoIdentity>
         return { ...item, identityOverride: Object.keys(cleaned).length === 0 ? null : cleaned }
       })
-    }))
+    }), true, "修改拍摄信息覆盖")
   }, [commit])
 
   const clearActiveIdentityOverride = useCallback((): void => {
     commit((previous) => ({
       ...previous,
       items: previous.items.map((item) => item.id === previous.activeItemId ? { ...item, identityOverride: null } : item)
-    }))
+    }), true, "清除拍摄信息覆盖")
   }, [commit])
+
+  // ---- 丢失文件重定位（U11） ------------------------------------------------
+
+  /**
+   * 将单个丢失条目重新定位到新路径：保留条目身份（id）、文字/预设/身份覆盖、
+   * 排序与选中状态，仅更新文件路径并按 HEIC 规则重建工作文件。
+   */
+  const relocateItem = useCallback(async (id: string, newPath: string): Promise<boolean> => {
+    if (newPath.trim().length === 0) return false
+    if (!snapshotRef.current.items.some((item) => item.id === id)) return false
+    const [resolved] = await resolveHeicPaths([newPath])
+    const working = resolved?.resolved ?? null
+    if (working === null) return false
+    commit((previous) => ({
+      ...previous,
+      items: previous.items.map((item) => item.id === id
+        ? {
+          ...item,
+          filePath: working,
+          sourcePath: newPath,
+          sourceFormat: extractFormat(newPath),
+          converted: resolved?.converted ?? false,
+          workingFormat: resolved?.converted === true ? "png" : extractFormat(newPath),
+          sourceVersion: null,
+          missing: false
+        }
+        : item)
+    }), true, "重新定位源文件")
+    return true
+  }, [commit])
+
+  /**
+   * 文件夹级重定位：按文件名在候选路径中查找丢失条目。
+   * 同名候选唯一时自动绑定；出现多个同名候选时不静默绑定，
+   * 在 ambiguous 中返回候选路径供用户逐个确认（U11 明确要求）。
+   */
+  const relocateMissingFromFolder = useCallback(async (candidatePaths: readonly string[]): Promise<{
+    readonly relocated: number
+    /** 同名多个候选：携带具体条目 id，供界面逐条人工绑定（同名条目之间不串行）。 */
+    readonly ambiguous: readonly { readonly itemId: string; readonly fileName: string; readonly candidates: readonly string[] }[]
+    readonly unresolved: readonly string[]
+  }> => {
+    const missingItems = snapshotRef.current.items.filter((item) => item.missing === true)
+    if (missingItems.length === 0) {
+      return { relocated: 0, ambiguous: [], unresolved: [] }
+    }
+    const byName = new Map<string, string[]>()
+    for (const candidate of candidatePaths) {
+      const name = candidate.replaceAll("\\", "/").split("/").pop() ?? candidate
+      const bucket = byName.get(name)
+      if (bucket === undefined) {
+        byName.set(name, [candidate])
+      } else {
+        bucket.push(candidate)
+      }
+    }
+    const resolved = new Map<string, string>()
+    const ambiguous: { itemId: string; fileName: string; candidates: string[] }[] = []
+    const unresolved: string[] = []
+    for (const item of missingItems) {
+      const candidates = byName.get(item.fileName)
+      if (candidates === undefined) {
+        unresolved.push(item.fileName)
+      } else if (candidates.length === 1) {
+        resolved.set(item.id, candidates[0]!)
+      } else {
+        ambiguous.push({ itemId: item.id, fileName: item.fileName, candidates })
+      }
+    }
+    for (const [id, newPath] of resolved) {
+      await relocateItem(id, newPath)
+    }
+    return { relocated: resolved.size, ambiguous, unresolved }
+  }, [relocateItem])
+
+  /** 更新单条目到用户明确选择的重定位候选（同名冲突时的人工确认入口）。 */
+  const relocateItemToCandidate = useCallback(async (id: string, candidatePath: string): Promise<boolean> => {
+    return relocateItem(id, candidatePath)
+  }, [relocateItem])
 
   const getEffectiveText = useCallback((id: string, globalText: string): string => {
     const item = snapshotRef.current.items.find((candidate) => candidate.id === id)
@@ -519,6 +780,8 @@ export const useQueue = (): QueueController => {
   const activeItem = items.find((item) => item.id === activeItemId) ?? null
   const activeFilePath = activeItem === null || activeItem.missing === true ? null : activeItem.filePath
   const activeTextOverride = activeItem?.textOverride ?? null
+  const activeImageProcessing = activeItem?.imageProcessing ?? null
+  const activeImageProcessingError = activeItem?.imageProcessingError ?? null
 
   return {
     items,
@@ -528,11 +791,15 @@ export const useQueue = (): QueueController => {
     activeItem,
     activeFilePath,
     activeTextOverride,
+    activeImageProcessing,
+    activeImageProcessingError,
     isBrowserMode,
     lastImportResult,
     missingCount: items.filter((item) => item.missing === true).length,
     canUndo: undoStackRef.current.length > 0,
     canRedo: redoStackRef.current.length > 0,
+    topUndo: undoStackRef.current.at(-1)?.meta ?? null,
+    topRedo: redoStackRef.current.at(-1)?.meta ?? null,
     addImages,
     addImageFiles,
     addImageFolder,
@@ -552,6 +819,10 @@ export const useQueue = (): QueueController => {
     undo,
     redo,
     setActiveTextOverride,
+    setActiveImageProcessing,
+    recordSourceVersion,
+    getEffectiveImageProcessing,
+    syncImageProcessing,
     getEffectiveText,
     assignPresetToScope,
     clearPresetFromScope,
@@ -559,7 +830,10 @@ export const useQueue = (): QueueController => {
     setActiveIdentityOverride,
     clearActiveIdentityOverride,
     getEffectiveIdentity,
-    getIdentitySources
+    getIdentitySources,
+    relocateItem,
+    relocateMissingFromFolder,
+    relocateItemToCandidate
   }
 }
 

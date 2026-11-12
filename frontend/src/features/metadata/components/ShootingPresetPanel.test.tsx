@@ -64,7 +64,7 @@ const renderPanel = (overrides: Partial<PanelProps> = {}): { props: PanelProps &
 
 /** 进入新建/编辑表单。 */
 const startCreate = async (): Promise<void> => {
-  fireEvent.click(screen.getByRole("button", { name: "新建摄影预设" }))
+  fireEvent.click(screen.getByRole("button", { name: "引用资料库新建预设" }))
 }
 
 /** 在画幅下拉中选择指定画幅。 */
@@ -89,7 +89,7 @@ describe("ShootingPresetPanel（集成）", () => {
     })
     selectCaptureFormat("6x10")
 
-    fireEvent.click(screen.getByRole("button", { name: "保存" }))
+    fireEvent.click(screen.getByRole("button", { name: "保存（不应用）" }))
 
     expect(props.onSavePreset).toHaveBeenCalledTimes(1)
     const saved = props.onSavePreset.mock.calls[0]![0] as ShootingPreset
@@ -106,7 +106,7 @@ describe("ShootingPresetPanel（集成）", () => {
       target: { value: "超宽 6x12" }
     })
     selectCaptureFormat("6x12")
-    fireEvent.click(screen.getByRole("button", { name: "保存" }))
+    fireEvent.click(screen.getByRole("button", { name: "保存（不应用）" }))
     expect((props.onSavePreset.mock.calls[0]![0] as ShootingPreset).captureFormat).toBe("6x12")
   })
 
@@ -114,7 +114,7 @@ describe("ShootingPresetPanel（集成）", () => {
     const { props } = renderPanel()
     await startCreate()
     selectCaptureFormat("135")
-    fireEvent.click(screen.getByRole("button", { name: "保存" }))
+    fireEvent.click(screen.getByRole("button", { name: "保存（不应用）" }))
     expect(screen.getByText("预设名称不能为空。")).toBeTruthy()
     expect(props.onSavePreset).not.toHaveBeenCalled()
   })
@@ -125,7 +125,7 @@ describe("ShootingPresetPanel（集成）", () => {
     fireEvent.change(screen.getByPlaceholderText("例如：135 Portra 日常"), {
       target: { value: "无画幅预设" }
     })
-    fireEvent.click(screen.getByRole("button", { name: "保存" }))
+    fireEvent.click(screen.getByRole("button", { name: "保存（不应用）" }))
     expect(screen.getByText("请选择拍摄画幅。")).toBeTruthy()
     expect(props.onSavePreset).not.toHaveBeenCalled()
   })
@@ -144,7 +144,7 @@ describe("ShootingPresetPanel（集成）", () => {
     const nameInput = screen.getByPlaceholderText("例如：135 Portra 日常") as HTMLInputElement
     expect(nameInput.value).toBe("135 Portra 日常")
     fireEvent.change(nameInput, { target: { value: "改名后的预设" } })
-    fireEvent.click(screen.getByRole("button", { name: "保存" }))
+    fireEvent.click(screen.getByRole("button", { name: "保存（不应用）" }))
     expect((props.onSavePreset.mock.calls[0]![0] as ShootingPreset).name).toBe("改名后的预设")
   })
 

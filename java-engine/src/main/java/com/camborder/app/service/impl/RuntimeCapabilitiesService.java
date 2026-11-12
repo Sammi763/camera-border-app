@@ -16,6 +16,7 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
@@ -33,6 +34,8 @@ public final class RuntimeCapabilitiesService implements CapabilitiesService {
 
     private static final String TWELVEMONKEYS_VERSION = "3.14.0";
     private static final String EXIFTOOL_VERSION = "13.59";
+    private static final String LIBRAW_VERSION = "0.22.3";
+    private static final String LIBRAW_HELPER_VERSION = "1.1.0";
     private static final String TWELVEMONKEYS_SHA256 =
             "8625f8f5c0cdcbb4489c3b45117af0f2336e278e3de9a6ec1ee073a218acec42";
 
@@ -40,12 +43,14 @@ public final class RuntimeCapabilitiesService implements CapabilitiesService {
     private final String componentManifestPath;
     private final String heicDecoderAvailable;
     private final String bundledFontsDirectory;
+    private final String librawHelperPath;
     private final ObjectMapper objectMapper;
     private final Map<String, String> componentChecksums = new LinkedHashMap<>();
     private boolean tiffPluginAvailable;
     private boolean twelveMonkeysManifestValid;
     private boolean componentManifestValid;
     private ComponentProbe exifToolProbe;
+    private LibRawProbe librawProbe;
 
     @Autowired
     public RuntimeCapabilitiesService(
@@ -53,23 +58,32 @@ public final class RuntimeCapabilitiesService implements CapabilitiesService {
             @Value("${CAMBORDER_COMPONENT_MANIFEST:}") final String componentManifestPath,
             @Value("${CAMBORDER_HEIC_DECODER_AVAILABLE:false}") final String heicDecoderAvailable,
             @Value("${CAMBORDER_BUNDLED_FONTS_DIR:}") final String bundledFontsDirectory,
+            @Value("${CAMBORDER_LIBRAW_HELPER_PATH:}") final String librawHelperPath,
             final ObjectMapper objectMapper) {
         this.exifToolPath = exifToolPath == null ? "" : exifToolPath.trim();
         this.componentManifestPath = componentManifestPath == null ? "" : componentManifestPath.trim();
         this.heicDecoderAvailable = heicDecoderAvailable == null ? "false" : heicDecoderAvailable.trim();
         this.bundledFontsDirectory = bundledFontsDirectory == null ? "" : bundledFontsDirectory.trim();
+        this.librawHelperPath = librawHelperPath == null ? "" : librawHelperPath.trim();
         this.objectMapper = objectMapper;
+    }
+
+    /** 保留阶段五测试和嵌入调用使用的五参数构造器；LibRaw helper 默认不可用。 */
+    public RuntimeCapabilitiesService(final String exifToolPath, final String componentManifestPath,
+                                      final String heicDecoderAvailable, final String bundledFontsDirectory,
+                                      final ObjectMapper objectMapper) {
+        this(exifToolPath, componentManifestPath, heicDecoderAvailable, bundledFontsDirectory, "", objectMapper);
     }
 
     /** 兼容不使用 Spring 的能力探测测试。 */
     public RuntimeCapabilitiesService(final String exifToolPath) {
-        this(exifToolPath, "", "false", "", new ObjectMapper());
+        this(exifToolPath, "", "false", "", "", new ObjectMapper());
     }
 
     /** 保留阶段五测试和嵌入调用使用的三参数构造器。 */
     public RuntimeCapabilitiesService(final String exifToolPath, final String componentManifestPath,
                                       final ObjectMapper objectMapper) {
-        this(exifToolPath, componentManifestPath, "false", "", objectMapper);
+        this(exifToolPath, componentManifestPath, "false", "", "", objectMapper);
     }
 
     @PostConstruct
@@ -83,12 +97,16 @@ public final class RuntimeCapabilitiesService implements CapabilitiesService {
                 && ImageIO.getImageWritersByFormatName("tiff").hasNext();
         loadComponentManifest();
         exifToolProbe = probeExifTool();
+        librawProbe = probeLibRaw();
     }
 
     @Override
     public CapabilitiesResponse snapshot() {
         if (exifToolProbe == null) {
             exifToolProbe = probeExifTool();
+        }
+        if (librawProbe == null) {
+            librawProbe = probeLibRaw();
         }
         final boolean metadata = exifToolProbe.available;
         final boolean twelveMonkeysAvailable = tiffPluginAvailable && twelveMonkeysManifestValid;
@@ -102,6 +120,9 @@ public final class RuntimeCapabilitiesService implements CapabilitiesService {
         components.put("exiftool", new CapabilitiesResponse.Component(
                 metadata, exifToolProbe.version, "GPL-1.0-or-later OR Artistic-1.0-Perl",
                 checksum("exiftool", null), exifToolProbe.reason));
+        components.put("libraw", new CapabilitiesResponse.Component(
+                librawProbe.available, librawProbe.available ? LIBRAW_VERSION : null,
+                "LGPL-2.1-only OR CDDL-1.0", librawProbe.sha256, librawProbe.reason));
         FontProbe fonts = probeFonts();
         components.put("fonts", new CapabilitiesResponse.Component(
                 fonts.available, null, "SIL OFL 1.1", null, fonts.reason));
@@ -136,6 +157,30 @@ public final class RuntimeCapabilitiesService implements CapabilitiesService {
         tiers.put("custom", new CapabilitiesResponse.TierCapability(
                 metadata, "jpeg", unavailable));
         response.setTiers(tiers);
+
+        final CapabilitiesResponse.FilmDigitizationCapability film =
+                new CapabilitiesResponse.FilmDigitizationCapability();
+        // T10 起预览/分析可用；真实 RAW 仍取决于 LibRaw helper，导出母版由 T11 完成。
+        film.setAvailable(librawProbe.available || twelveMonkeysAvailable);
+        film.setDecoder("libraw");
+        film.setVersion(LIBRAW_VERSION);
+        film.setLicense("LGPL-2.1-only OR CDDL-1.0");
+        film.setSha256(librawProbe.sha256);
+        final java.util.List<String> filmInputs = new java.util.ArrayList<>();
+        if (librawProbe.available) filmInputs.add("sensor-raw");
+        if (twelveMonkeysAvailable) filmInputs.add("linear-tiff");
+        film.setInputModes(filmInputs);
+        film.setAnalysisStages(java.util.List.of("raw-linear", "base-positive", "current-positive"));
+        final Map<String, Boolean> filmOutputs = new LinkedHashMap<>();
+        filmOutputs.put("srgb-jpeg", metadata);
+        filmOutputs.put("tiff16-srgb", twelveMonkeysAvailable && metadata);
+        filmOutputs.put("tiff16-rec2020", twelveMonkeysAvailable && metadata);
+        film.setOutputs(filmOutputs);
+        film.setReason(librawProbe.available
+                ? "底片预览/分析可用；真实 RAW 解码组件已就绪；浮点合成支持带框16-bit sRGB与线性Rec.2020母版"
+                : twelveMonkeysAvailable ? "线性 TIFF 底片预览/分析可用；真实 RAW 需要随包 LibRaw helper"
+                : "底片解码组件不可用");
+        response.setFilmDigitization(film);
         return response;
     }
 
@@ -153,6 +198,116 @@ public final class RuntimeCapabilitiesService implements CapabilitiesService {
         result.setDpi(available && metadata);
         result.setReason(available && metadata ? null : "输出组件或 ExifTool 不可用");
         return result;
+    }
+
+    /**
+     * LibRaw helper 探测：必须存在、可执行、SHA-256 与随包 helper.json 一致，
+     * 且 --version 输出匹配固定版本。缺失/篡改/错误版本一律 fail-closed。
+     */
+    private LibRawProbe probeLibRaw() {
+        if (librawHelperPath.isBlank()) {
+            return new LibRawProbe(false, null, "未配置随包 LibRaw helper");
+        }
+        final Path helper;
+        try {
+            helper = Path.of(librawHelperPath);
+        } catch (RuntimeException exception) {
+            return new LibRawProbe(false, null, "随包 LibRaw helper 路径非法");
+        }
+        if (!Files.isRegularFile(helper) || !Files.isExecutable(helper)) {
+            return new LibRawProbe(false, null, "随包 LibRaw helper 不存在或不可执行");
+        }
+        final Path manifest = helper.getParent() == null
+                ? helper.resolveSibling("helper.json")
+                : helper.getParent().resolve("helper.json");
+        if (!Files.isRegularFile(manifest) || !Files.isReadable(manifest)) {
+            return new LibRawProbe(false, null, "随包 LibRaw helper 清单缺失");
+        }
+        try {
+            final JsonNode root = objectMapper.readTree(manifest.toFile());
+            final JsonNode entry = root == null ? null : root.get("component");
+            if (entry == null || !"libraw".equals(entry.asText(""))) {
+                return new LibRawProbe(false, null, "随包 LibRaw helper 清单组件不匹配");
+            }
+            if (!LIBRAW_HELPER_VERSION.equals(root.path("helperVersion").asText(""))) {
+                return new LibRawProbe(false, null, "随包 LibRaw helper 版本清单不匹配");
+            }
+            if (!root.path("librawVersion").asText("").startsWith(LIBRAW_VERSION)) {
+                return new LibRawProbe(false, null, "随包 LibRaw 版本清单不匹配");
+            }
+            final String expectedChecksum = root.path("binarySha256").asText("");
+            if (expectedChecksum.isBlank()) {
+                return new LibRawProbe(false, null, "随包 LibRaw helper 清单缺少校验和");
+            }
+            final String actualChecksum = sha256File(helper);
+            if (!expectedChecksum.equalsIgnoreCase(actualChecksum)) {
+                return new LibRawProbe(false, null, "随包 LibRaw helper 校验和不匹配");
+            }
+            if (isMac() && !expectedArchitecture().equals(root.path("architecture").asText(""))) {
+                return new LibRawProbe(false, actualChecksum, "随包 LibRaw helper 架构不匹配");
+            }
+            final String versionOutput = runVersionProbe(helper);
+            if (versionOutput == null
+                    || !versionOutput.startsWith("film-raw-helper " + LIBRAW_HELPER_VERSION
+                    + " libraw " + LIBRAW_VERSION)) {
+                return new LibRawProbe(false, actualChecksum, "随包 LibRaw helper 版本输出不匹配");
+            }
+            return new LibRawProbe(true, actualChecksum, null);
+        } catch (IOException | RuntimeException exception) {
+            return new LibRawProbe(false, null, "随包 LibRaw helper 清单或版本探测失败");
+        }
+    }
+
+    private String runVersionProbe(final Path helper) {
+        try {
+            final Process process = new ProcessBuilder(helper.toString(), "--version")
+                    .redirectErrorStream(true)
+                    .start();
+            if (!process.waitFor(2, TimeUnit.SECONDS)) {
+                process.destroyForcibly();
+                return null;
+            }
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+                    process.getInputStream(), StandardCharsets.UTF_8))) {
+                return reader.readLine();
+            }
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            return null;
+        } catch (IOException exception) {
+            return null;
+        }
+    }
+
+    private static String expectedArchitecture() {
+        final String arch = System.getProperty("os.arch", "").toLowerCase(java.util.Locale.ROOT);
+        if (arch.contains("aarch64") || arch.contains("arm64")) return "macos-arm64";
+        if (arch.contains("x86_64") || arch.contains("amd64")) return "macos-x64";
+        return "unsupported";
+    }
+
+    private static boolean isMac() {
+        return System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("mac");
+    }
+
+    private static String sha256File(final Path file) throws IOException {
+        try {
+            final MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            try (java.io.InputStream input = Files.newInputStream(file)) {
+                final byte[] buffer = new byte[1024 * 1024];
+                int read;
+                while ((read = input.read(buffer)) >= 0) {
+                    digest.update(buffer, 0, read);
+                }
+            }
+            final StringBuilder result = new StringBuilder(64);
+            for (byte value : digest.digest()) {
+                result.append(String.format(java.util.Locale.ROOT, "%02x", value));
+            }
+            return result.toString();
+        } catch (java.security.NoSuchAlgorithmException exception) {
+            throw new IOException("SHA-256 unavailable", exception);
+        }
     }
 
     private ComponentProbe probeExifTool() {
@@ -300,6 +455,18 @@ public final class RuntimeCapabilitiesService implements CapabilitiesService {
         private ComponentProbe(final boolean available, final String version, final String reason) {
             this.available = available;
             this.version = version;
+            this.reason = reason;
+        }
+    }
+
+    private static final class LibRawProbe {
+        private final boolean available;
+        private final String sha256;
+        private final String reason;
+
+        private LibRawProbe(final boolean available, final String sha256, final String reason) {
+            this.available = available;
+            this.sha256 = sha256;
             this.reason = reason;
         }
     }

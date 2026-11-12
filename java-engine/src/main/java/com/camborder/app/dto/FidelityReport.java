@@ -15,6 +15,8 @@ import java.util.Map;
  */
 public final class FidelityReport {
 
+    private Map<String, long[]> outputClipping = new LinkedHashMap<>();
+    public Map<String, long[]> getOutputClipping() { return outputClipping; }
     private String phase;
     private String tier;
     private String format;
@@ -97,6 +99,16 @@ public final class FidelityReport {
         private boolean orientationApplied;
         private IccFacts icc;
         private MetadataFacts metadata;
+        /** 传感器有效位深（已知时）；与输出 bitDepth 分开，不能混写。 */
+        private Integer sensorBitDepth;
+        /** 工作数据类型（例如 float32）与处理尺寸。 */
+        private String workingDataType;
+        private Integer processingWidth;
+        private Integer processingHeight;
+        /** 底片模式的算法版本、配方签名与源版本；普通模式为 null。 */
+        private String algorithmVersion;
+        private String recipeSignature;
+        private String sourceVersion;
 
         public int getWidth() { return width; }
         public void setWidth(final int width) { this.width = width; }
@@ -122,6 +134,20 @@ public final class FidelityReport {
         public void setIcc(final IccFacts icc) { this.icc = icc; }
         public MetadataFacts getMetadata() { return metadata; }
         public void setMetadata(final MetadataFacts metadata) { this.metadata = metadata; }
+        public Integer getSensorBitDepth() { return sensorBitDepth; }
+        public void setSensorBitDepth(final Integer sensorBitDepth) { this.sensorBitDepth = sensorBitDepth; }
+        public String getWorkingDataType() { return workingDataType; }
+        public void setWorkingDataType(final String workingDataType) { this.workingDataType = workingDataType; }
+        public Integer getProcessingWidth() { return processingWidth; }
+        public void setProcessingWidth(final Integer processingWidth) { this.processingWidth = processingWidth; }
+        public Integer getProcessingHeight() { return processingHeight; }
+        public void setProcessingHeight(final Integer processingHeight) { this.processingHeight = processingHeight; }
+        public String getAlgorithmVersion() { return algorithmVersion; }
+        public void setAlgorithmVersion(final String algorithmVersion) { this.algorithmVersion = algorithmVersion; }
+        public String getRecipeSignature() { return recipeSignature; }
+        public void setRecipeSignature(final String recipeSignature) { this.recipeSignature = recipeSignature; }
+        public String getSourceVersion() { return sourceVersion; }
+        public void setSourceVersion(final String sourceVersion) { this.sourceVersion = sourceVersion; }
     }
 
     public static final class IccFacts {

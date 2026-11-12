@@ -71,6 +71,11 @@ public final class ImageMetadataPayload {
         return new ImageMetadataPayload(null, null, false, null, false, false);
     }
 
+    /** 只带目标 ICC 的输出 payload（底片母版/分享成品使用）。 */
+    public static ImageMetadataPayload iccOnly(final byte[] icc) {
+        return new ImageMetadataPayload(null, icc, true, null, false, icc != null && icc.length > 0);
+    }
+
     /** 从本地源图读取可搬运的 EXIF/ICC；读取失败不会抛出到导出主流程。 */
     public static ImageMetadataPayload read(final String sourcePath) {
         if (sourcePath == null || sourcePath.isBlank()) {

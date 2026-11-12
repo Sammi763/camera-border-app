@@ -1,0 +1,99 @@
+{
+  "schemaVersion": 1,
+  "components": {
+    "twelvemonkeys-imageio": {
+      "available": false,
+      "version": null,
+      "license": "BSD-3-Clause",
+      "sha256": null,
+      "reason": "TwelveMonkeys TIFF 插件或随包清单不可用"
+    },
+    "exiftool": {
+      "available": false,
+      "version": null,
+      "license": "GPL-1.0-or-later OR Artistic-1.0-Perl",
+      "sha256": null,
+      "reason": "未配置随包 ExifTool 路径"
+    },
+    "fonts": {
+      "available": false,
+      "version": null,
+      "license": "SIL OFL 1.1",
+      "sha256": null,
+      "reason": "未配置随包字体目录"
+    }
+  },
+  "input": {
+    "jpeg": true,
+    "png": true,
+    "tiff": false,
+    "heic": false,
+    "heif": false,
+    "rawEmbeddedJpeg": true
+  },
+  "output": {
+    "jpeg": {
+      "available": true,
+      "bitDepths": [
+        8
+      ],
+      "icc": false,
+      "exif": false,
+      "xmp": false,
+      "iptc": false,
+      "gps": false,
+      "dpi": false,
+      "reason": "输出组件或 ExifTool 不可用"
+    },
+    "png": {
+      "available": true,
+      "bitDepths": [
+        8,
+        16
+      ],
+      "icc": false,
+      "exif": false,
+      "xmp": false,
+      "iptc": false,
+      "gps": false,
+      "dpi": false,
+      "reason": "输出组件或 ExifTool 不可用"
+    },
+    "tiff": {
+      "available": false,
+      "bitDepths": [
+        8,
+        16
+      ],
+      "icc": false,
+      "exif": false,
+      "xmp": false,
+      "iptc": false,
+      "gps": false,
+      "dpi": false,
+      "reason": "输出组件或 ExifTool 不可用"
+    }
+  },
+  "tiers": {
+    "quick-share": {
+      "available": false,
+      "defaultFormat": "jpeg",
+      "reason": "ExifTool 随包组件不可用"
+    },
+    "standard-delivery": {
+      "available": false,
+      "defaultFormat": "jpeg",
+      "reason": "ExifTool 随包组件不可用"
+    },
+    "high-fidelity-archive": {
+      "available": false,
+      "defaultFormat": "tiff",
+      "reason": "ExifTool 随包组件不可用"
+    },
+    "custom": {
+      "available": false,
+      "defaultFormat": "jpeg",
+      "reason": "ExifTool 随包组件不可用"
+    }
+  }
+}

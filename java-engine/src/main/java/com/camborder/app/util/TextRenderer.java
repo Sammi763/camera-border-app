@@ -62,11 +62,25 @@ public final class TextRenderer {
      */
     public void draw(final BufferedImage canvas, final List<TextItem> texts,
                      final BorderConfig border, final int imageWidth, final int imageHeight) {
+        draw(canvas, texts, border, imageWidth, imageHeight, 1.0);
+    }
+
+    /**
+     * 按渲染比例缩放文字后绘制。
+     *
+     * 配方中的字号、边距、字距、行距、背景内边距、阴影偏移/模糊与描边宽度
+     * 都以全分辨率源图像素为语义基准；照片被等比缩小时必须按同一 renderScale
+     * 缩放，保证预览、档位导出与原图导出构图一致。renderScale=1 时行为不变。
+     */
+    public void draw(final BufferedImage canvas, final List<TextItem> texts,
+                     final BorderConfig border, final int imageWidth, final int imageHeight,
+                     final double renderScale) {
         if (texts == null || texts.isEmpty()) {
             return;
         }
+        final double scale = Double.isFinite(renderScale) && renderScale > 0 ? renderScale : 1.0;
 
-        int[] insets = BorderComposer.insets(border);
+        int[] insets = BorderComposer.insets(border, scale);
         int borderTop = insets[0];
         int borderBottom = insets[1];
         int borderLeft = insets[2];
@@ -99,7 +113,7 @@ public final class TextRenderer {
                 drawSingleText(graphics, text, placement, content,
                         imageX, imageY, imageWidth, imageHeight,
                         borderTop, borderBottom, borderLeft, borderRight,
-                        canvasWidth, canvasHeight);
+                        canvasWidth, canvasHeight, scale);
             }
         } finally {
             graphics.dispose();
@@ -108,6 +122,7 @@ public final class TextRenderer {
 
     /**
      * 绘制单段文字：计算坐标 -> 画背景条 -> 画阴影 -> 画描边 -> 画正文。
+     * scale 为渲染比例：字号、边距、字距、行距、背景内边距、阴影与描边按其缩放。
      */
     private void drawSingleText(final Graphics2D graphics, final TextItem text,
                                 final String placement, final String content,
@@ -115,26 +130,30 @@ public final class TextRenderer {
                                 final int imageWidth, final int imageHeight,
                                 final int borderTop, final int borderBottom,
                                 final int borderLeft, final int borderRight,
-                                final int canvasWidth, final int canvasHeight) {
+                                final int canvasWidth, final int canvasHeight,
+                                final double scale) {
         int fontSize = text.getFontSize() > 0 ? text.getFontSize() : 16;
-        String family = text.getFontFamily();
-        Font font = resolveFont(family, fontSize);
+        // 字号按渲染比例缩放；deriveFont 保留 resolveFont 的字体族解析结果。
+        Font font = resolveFont(text.getFontFamily(), fontSize)
+                .deriveFont((float) Math.max(1.0, fontSize * scale));
         graphics.setFont(font);
         FontMetrics metrics = graphics.getFontMetrics();
 
         String[] lines = content.split("\\n", -1);
-        int lineSpacing = text.getLineSpacing();
+        // lineSpacing 允许负值（更紧凑的行距），与未缩放路径保持同一取值域，仅按比例缩放
+        int lineSpacing = (int) Math.round(text.getLineSpacing() * scale);
         int lineHeight = Math.max(1, metrics.getHeight() + lineSpacing);
+        int letterSpacing = (int) Math.round(text.getLetterSpacing() * scale);
         int textWidth = 0;
         for (String line : lines) {
-            textWidth = Math.max(textWidth, spacedWidth(metrics, line, text.getLetterSpacing()));
+            textWidth = Math.max(textWidth, spacedWidth(metrics, line, letterSpacing));
         }
         int textHeight = metrics.getHeight() * lines.length
                 + Math.max(0, lines.length - 1) * lineSpacing;
         int ascent = metrics.getAscent();
         int descent = metrics.getDescent();
-        int marginY = Math.max(0, text.getMarginY());
-        int marginX = Math.max(0, text.getMarginX());
+        int marginY = (int) Math.round(Math.max(0, text.getMarginY()) * scale);
+        int marginX = (int) Math.round(Math.max(0, text.getMarginX()) * scale);
 
         // 计算文字基线坐标
         int x;
@@ -222,8 +241,8 @@ public final class TextRenderer {
 
         // 1. 背景条：先画矩形背景
         if (text.isBackgroundEnabled()) {
-            int padX = text.getBackgroundPaddingX() > 0 ? text.getBackgroundPaddingX() : 4;
-            int padY = text.getBackgroundPaddingY() > 0 ? text.getBackgroundPaddingY() : 2;
+            int padX = (int) Math.round((text.getBackgroundPaddingX() > 0 ? text.getBackgroundPaddingX() : 4) * scale);
+            int padY = (int) Math.round((text.getBackgroundPaddingY() > 0 ? text.getBackgroundPaddingY() : 2) * scale);
             graphics.setColor(ColorParser.parse(text.getBackgroundColor(), "rgba(0,0,0,0.6)"));
             graphics.fillRect(
                     textLeft - padX,
@@ -234,9 +253,9 @@ public final class TextRenderer {
 
         // 2. 阴影：在正文下方偏移绘制灰色文字
         if (text.isShadowEnabled()) {
-            int offsetX = text.getShadowOffsetX();
-            int offsetY = text.getShadowOffsetY();
-            int blur = text.getShadowBlur();
+            int offsetX = (int) Math.round(text.getShadowOffsetX() * scale);
+            int offsetY = (int) Math.round(text.getShadowOffsetY() * scale);
+            int blur = (int) Math.round(text.getShadowBlur() * scale);
             Color shadowColor = ColorParser.parse(text.getShadowColor(), "rgba(0,0,0,0.5)");
 
             // 简单模糊阴影：通过多次偏移绘制半透明文字模拟
@@ -246,30 +265,30 @@ public final class TextRenderer {
                 for (int dx = -blur; dx <= blur; dx += Math.max(1, blur / 2)) {
                     for (int dy = -blur; dy <= blur; dy += Math.max(1, blur / 2)) {
                         drawSpacedLines(graphics, lines, x + offsetX + dx, firstY + offsetY + dy,
-                                lineHeight, text.getLetterSpacing(), false, font);
+                                lineHeight, letterSpacing, false, font);
                     }
                 }
             } else {
                 graphics.setColor(shadowColor);
                 drawSpacedLines(graphics, lines, x + offsetX, firstY + offsetY,
-                        lineHeight, text.getLetterSpacing(), false, font);
+                        lineHeight, letterSpacing, false, font);
             }
         }
 
         // 3. 描边：用 TextLayout 获取字形轮廓并描边
         if (text.isStrokeEnabled() && text.getStrokeWidth() > 0) {
             Color strokeColor = ColorParser.parse(text.getStrokeColor(), "#000000");
-            float strokeW = text.getStrokeWidth();
+            float strokeW = (float) Math.max(0.5, text.getStrokeWidth() * scale);
             graphics.setColor(strokeColor);
             graphics.setStroke(new BasicStroke(strokeW, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
             drawSpacedLines(graphics, lines, x, firstY, lineHeight,
-                    text.getLetterSpacing(), true, font);
+                    letterSpacing, true, font);
         }
 
         // 4. 正文
         graphics.setColor(ColorParser.parse(text.getColor(), "#000000"));
         drawSpacedLines(graphics, lines, x, firstY, lineHeight,
-                text.getLetterSpacing(), false, font);
+                letterSpacing, false, font);
     }
 
     private int spacedWidth(final FontMetrics metrics, final String text, final int letterSpacing) {

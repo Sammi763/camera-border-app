@@ -294,10 +294,12 @@ export const calculateOutputPixelDimensions = (
     limit.maxWidth > 0 ? limit.maxWidth / placedWidth : 1,
     limit.maxHeight > 0 ? limit.maxHeight / placedHeight : 1
   )
-  const borderLeft = Math.max(0, Math.round(settings.borderLeft))
-  const borderRight = Math.max(0, Math.round(settings.borderRight))
-  const borderTop = Math.max(0, Math.round(settings.borderTop))
-  const borderBottom = Math.max(0, Math.round(settings.borderBottom))
+  // 边框属于配方像素语义，与照片按同一比例缩放（引擎 BorderComposer.insets(border, renderScale)）；
+  // 原图尺寸档位 scale=1，行为不变。逐边取整与引擎保持一致。
+  const borderLeft = Math.round(Math.max(0, settings.borderLeft) * scale)
+  const borderRight = Math.round(Math.max(0, settings.borderRight) * scale)
+  const borderTop = Math.round(Math.max(0, settings.borderTop) * scale)
+  const borderBottom = Math.round(Math.max(0, settings.borderBottom) * scale)
   return {
     width: Math.max(1, Math.round(placedWidth * scale) + borderLeft + borderRight),
     height: Math.max(1, Math.round(placedHeight * scale) + borderTop + borderBottom)

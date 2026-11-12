@@ -71,6 +71,8 @@ export const exposeDesktopApi = (): void => {
       ipcRenderer.invoke(IPC_CHANNELS.IMPORT_TEMPLATE_JSON),
     selectLogoFile: (): Promise<string | null> =>
       ipcRenderer.invoke(IPC_CHANNELS.SELECT_LOGO_FILE),
+    pickReplacementFile: (missingFilePath: string): Promise<string | null> =>
+      ipcRenderer.invoke(IPC_CHANNELS.PICK_REPLACEMENT_FILE, missingFilePath),
     probeHeicDecoder: (): Promise<boolean> =>
       ipcRenderer.invoke(IPC_CHANNELS.PROBE_HEIC_DECODER),
     convertHeicFiles: (paths: readonly string[]): Promise<readonly (string | null)[]> =>

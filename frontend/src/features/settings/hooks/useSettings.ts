@@ -1,5 +1,33 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { NumberSettingKey, RenderSettings, SettingsController, SettingsUpdateOptions, TextLayerSettings } from "../types"
+import { nextHistorySeq, type HistoryEntryMeta } from "../../../utils/historySequence"
+
+/** 一次设置提交的撤销元数据；description 缺省时按 patch 键自动归纳。 */
+type SettingsCommitOptions = {
+  readonly historyTag?: string
+  readonly description?: string
+  readonly patchKeys?: readonly string[]
+}
+
+const SETTINGS_PATCH_LABELS: readonly { readonly keys: readonly string[]; readonly label: string }[] = [
+  { keys: ["borderTop", "borderBottom", "borderLeft", "borderRight", "borderColor", "borderStyle"], label: "修改边框" },
+  { keys: ["textLayers", "textContent", "textFontSize", "textColor", "textPlacement", "textArea", "fontFamily"], label: "修改文字" },
+  { keys: ["imageArea", "imagePlacement"], label: "修改图片区域" },
+  { keys: ["gradient"], label: "修改渐变背景" },
+  { keys: ["logo"], label: "修改品牌标识" },
+  { keys: ["exportFormat", "jpegQuality", "outputSizePreset", "customOutputLongEdge"], label: "修改输出设置" },
+  { keys: ["preserveMetadata", "preserveColorProfile", "preferHighBitDepth", "tier", "colorProfilePolicy", "metadataPolicy", "bitDepthPolicy"], label: "修改保真设置" }
+]
+
+/** 根据设置的变更键生成面向用户的撤销描述。 */
+const describeSettingsPatch = (keys: readonly string[]): string => {
+  for (const group of SETTINGS_PATCH_LABELS) {
+    if (keys.some((key) => group.keys.includes(key))) {
+      return group.label
+    }
+  }
+  return keys.length > 0 ? "修改样式设置" : "修改设置"
+}
 import { createDefaultTextLayers } from "../utils/defaultTextLayers"
 import { BUILTIN_FONTS, loadFontOptions, isBuiltinFont, type FontOption } from "../../../services/desktop/fontsApi"
 import {
@@ -96,6 +124,8 @@ export const DEFAULT_SETTINGS: RenderSettings = {
   colorProfilePolicy: "source",
   metadataPolicy: "preserve",
   bitDepthPolicy: "8",
+  filmOutput: "srgb-jpeg",
+  borderlessMaster: false,
   logo: {
     enabled: false,
     mode: "auto-brand",
@@ -169,6 +199,15 @@ const readPersistedSettings = (): PersistedSettingsState => {
             : DEFAULT_SETTINGS.gradient.stops
         }
       : DEFAULT_SETTINGS.gradient
+    // U13：批量命名配置校验；损坏值回退默认（original-suffix）。
+    const rawNaming = payload["exportNaming"]
+    const exportNaming = isRecord(rawNaming)
+      && (rawNaming["mode"] === "original-suffix" || rawNaming["mode"] === "prefix-index")
+      ? {
+        mode: rawNaming["mode"] as "original-suffix" | "prefix-index",
+        prefix: typeof rawNaming["prefix"] === "string" ? rawNaming["prefix"] : ""
+      }
+      : undefined
     const textLayers = Array.isArray(payload["textLayers"])
       ? payload["textLayers"]
       : DEFAULT_SETTINGS.textLayers
@@ -179,7 +218,8 @@ const readPersistedSettings = (): PersistedSettingsState => {
       imagePlacement: imagePlacementFromArea(area, placement),
       logo,
       gradient,
-      textLayers
+      textLayers,
+      ...(exportNaming === undefined ? {} : { exportNaming })
     }
     return { settings: restored as RenderSettings, restored: true }
   } catch {
@@ -233,8 +273,9 @@ const clampNumber = (value: number, fallback: number, min: number, max: number):
 export const useSettings = (): SettingsController => {
   const [initialPersistence] = useState<PersistedSettingsState>(() => readPersistedSettings())
   const settingsRef = useRef<RenderSettings>(initialPersistence.settings)
-  const undoStackRef = useRef<RenderSettings[]>([])
-  const redoStackRef = useRef<RenderSettings[]>([])
+  // 历史条目携带全局序号与动作描述，供工作台在队列/设置两套历史间按最近操作协调 ⌘Z。
+  const undoStackRef = useRef<Array<{ settings: RenderSettings; meta: HistoryEntryMeta }>>([])
+  const redoStackRef = useRef<Array<{ settings: RenderSettings; meta: HistoryEntryMeta }>>([])
   /** 最近一次提交的合并标签；相邻同标签的手势类更新共用一条撤销历史。 */
   const lastHistoryTagRef = useRef<string | null>(null)
   const [settings, setSettings] = useState<RenderSettings>(() => initialPersistence.settings)
@@ -272,15 +313,20 @@ export const useSettings = (): SettingsController => {
    * historyTag 用于连续手势（如裁切构图拖动）：相邻提交携带相同标签时不重复压栈，
    * 撤销栈顶保留的是手势开始前的快照，一次撤销即可回到拖动前状态。
    */
-  const commitSettings = useCallback((mutate: (current: RenderSettings) => RenderSettings, historyTag?: string): void => {
+  const commitSettings = useCallback((mutate: (current: RenderSettings) => RenderSettings, options?: SettingsCommitOptions): void => {
     const previous = settingsRef.current
     const next = mutate(previous)
     if (next === previous) {
       return
     }
+    const historyTag = options?.historyTag
     const coalesceWithLast = historyTag !== undefined && historyTag === lastHistoryTagRef.current
     if (!coalesceWithLast) {
-      undoStackRef.current = [...undoStackRef.current, cloneSettings(previous)].slice(-SETTINGS_HISTORY_LIMIT)
+      const meta: HistoryEntryMeta = {
+        seq: nextHistorySeq(),
+        description: options?.description ?? describeSettingsPatch(options?.patchKeys ?? [])
+      }
+      undoStackRef.current = [...undoStackRef.current, { settings: cloneSettings(previous), meta }].slice(-SETTINGS_HISTORY_LIMIT)
     }
     lastHistoryTagRef.current = historyTag ?? null
     redoStackRef.current = []
@@ -292,7 +338,11 @@ export const useSettings = (): SettingsController => {
   }, [scheduleVersionBump])
 
   const update = useCallback((patch: Partial<RenderSettings>, options?: SettingsUpdateOptions): void => {
-    commitSettings((previous) => ({ ...previous, ...patch }), options?.historyTag)
+    commitSettings((previous) => ({ ...previous, ...patch }), {
+      ...(options?.historyTag === undefined ? {} : { historyTag: options.historyTag }),
+      ...(options?.description === undefined ? {} : { description: options.description }),
+      patchKeys: Object.keys(patch)
+    })
   }, [commitSettings])
 
   const updateNumber = useCallback(
@@ -338,13 +388,13 @@ export const useSettings = (): SettingsController => {
   )
 
   const undo = useCallback((): void => {
-    const previous = undoStackRef.current.at(-1)
-    if (previous === undefined) return
+    const entry = undoStackRef.current.at(-1)
+    if (entry === undefined) return
     undoStackRef.current = undoStackRef.current.slice(0, -1)
     // 撤销后下一条更新不应与已结束的手势合并，重置合并标签。
     lastHistoryTagRef.current = null
-    redoStackRef.current = [...redoStackRef.current, cloneSettings(settingsRef.current)].slice(-SETTINGS_HISTORY_LIMIT)
-    const restored = cloneSettings(previous)
+    redoStackRef.current = [...redoStackRef.current, { settings: cloneSettings(settingsRef.current), meta: entry.meta }].slice(-SETTINGS_HISTORY_LIMIT)
+    const restored = cloneSettings(entry.settings)
     settingsRef.current = restored
     setSettings(restored)
     setHistoryRevision((version) => version + 1)
@@ -352,12 +402,12 @@ export const useSettings = (): SettingsController => {
   }, [scheduleVersionBump])
 
   const redo = useCallback((): void => {
-    const next = redoStackRef.current.at(-1)
-    if (next === undefined) return
+    const entry = redoStackRef.current.at(-1)
+    if (entry === undefined) return
     redoStackRef.current = redoStackRef.current.slice(0, -1)
     lastHistoryTagRef.current = null
-    undoStackRef.current = [...undoStackRef.current, cloneSettings(settingsRef.current)].slice(-SETTINGS_HISTORY_LIMIT)
-    const restored = cloneSettings(next)
+    undoStackRef.current = [...undoStackRef.current, { settings: cloneSettings(settingsRef.current), meta: entry.meta }].slice(-SETTINGS_HISTORY_LIMIT)
+    const restored = cloneSettings(entry.settings)
     settingsRef.current = restored
     setSettings(restored)
     setHistoryRevision((version) => version + 1)
@@ -375,6 +425,8 @@ export const useSettings = (): SettingsController => {
     replaceTextLayers,
     canUndo: undoStackRef.current.length > 0,
     canRedo: redoStackRef.current.length > 0,
+    topUndo: undoStackRef.current.at(-1)?.meta ?? null,
+    topRedo: redoStackRef.current.at(-1)?.meta ?? null,
     undo,
     redo
   }

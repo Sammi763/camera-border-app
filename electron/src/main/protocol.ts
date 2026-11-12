@@ -50,6 +50,7 @@ const PROXY_ROUTES: readonly ProxyRoute[] = [
     methods: ["GET", "DELETE"]
   },
   { matches: (pathname) => pathname === "/api/photo-metadata", methods: ["POST"] },
+  { matches: (pathname) => pathname === "/api/image-analysis", methods: ["POST"] },
   { matches: (pathname) => pathname === "/api/film-formats", methods: ["GET"] },
   { matches: (pathname) => pathname === "/api/assets/film-stocks", methods: ["GET"] },
   { matches: (pathname) => pathname === "/api/fonts", methods: ["GET"] },

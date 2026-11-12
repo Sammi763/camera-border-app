@@ -9,9 +9,9 @@
 
 | 目标 | 角色 / 发行形式 | 必须随包提供 | 系统不需要预装 | 当前证据边界 |
 |---|---|---|---|---|
-| macOS arm64 | `FORMAL`；DMG / 已安装 `.app` | arm64 JRE、Java Engine、ExifTool、HEIC 助手、字体、许可证 | Java、ExifTool、HEIC 扩展、Node.js、pnpm、Python | 原生证据是正式发布阻塞项 |
-| macOS x64 | `CANDIDATE`；DMG / 已安装 `.app` | x64 JRE、Java Engine、ExifTool、HEIC 助手、字体、许可证 | 同上 | 可选候选证据，不阻塞正式发布 |
-| Windows x64 | `CANDIDATE`；NSIS `.exe` / 已安装目录 | x64 JRE、Java Engine、ExifTool、HEIC 助手、字体、许可证 | 同上 | `SIMULATED`；不写成平台验收 `PASS` |
+| macOS arm64 | `FORMAL`；DMG / 已安装 `.app` | arm64 JRE、Java Engine、ExifTool、HEIC 助手、字体、ExifTool 许可证、**LibRaw 0.22.3 helper（底片模式）** | Java、ExifTool、HEIC 扩展、Node.js、pnpm、Python、LibRaw | 原生证据是正式发布阻塞项；底片真实负片/平台证据仍未验收 |
+| macOS x64 | `CANDIDATE`；DMG / 已安装 `.app` | x64 JRE、Java Engine、ExifTool、HEIC 助手、字体、许可证 | 同上 | 可选候选证据，不阻塞正式发布；未构建 LibRaw x64 helper |
+| Windows x64 | `CANDIDATE`；NSIS `.exe` / 已安装目录 | x64 JRE、Java Engine、ExifTool、HEIC 助手、字体、许可证 | 同上 | `SIMULATED`；未构建 LibRaw Windows helper |
 
 签名、公证和自动更新不属于本阶段发布清单。Linux、Windows ARM64 和移动端不属于发行目标。
 
@@ -24,8 +24,10 @@
 | TIFF | 支持 | TIFF 像素 | 需用独立工具确认实际 8/16-bit |
 | HEIC/HEIF | 支持 | 随包解码助手产生的像素 | 不依赖系统扩展；助手缺失时能力为 false |
 | RAW（NEF、CR2、CR3、ARW、RAF、DNG、ORF、RW2、PEF） | 仅内嵌 JPEG | 抽取出的内嵌 JPEG | 不读取传感器 RAW，不去马赛克，不做真实显影 |
+| 底片模式真实传感器 RAW | 显式开启后由 LibRaw helper 解码 | 线性 camera RGB → float Rec.2020 | 独立的显式模式；真实负片/片基/光源/安装包验收仍为 `NOT_RUN`，见 [ADR-0007](adr/0007-explicit-film-digitization-mode.md) |
 
 无可读取内嵌 JPEG 的 RAW 必须明确失败。应用、报告和帮助不能把该路径描述为完整 RAW 显影。
+底片模式不得回退到内嵌 JPEG，也不得把普通模式的能力写成真实 RAW 已正式支持。
 
 ## 输出与导出档位
 
@@ -46,6 +48,9 @@ PNG 是档位内的格式变体，不是第四个档位：快速分享和标准�
 - 前端只显示 `available=true` 的格式、档位和组件；能力探测失败时专业导出保持阻断。
 - 不搜索系统 PATH，不下载替代组件，也不把“当前不支持”能力渲染成可勾选项。
 - 外部 ExifTool 超时、非零退出或输出无法独立读取时，导出失败并清理临时文件。
+- LibRaw helper 只从随包路径注入；`helper.json` 的二进制 SHA-256、LibRaw/helper 版本、架构和
+  `--version` 必须匹配，缺失/损坏/错误架构时 `components.libraw.available=false`。底片模式的
+  `filmDigitization.available` 只表示预览/分析/显式输出链路可用，不替代真实负片样本验收。
 
 ## 相关验收
 

@@ -1,0 +1,102 @@
+[
+  {
+    "maxWidth": 640,
+    "maxHeight": 640,
+    "source": {
+      "width": 720,
+      "height": 477,
+      "decodedWidth": 720,
+      "decodedHeight": 477,
+      "orientedWidth": 720,
+      "orientedHeight": 477,
+      "bitDepth": 8,
+      "colorSpace": "icc",
+      "orientation": 1,
+      "orientationApplied": true,
+      "icc": {
+        "state": "present",
+        "profileName": null,
+        "byteLength": 3144,
+        "sha256": "2b3aa1645779a9e634744faf9b01e9102b0c9b88fd6deced7934df86b949af7e"
+      },
+      "metadata": {
+        "exif": false,
+        "xmp": false,
+        "iptc": false,
+        "gps": false,
+        "dpi": false,
+        "thumbnail": false
+      }
+    },
+    "previewOutput": {
+      "width": 752,
+      "height": 640,
+      "decodedWidth": 752,
+      "decodedHeight": 640,
+      "orientedWidth": 752,
+      "orientedHeight": 640,
+      "bitDepth": 8,
+      "colorSpace": "icc",
+      "orientation": 1,
+      "orientationApplied": true,
+      "icc": {
+        "state": "present",
+        "profileName": null,
+        "byteLength": 6876,
+        "sha256": "87e382b9336e6a0417a4d860173109ab319a029cf2972e19833a3327c65bd7e4"
+      },
+      "metadata": null
+    },
+    "status": "ok"
+  },
+  {
+    "maxWidth": 1280,
+    "maxHeight": 1280,
+    "source": {
+      "width": 1679,
+      "height": 1113,
+      "decodedWidth": 1679,
+      "decodedHeight": 1113,
+      "orientedWidth": 1679,
+      "orientedHeight": 1113,
+      "bitDepth": 8,
+      "colorSpace": "icc",
+      "orientation": 1,
+      "orientationApplied": true,
+      "icc": {
+        "state": "present",
+        "profileName": null,
+        "byteLength": 3144,
+        "sha256": "2b3aa1645779a9e634744faf9b01e9102b0c9b88fd6deced7934df86b949af7e"
+      },
+      "metadata": {
+        "exif": false,
+        "xmp": false,
+        "iptc": false,
+        "gps": false,
+        "dpi": false,
+        "thumbnail": false
+      }
+    },
+    "previewOutput": {
+      "width": 1392,
+      "height": 1065,
+      "decodedWidth": 1392,
+      "decodedHeight": 1065,
+      "orientedWidth": 1392,
+      "orientedHeight": 1065,
+      "bitDepth": 8,
+      "colorSpace": "icc",
+      "orientation": 1,
+      "orientationApplied": true,
+      "icc": {
+        "state": "present",
+        "profileName": null,
+        "byteLength": 6876,
+        "sha256": "87e382b9336e6a0417a4d860173109ab319a029cf2972e19833a3327c65bd7e4"
+      },
+      "metadata": null
+    },
+    "status": "ok"
+  }
+]

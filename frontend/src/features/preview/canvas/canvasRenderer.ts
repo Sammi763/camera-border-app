@@ -33,6 +33,8 @@ const clampNumber = (value: number, min: number, max: number): number =>
  *
  * 与 java-engine util/BorderStyleRenderer 使用同一套风格 ID、参数语义与几何规则
  * （几何规格的唯一权威定义见该类的类注释，本实现逐条对应）。
+ * scale 为渲染比例：edgeWidth 按其缩放（与 Java renderScale 语义一致），
+ * borderTop/borderBottom 由调用方传入已缩放的画布像素值。
  * 未识别的 id / intensity=0 时不绘制任何内容（回退原行为）。
  */
 export const drawBorderStyle = (
@@ -45,7 +47,8 @@ export const drawBorderStyle = (
   cw: number,
   ch: number,
   borderTop: number,
-  borderBottom: number
+  borderBottom: number,
+  scale = 1
 ): void => {
   if (!style || style.id.trim().length === 0) {
     return
@@ -54,7 +57,7 @@ export const drawBorderStyle = (
   if (fi <= 0) {
     return
   }
-  const ew = Math.max(0, Math.round(style.edgeWidth))
+  const ew = Math.max(0, Math.round(style.edgeWidth * scale))
   const tone = ensureColor(style.paperTone)
 
   switch (style.id) {
@@ -411,8 +414,9 @@ const drawTextLayer = (
     layer.textArea, position,
     imgX, imgY, imgW, imgH,
     cw, ch, bt, bb, bl, br,
-    layer.marginX,
-    layer.marginY
+    // 边距与字号/字距一样属于原图像素语义，必须按同一渲染比例缩放
+    layer.marginX * scale,
+    layer.marginY * scale
   )
 
   ctx.textAlign = pos.align ?? align
@@ -572,22 +576,70 @@ export type PreviewImageLayout = {
 }
 
 /**
- * 计算当前 Canvas 中可绘制的照片区域。
+ * 一次合成的完整几何：照片、边框、文字、Logo、装饰全部由同一份结果驱动。
  *
- * 边框尺寸是 RenderRecipe 的显示语义，不能为了塞进狭小空间而静默改小；
- * 当容器不足以保留最小可辨识照片区域时返回 null，由调用方明确提示用户。
+ * 逻辑合成空间以「方向归一后的原图像素」为语义基准（RenderRecipe 的边框、
+ * 字号、偏移都是原图像素值）；viewScale 把整个合成空间等比映射到画布逻辑
+ * 像素。代理图只替代像素来源，不改变布局语义——这是「预览与导出同源一致」
+ * 的核心：任何画布尺寸、DPR、输出档位下，边框:照片、文字:照片比例恒定。
  */
-export const calculatePreviewImageLayout = (
+export type CompositionLayout = {
+  /** 合成空间 -> 画布逻辑像素缩放系数；actual（100%）模式固定为 1。 */
+  readonly viewScale: number
+  /** 完整合成（照片+边框）在画布逻辑坐标中的矩形；fit 模式居中留白，actual 模式含视口平移。 */
+  readonly compositionRect: PreviewRect
+  /** placement 目标区域（裁切框），画布逻辑坐标。 */
+  readonly targetRect: PreviewRect
+  /** 旋转后实际照片包围盒，画布逻辑坐标。 */
+  readonly photoRect: PreviewRect
+  /** 缩放后的边框值（画布逻辑像素）。 */
+  readonly borders: {
+    readonly top: number
+    readonly bottom: number
+    readonly left: number
+    readonly right: number
+  }
+}
+
+/** 绘制视口输入：fit 适应画布；actual 1:1 原图坐标并按偏移平移。 */
+export type CompositionViewport = {
+  readonly mode: "fit" | "actual"
+  readonly offsetX: number
+  readonly offsetY: number
+}
+
+const nonNegative = (value: number): number =>
+  Number.isFinite(value) && value > 0 ? value : 0
+
+/**
+ * 计算当前 Canvas 的完整合成布局。
+ *
+ * - fit：整个逻辑合成空间（照片目标区域 + 配方边框）等比缩放并居中放进画布，
+ *   合成外的画布区域保持留白，不再把边框撑大到占满视口；
+ * - actual：viewScale=1（1 原图像素 = 1 CSS px），按视口偏移平移，只绘制可视区域。
+ *
+ * 返回 null 表示无法构成可辨识的合成（输入非法或 fit 模式下照片小于
+ * 最小可见边长），调用方应明确提示而不是绘制纯边框。
+ */
+export type CompositionLayoutOptions = {
+  /**
+   * 跳过 fit 模式的最小可见边长保护。交互坐标换算（焦点拖动、引导覆盖层）
+   * 需要在极小视口下仍有合法目标矩形；绘制路径不跳过，保持「画不出可辨识
+   * 照片就明确提示」的语义。
+   */
+  readonly skipMinVisibleGuard?: boolean
+}
+
+export const calculateCompositionLayout = (
   canvasWidth: number,
   canvasHeight: number,
   sourceWidth: number,
   sourceHeight: number,
-  borderTop: number,
-  borderBottom: number,
-  borderLeft: number,
-  borderRight: number,
-  imagePlacement?: Partial<ImagePlacement> | null
-): PreviewImageLayout | null => {
+  border: Pick<RenderSettings, "borderTop" | "borderBottom" | "borderLeft" | "borderRight">,
+  imagePlacement?: Partial<ImagePlacement> | null,
+  viewport?: CompositionViewport | null,
+  options?: CompositionLayoutOptions
+): CompositionLayout | null => {
   if (
     !Number.isFinite(canvasWidth) || !Number.isFinite(canvasHeight)
     || !Number.isFinite(sourceWidth) || !Number.isFinite(sourceHeight)
@@ -596,44 +648,76 @@ export const calculatePreviewImageLayout = (
     return null
   }
 
-  const top = Math.max(0, borderTop)
-  const bottom = Math.max(0, borderBottom)
-  const left = Math.max(0, borderLeft)
-  const right = Math.max(0, borderRight)
-  const availableWidth = canvasWidth - left - right
-  const availableHeight = canvasHeight - top - bottom
-  if (availableWidth <= 0 || availableHeight <= 0) {
-    return null
-  }
-
   const geometry = calculateImagePlacementGeometry(sourceWidth, sourceHeight, imagePlacement)
   if (geometry === null) {
     return null
   }
-  const viewportScale = Math.min(
-    availableWidth / geometry.targetWidth,
-    availableHeight / geometry.targetHeight
-  )
-  const targetWidth = geometry.targetWidth * viewportScale
-  const targetHeight = geometry.targetHeight * viewportScale
-  const targetX = left + (availableWidth - targetWidth) / 2
-  const targetY = top + (availableHeight - targetHeight) / 2
-  // 诊断区域必须记录旋转后的实际照片包围盒；drawWidth/drawHeight 是旋转前
-  // 原图尺寸，90° 时若直接使用会让像素取样落在照片外的留白中。
-  const width = geometry.rotatedWidth * viewportScale
-  const height = geometry.rotatedHeight * viewportScale
-  const x = targetX + geometry.offsetX * viewportScale
-  const y = targetY + geometry.offsetY * viewportScale
+  const top = nonNegative(border.borderTop)
+  const bottom = nonNegative(border.borderBottom)
+  const left = nonNegative(border.borderLeft)
+  const right = nonNegative(border.borderRight)
+  // 逻辑合成空间：目标照片区域 + 配方边框（原图像素语义，代理图不参与）
+  const compositionWidth = geometry.targetWidth + left + right
+  const compositionHeight = geometry.targetHeight + top + bottom
+  if (!(compositionWidth > 0) || !(compositionHeight > 0)) {
+    return null
+  }
 
-  if (width < MIN_VISIBLE_PREVIEW_IMAGE_EDGE || height < MIN_VISIBLE_PREVIEW_IMAGE_EDGE) {
+  const mode = viewport?.mode === "actual" ? "actual" : "fit"
+  let viewScale: number
+  let originX: number
+  let originY: number
+  if (mode === "actual") {
+    viewScale = 1
+    originX = Number.isFinite(viewport?.offsetX) ? (viewport as CompositionViewport).offsetX : 0
+    originY = Number.isFinite(viewport?.offsetY) ? (viewport as CompositionViewport).offsetY : 0
+  } else {
+    viewScale = Math.min(canvasWidth / compositionWidth, canvasHeight / compositionHeight)
+    if (!Number.isFinite(viewScale) || viewScale <= 0) {
+      return null
+    }
+    originX = (canvasWidth - compositionWidth * viewScale) / 2
+    originY = (canvasHeight - compositionHeight * viewScale) / 2
+  }
+
+  const targetRect: PreviewRect = {
+    x: originX + left * viewScale,
+    y: originY + top * viewScale,
+    width: geometry.targetWidth * viewScale,
+    height: geometry.targetHeight * viewScale
+  }
+  // 诊断/辅助区域记录旋转后的实际照片包围盒；drawWidth/drawHeight 是旋转前
+  // 原图尺寸，90° 时若直接使用会让像素取样落在照片外的留白中。
+  const photoRect: PreviewRect = {
+    x: targetRect.x + geometry.offsetX * viewScale,
+    y: targetRect.y + geometry.offsetY * viewScale,
+    width: geometry.rotatedWidth * viewScale,
+    height: geometry.rotatedHeight * viewScale
+  }
+  if (
+    mode === "fit"
+    && options?.skipMinVisibleGuard !== true
+    && (photoRect.width < MIN_VISIBLE_PREVIEW_IMAGE_EDGE || photoRect.height < MIN_VISIBLE_PREVIEW_IMAGE_EDGE)
+  ) {
     return null
   }
 
   return {
-    x,
-    y,
-    width,
-    height
+    viewScale,
+    compositionRect: {
+      x: originX,
+      y: originY,
+      width: compositionWidth * viewScale,
+      height: compositionHeight * viewScale
+    },
+    targetRect,
+    photoRect,
+    borders: {
+      top: top * viewScale,
+      bottom: bottom * viewScale,
+      left: left * viewScale,
+      right: right * viewScale
+    }
   }
 }
 
@@ -727,7 +811,16 @@ export const calculateFocalFromPointer = (
 /**
  * 在 Canvas 上绘制图片 + 边框（纯色或渐变） + 多段文字。
  *
- * 渲染顺序：边框底色/渐变 -> 图片居中绘制 -> 多段文字依次叠加
+ * 渲染顺序：边框背景（仅合成区域内）-> 图片居中绘制 -> 多段文字依次叠加
+ *
+ * 几何契约：
+ * - sourceDimensions 给出方向归一后的原图像素尺寸（RenderRecipe 语义空间）；
+ *   缺省时退化为图片自身尺寸（像素来源即语义空间，如导出工具链路）。
+ * - 代理图（如最长边 1280 的预览图）只替代像素来源，所有布局按原图空间
+ *   × viewScale 计算，保证与引擎渲染、导出构图一致。
+ * - fit 模式整个合成居中放进画布，合成外保持透明（工作台背景呈现）；
+ *   actual 模式 viewScale=1，按视口偏移平移只绘制可视区域。
+ * - 返回本次合成的布局（供诊断/辅助线复用）；无法构成可辨识合成时返回 null。
  *
  * 注意：image 必须是真正的 HTMLImageElement 或 HTMLCanvasElement，
  * 传给 ctx.drawImage 时浏览器会按 CanvasImageSource 规则解析；
@@ -738,11 +831,13 @@ export const drawPreviewToCanvas = (
   image: CanvasDrawableSource,
   settings: RenderSettings,
   logoImage?: CanvasDrawableSource | null,
-  renderDimensions?: CanvasRenderDimensions
-): void => {
+  renderDimensions?: CanvasRenderDimensions,
+  sourceDimensions?: { readonly width: number; readonly height: number } | null,
+  viewport?: CompositionViewport | null
+): CompositionLayout | null => {
   const ctx = canvas.getContext("2d")
   if (ctx === null) {
-    return
+    return null
   }
 
   const pixelRatio = renderDimensions?.pixelRatio !== undefined
@@ -755,21 +850,64 @@ export const drawPreviewToCanvas = (
 
   // backing store 可能是 DPR 的倍数，后续所有 RenderRecipe 几何仍使用 CSS/逻辑像素。
   ctx.save()
+  // 构图可能缩小或移动；必须在物理像素空间清除上一帧的全部像素，包括合成区域外。
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
   if (pixelRatio !== 1) {
     ctx.scale(pixelRatio, pixelRatio)
   }
 
-  const bt = settings.borderTop
-  const bb = settings.borderBottom
-  const bl = settings.borderLeft
-  const br = settings.borderRight
+  const sourceSize = sourceDimensions ?? getSourceSize(image)
+  const imagePlacement = imagePlacementFromSettings(settings)
+  const layout = calculateCompositionLayout(
+    cw,
+    ch,
+    sourceSize.width,
+    sourceSize.height,
+    settings,
+    imagePlacement,
+    viewport
+  )
+  if (layout === null) {
+    ctx.restore()
+    return null
+  }
 
-  // 绘制边框背景（渐变或纯色）
+  const geometry = calculateImagePlacementGeometry(
+    sourceSize.width,
+    sourceSize.height,
+    imagePlacement
+  )
+  if (geometry === null) {
+    ctx.restore()
+    return null
+  }
+
+  // 全部绘制在合成局部空间完成：合成外画布区域保持透明，由工作台背景呈现。
+  // 局部尺寸即合成尺寸（画布逻辑像素），渐变坐标与引擎 GradientPainter 的
+  // 合成空间坐标一致。
+  const bt = layout.borders.top
+  const bb = layout.borders.bottom
+  const bl = layout.borders.left
+  const br = layout.borders.right
+  const localWidth = layout.compositionRect.width
+  const localHeight = layout.compositionRect.height
+  const targetX = layout.targetRect.x - layout.compositionRect.x
+  const targetY = layout.targetRect.y - layout.compositionRect.y
+  const targetW = layout.targetRect.width
+  const targetH = layout.targetRect.height
+  const photoX = layout.photoRect.x - layout.compositionRect.x
+  const photoY = layout.photoRect.y - layout.compositionRect.y
+
+  ctx.save()
+  ctx.translate(layout.compositionRect.x, layout.compositionRect.y)
+
+  // 绘制边框背景（渐变或纯色），只覆盖合成区域
   if (settings.gradient.enabled && settings.gradient.stops.length >= 2) {
     const stops = settings.gradient.stops
-    const cx = cw / 2
-    const cy = ch / 2
-    const radius = Math.max(cw, ch) / 2
+    const cx = localWidth / 2
+    const cy = localHeight / 2
+    const radius = Math.max(localWidth, localHeight) / 2
 
     let gradient: CanvasGradient
     if (settings.gradient.type === "radial") {
@@ -786,74 +924,36 @@ export const drawPreviewToCanvas = (
   } else {
     ctx.fillStyle = ensureColor(settings.borderColor)
   }
-  ctx.fillRect(0, 0, cw, ch)
+  ctx.fillRect(0, 0, localWidth, localHeight)
 
-  const sourceSize = getSourceSize(image)
-  const imagePlacement = imagePlacementFromSettings(settings)
-  const imageLayout = calculatePreviewImageLayout(
-    cw,
-    ch,
-    sourceSize.width,
-    sourceSize.height,
-    bt,
-    bb,
-    bl,
-    br,
-    imagePlacement
-  )
-  if (imageLayout === null) {
-    ctx.restore()
-    return
-  }
-
-  const geometry = calculateImagePlacementGeometry(
-    sourceSize.width,
-    sourceSize.height,
-    imagePlacement
-  )
-  if (geometry === null) {
-    ctx.restore()
-    return
-  }
-  const availableWidth = Math.max(0, cw - Math.max(0, bl) - Math.max(0, br))
-  const availableHeight = Math.max(0, ch - Math.max(0, bt) - Math.max(0, bb))
-  const viewportScale = Math.min(
-    availableWidth / geometry.targetWidth,
-    availableHeight / geometry.targetHeight
-  )
-  const targetWidth = geometry.targetWidth * viewportScale
-  const targetHeight = geometry.targetHeight * viewportScale
-  const targetX = Math.max(0, bl) + (availableWidth - targetWidth) / 2
-  const targetY = Math.max(0, bt) + (availableHeight - targetHeight) / 2
-  const imgX = targetX + geometry.offsetX * viewportScale
-  const imgY = targetY + geometry.offsetY * viewportScale
-  const drawW = geometry.drawWidth * viewportScale
-  const drawH = geometry.drawHeight * viewportScale
-
-  // clip 到目标图片区域；fit 的留白会显示已经绘制的边框背景，fill 的溢出不会污染边框。
+  // 照片：clip 到目标图片区域；fit 的留白显示已绘制的边框背景，fill 的溢出不会污染边框。
   ctx.save()
   ctx.beginPath()
-  ctx.rect(targetX, targetY, targetWidth, targetHeight)
+  ctx.rect(targetX, targetY, targetW, targetH)
   ctx.clip()
-  const drawCenterX = imgX + geometry.rotatedWidth * viewportScale * 0.5
-  const drawCenterY = imgY + geometry.rotatedHeight * viewportScale * 0.5
+  const drawCenterX = photoX + layout.photoRect.width * 0.5
+  const drawCenterY = photoY + layout.photoRect.height * 0.5
   ctx.translate(drawCenterX, drawCenterY)
   ctx.rotate((geometry.rotation * Math.PI) / 180)
-  ctx.drawImage(image, -drawW / 2, -drawH / 2, drawW, drawH)
+  ctx.drawImage(
+    image,
+    -(geometry.drawWidth * layout.viewScale) / 2,
+    -(geometry.drawHeight * layout.viewScale) / 2,
+    geometry.drawWidth * layout.viewScale,
+    geometry.drawHeight * layout.viewScale
+  )
   ctx.restore()
 
   // 边框风格装饰：绘制在边框背景与图片之上、文字与品牌标识之下。
   // 未识别的风格 id / null / intensity=0 时保持原始行为（与引擎语义一致）。
   if (settings.borderStyle !== null && settings.borderStyle !== undefined) {
-    drawBorderStyle(ctx, settings.borderStyle, targetX, targetY, targetWidth, targetHeight, cw, ch, bt, bb)
+    drawBorderStyle(ctx, settings.borderStyle, targetX, targetY, targetW, targetH, localWidth, localHeight, bt, bb, layout.viewScale)
   }
-
-  // 缩放比例：Canvas 宽度 / 800（基准宽度）
-  const scale = cw / 800
 
   // 遍历 textLayers，每段独立绘制。
   // textLayers 是唯一的文字来源（normalizeTemplateSettings 已确保旧设置迁移）。
   // 如果 textLayers 为空数组，则不绘制任何文字。
+  // 文字缩放 = viewScale：与边框/照片共用同一比例映射，替代旧的 cw/800 独立路径。
   for (const layer of settings.textLayers) {
     if (!layer.enabled) {
       continue
@@ -862,28 +962,29 @@ export const drawPreviewToCanvas = (
     if (content.length === 0) {
       continue
     }
-    drawTextLayer(ctx, layer, content, targetX, targetY, targetWidth, targetHeight, cw, ch, bt, bb, bl, br, scale)
+    drawTextLayer(ctx, layer, content, targetX, targetY, targetW, targetH, localWidth, localHeight, bt, bb, bl, br, layout.viewScale)
   }
 
   // 绘制品牌标识（Logo）
   if (settings.logo?.enabled) {
     if (settings.logo.imagePath && logoImage) {
-      drawLogoImage(ctx, logoImage, settings, cw, ch, bt, bb, bl, br, scale)
-      ctx.restore()
-      return
-    }
-    let logoText: string
-    if (settings.logo.mode === "brand-text") {
-      logoText = (settings.logo.brand ?? "")
+      drawLogoImage(ctx, logoImage, settings, localWidth, localHeight, bt, bb, bl, br, layout.viewScale)
     } else {
-      // auto-brand 模式：brand 已由 buildResolvedRenderSettings 解析后填入
-      logoText = (settings.logo.brand ?? "")
-    }
-    if (logoText.trim().length > 0) {
-      drawLogo(ctx, logoText.trim(), settings, cw, ch, bt, bb, bl, br, scale)
+      let logoText: string
+      if (settings.logo.mode === "brand-text") {
+        logoText = (settings.logo.brand ?? "")
+      } else {
+        // auto-brand 模式：brand 已由 buildResolvedRenderSettings 解析后填入
+        logoText = (settings.logo.brand ?? "")
+      }
+      if (logoText.trim().length > 0) {
+        drawLogo(ctx, logoText.trim(), settings, localWidth, localHeight, bt, bb, bl, br, layout.viewScale)
+      }
     }
   }
   ctx.restore()
+  ctx.restore()
+  return layout
 }
 
 /** 绘制自定义 PNG/签名；保持原图比例，size 表示最长边像素。 */
@@ -1007,17 +1108,41 @@ const drawLogo = (
 /**
  * 导出用：在全分辨率 Canvas 上渲染图片 + 边框 + 文字，然后下载为 PNG。
  * 仅作为开发辅助工具保留，正式导出走引擎 render-jobs 端点。
+ *
+ * Canvas 尺寸 = 完整合成（照片目标区域 + 边框），按 1:1 原图坐标绘制，
+ * 与引擎导出的构图语义一致。
  */
 export const exportPreviewAsPng = (
   image: HTMLImageElement,
   settings: RenderSettings,
   fileName: string
 ): void => {
+  const sourceSize = getSourceSize(image)
+  const geometry = calculateImagePlacementGeometry(
+    sourceSize.width,
+    sourceSize.height,
+    imagePlacementFromSettings(settings)
+  )
+  if (geometry === null) {
+    return
+  }
   const canvas = document.createElement("canvas")
-  canvas.width = image.naturalWidth
-  canvas.height = image.naturalHeight
+  canvas.width = Math.max(1, Math.round(
+    geometry.targetWidth + Math.max(0, settings.borderLeft) + Math.max(0, settings.borderRight)
+  ))
+  canvas.height = Math.max(1, Math.round(
+    geometry.targetHeight + Math.max(0, settings.borderTop) + Math.max(0, settings.borderBottom)
+  ))
 
-  drawPreviewToCanvas(canvas, image, settings)
+  drawPreviewToCanvas(
+    canvas,
+    image,
+    settings,
+    null,
+    undefined,
+    { width: sourceSize.width, height: sourceSize.height },
+    { mode: "actual", offsetX: 0, offsetY: 0 }
+  )
 
   canvas.toBlob((blob) => {
     if (blob === null) {

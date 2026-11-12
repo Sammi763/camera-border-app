@@ -15,6 +15,7 @@ import type {
   PreviewRequest,
   RenderRecipe
 } from "../../../types/preview"
+import type { ImageProcessingConfig } from "../../../types/imageProcessing"
 import type { RenderSettings } from "../types"
 import { buildTextsFromSettings, resolveLogoBrand } from "./buildTexts"
 import { imagePlacementFromSettings } from "./imageArea"
@@ -47,13 +48,15 @@ export const toGradientConfig = (s: RenderSettings): GradientConfig | null => {
  * @param textOverride 快捷单段文字覆盖（覆盖 textLayers[0] 的 content）
  * @param resolvedTexts 已解析变量的文字内容数组（与 textLayers 下标对齐）
  * @param resolvedBrand 当前图片识别到的品牌文字（auto-brand 模式使用）
+ * @param imageProcessing 可选底片处理配置；缺省/null 时保持普通模式
  */
 export const buildRecipeFromSettings = (
   filePath: string,
   settings: RenderSettings,
   textOverride?: string | null,
   resolvedTexts?: readonly (string | null)[] | null,
-  resolvedBrand?: string | null
+  resolvedBrand?: string | null,
+  imageProcessing?: ImageProcessingConfig | null
 ): RenderRecipe => {
   const current = settings
   const logo: LogoConfig | null = current.logo.enabled
@@ -83,7 +86,8 @@ export const buildRecipeFromSettings = (
     texts: buildTextsFromSettings(current, textOverride, resolvedTexts),
     imagePlacement: recipeImagePlacement(current),
     logo,
-    borderStyle: current.borderStyle
+    borderStyle: current.borderStyle,
+    ...(imageProcessing ? { imageProcessing } : {})
   }
 }
 
@@ -98,9 +102,10 @@ export const buildPreviewRequest = (
   maxHeight: number,
   textOverride?: string | null,
   resolvedTexts?: readonly (string | null)[] | null,
-  resolvedBrand?: string | null
+  resolvedBrand?: string | null,
+  imageProcessing?: ImageProcessingConfig | null
 ): PreviewRequest => ({
-  recipe: buildRecipeFromSettings(filePath, settings, textOverride, resolvedTexts, resolvedBrand),
+  recipe: buildRecipeFromSettings(filePath, settings, textOverride, resolvedTexts, resolvedBrand, imageProcessing),
   maxWidth,
   maxHeight
 })

@@ -1,0 +1,26 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "bounce-easing",
+        "value": "var(--motion-spring)",
+        "files": [
+          "frontend/src/styles/styles.css"
+        ],
+        "createdAt": "2026-11-10T12:54:08.130Z",
+        "reason": "user confirmed：用户明确要求“毛玻璃q弹风格”，已确认方案保留轻微回弹；仅用于按钮、页签与弹窗，并支持减少动态效果。"
+      },
+      {
+        "rule": "bounce-easing",
+        "value": "cubic-bezier(0.34, 1.56, 0.64, 1)",
+        "files": [
+          "frontend/src/styles/styles.css"
+        ],
+        "createdAt": "2026-11-10T12:54:08.230Z",
+        "reason": "user confirmed：用户明确要求“毛玻璃q弹风格”，已确认方案采用此轻微回弹曲线；照片不弹跳，减少动态效果时取消回弹。"
+      }
+    ]
+  }
+}

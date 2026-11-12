@@ -1,6 +1,6 @@
 import type { DesktopRuntime } from "../../types/runtime"
 
-/** 工作台主题：深色影棚、暖灰浅色或跟随系统。 */
+/** 工作台主题：深色玻璃、浅色玻璃或跟随系统。 */
 export type StudioTheme = "dark" | "warm" | "system"
 
 type TopBarProps = {
@@ -48,8 +48,8 @@ export const TopBar = ({
         <label className="topbarThemeControl">
           <span>主题</span>
           <select aria-label="界面主题" value={theme} onChange={(event) => onThemeChange(event.target.value as StudioTheme)}>
-            <option value="dark">深色影棚</option>
-            <option value="warm">暖灰浅色</option>
+            <option value="dark">深色玻璃</option>
+            <option value="warm">浅色玻璃</option>
             <option value="system">跟随系统</option>
           </select>
         </label>

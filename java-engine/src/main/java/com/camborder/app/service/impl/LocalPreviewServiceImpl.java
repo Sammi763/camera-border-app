@@ -3,9 +3,12 @@ package com.camborder.app.service.impl;
 import com.camborder.app.dto.PreviewRequest;
 import com.camborder.app.dto.PreviewResponse;
 import com.camborder.app.dto.FidelityReport;
+import com.camborder.app.exception.PreviewGenerationException;
 import com.camborder.app.repository.PreviewStore;
 import com.camborder.app.service.ImageRenderService;
 import com.camborder.app.service.PreviewService;
+import com.camborder.app.util.FloatImageOps;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.awt.color.ICC_ColorSpace;
@@ -22,11 +25,28 @@ public final class LocalPreviewServiceImpl implements PreviewService {
 
     private final ImageRenderService imageRenderService;
     private final PreviewStore previewStore;
+    private final FilmProcessingPipeline filmProcessingPipeline;
+    private final com.camborder.app.util.FilmCompositor compositor;
 
     public LocalPreviewServiceImpl(final ImageRenderService imageRenderService,
+                                   final PreviewStore previewStore,
+                                   final FilmProcessingPipeline filmProcessingPipeline) {
+        this(imageRenderService, previewStore, filmProcessingPipeline, new com.camborder.app.util.FilmCompositor(
+                new com.camborder.app.util.BorderStyleRenderer(), new com.camborder.app.util.TextRenderer(),
+                new com.camborder.app.util.LogoRenderer(), new com.camborder.app.util.GradientPainter()));
+    }
+
+    @Autowired
+    public LocalPreviewServiceImpl(final ImageRenderService renderer, final PreviewStore store,
+            final FilmProcessingPipeline pipeline, final com.camborder.app.util.FilmCompositor compositor) {
+        this.imageRenderService = renderer; this.previewStore = store;
+        this.filmProcessingPipeline = pipeline; this.compositor = compositor;
+    }
+
+    /** 兼容旧测试/嵌入调用；底片配置在无 pipeline 时明确失败。 */
+    public LocalPreviewServiceImpl(final ImageRenderService imageRenderService,
                                    final PreviewStore previewStore) {
-        this.imageRenderService = imageRenderService;
-        this.previewStore = previewStore;
+        this(imageRenderService, previewStore, null);
     }
 
     /**
@@ -38,9 +58,33 @@ public final class LocalPreviewServiceImpl implements PreviewService {
     @Override
     public PreviewResponse generatePreview(final PreviewRequest request) {
         // 预览使用 maxWidth/maxHeight 做等比缩小；导出不传缩放约束
-        ImageRenderService.ComposeOutcome outcome = imageRenderService.compose(
-                request.getRecipe(), request.getMaxWidth(), request.getMaxHeight());
-        byte[] pngBytes = imageRenderService.toPng(outcome.getImage());
+        ImageRenderService.ComposeOutcome outcome;
+        byte[] pngBytes;
+        if (request.getRecipe().getImageProcessing() != null) {
+            if (filmProcessingPipeline == null) {
+                throw new PreviewGenerationException("底片处理管线未配置");
+            }
+            final String stage = request.getStage() == null ? "current-positive" : request.getStage();
+            try (FilmProcessingPipeline.Processed processed = request.isSourceCoordinates()
+                    ? filmProcessingPipeline.process(request.getRecipe(), stage)
+                    : filmProcessingPipeline.processForOutput(request.getRecipe(), stage,
+                    request.getMaxWidth(), request.getMaxHeight(), false)) {
+                final com.camborder.app.util.FloatRgbImage rendered = request.isSourceCoordinates()
+                        ? FloatImageOps.fitWithin(processed.getImage(), request.getMaxWidth(), request.getMaxHeight())
+                        : compositor.compose(processed.getImage(), request.getRecipe(), request.getMaxWidth(), request.getMaxHeight(), false);
+                if (request.isActualPixels() && Math.max(rendered.getWidth(), rendered.getHeight()) > 8192)
+                    throw new com.camborder.app.exception.FilmProcessingException("完整像素超过检查预算，请切回适应窗口",
+                            org.springframework.http.HttpStatus.BAD_REQUEST, "FILM_ACTUAL_PIXELS_TOO_LARGE");
+                outcome = new ImageRenderService.ComposeOutcome(FloatImageOps.toBufferedImage16(rendered),
+                        processed.getSourceDecode(), processed.getSourceInfo());
+                // 编码也发生在预算租约内，覆盖预览的完整生命周期。
+                pngBytes = imageRenderService.toPng(outcome.getImage());
+            }
+        } else {
+            outcome = imageRenderService.compose(
+                    request.getRecipe(), request.getMaxWidth(), request.getMaxHeight());
+            pngBytes = imageRenderService.toPng(outcome.getImage());
+        }
 
         String previewId = previewStore.store(pngBytes);
         PreviewResponse response = new PreviewResponse(
@@ -85,6 +129,10 @@ public final class LocalPreviewServiceImpl implements PreviewService {
         report.getTransformations().setResized(true);
         report.getTransformations().setOrientationNormalized(true);
         report.getTransformations().setThumbnailPolicy("not-present");
+        if (request.getRecipe().getImageProcessing() != null) {
+            output.setWorkingDataType("float32");
+            output.setAlgorithmVersion(request.getRecipe().getImageProcessing().getAlgorithmVersion());
+        }
         response.setFidelityReport(report);
         return response;
     }

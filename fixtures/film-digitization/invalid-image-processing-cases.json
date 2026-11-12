@@ -1,0 +1,322 @@
+[
+  {
+    "name": "unknown-schema",
+    "expectedCode": "IMAGE_PROCESSING_UNSUPPORTED_SCHEMA",
+    "imageProcessing": {
+      "schemaVersion": 2,
+      "algorithmVersion": "film-digitization-v1",
+      "inputMode": "sensor-raw",
+      "raw": {}
+    }
+  },
+  {
+    "name": "unknown-algorithm",
+    "expectedCode": "IMAGE_PROCESSING_UNSUPPORTED_ALGORITHM",
+    "imageProcessing": {
+      "schemaVersion": 1,
+      "algorithmVersion": "film-digitization-v2",
+      "inputMode": "sensor-raw",
+      "raw": {}
+    }
+  },
+  {
+    "name": "invalid-input-mode",
+    "expectedCode": "IMAGE_PROCESSING_INVALID_INPUT_MODE",
+    "imageProcessing": {
+      "schemaVersion": 1,
+      "algorithmVersion": "film-digitization-v1",
+      "inputMode": "embedded-jpeg"
+    }
+  },
+  {
+    "name": "missing-raw-options",
+    "expectedCode": "IMAGE_PROCESSING_MISSING_RAW_OPTIONS",
+    "imageProcessing": {
+      "schemaVersion": 1,
+      "algorithmVersion": "film-digitization-v1",
+      "inputMode": "sensor-raw"
+    }
+  },
+  {
+    "name": "auto-bright-not-supported",
+    "expectedCode": "IMAGE_PROCESSING_UNSUPPORTED_OPTION",
+    "imageProcessing": {
+      "schemaVersion": 1,
+      "algorithmVersion": "film-digitization-v1",
+      "inputMode": "sensor-raw",
+      "raw": { "autoBright": true }
+    }
+  },
+  {
+    "name": "invalid-raw-gamma",
+    "expectedCode": "IMAGE_PROCESSING_UNSUPPORTED_OPTION",
+    "imageProcessing": {
+      "schemaVersion": 1,
+      "algorithmVersion": "film-digitization-v1",
+      "inputMode": "sensor-raw",
+      "raw": { "gamma": "srgb" }
+    }
+  },
+  {
+    "name": "sensor-raw-with-linear-input",
+    "expectedCode": "IMAGE_PROCESSING_INVALID_LINEAR_INPUT",
+    "imageProcessing": {
+      "schemaVersion": 1,
+      "algorithmVersion": "film-digitization-v1",
+      "inputMode": "sensor-raw",
+      "raw": {},
+      "linearInput": {
+        "transferFunction": "linear",
+        "colorSpace": "linear-rec2020",
+        "bitDepth": 16
+      }
+    }
+  },
+  {
+    "name": "linear-tiff-missing-input",
+    "expectedCode": "IMAGE_PROCESSING_INVALID_LINEAR_INPUT",
+    "imageProcessing": {
+      "schemaVersion": 1,
+      "algorithmVersion": "film-digitization-v1",
+      "inputMode": "linear-tiff"
+    }
+  },
+  {
+    "name": "linear-tiff-bit-depth-8",
+    "expectedCode": "IMAGE_PROCESSING_INVALID_LINEAR_INPUT",
+    "imageProcessing": {
+      "schemaVersion": 1,
+      "algorithmVersion": "film-digitization-v1",
+      "inputMode": "linear-tiff",
+      "linearInput": {
+        "transferFunction": "linear",
+        "colorSpace": "linear-rec2020",
+        "bitDepth": 8
+      }
+    }
+  },
+  {
+    "name": "invalid-light-source",
+    "expectedCode": "IMAGE_PROCESSING_INVALID_LIGHT_SOURCE",
+    "imageProcessing": {
+      "schemaVersion": 1,
+      "algorithmVersion": "film-digitization-v1",
+      "inputMode": "sensor-raw",
+      "raw": {},
+      "negative": {
+        "enabled": true,
+        "lightSource": { "kind": "calibration" },
+        "filmBase": { "kind": "manual", "rgb": [0.9, 0.8, 0.7], "stage": "linear-working" },
+        "density": { "min": 0, "max": 3 },
+        "profile": "generic-color-negative-v1"
+      }
+    }
+  },
+  {
+    "name": "invalid-film-base-roi",
+    "expectedCode": "IMAGE_PROCESSING_INVALID_FILM_BASE",
+    "imageProcessing": {
+      "schemaVersion": 1,
+      "algorithmVersion": "film-digitization-v1",
+      "inputMode": "sensor-raw",
+      "raw": {},
+      "negative": {
+        "enabled": true,
+        "lightSource": { "kind": "camera-white-balance" },
+        "filmBase": { "kind": "roi", "stage": "linear-working" },
+        "density": { "min": 0, "max": 3 },
+        "profile": "generic-color-negative-v1"
+      }
+    }
+  },
+  {
+    "name": "invalid-film-base-manual-rgb",
+    "expectedCode": "IMAGE_PROCESSING_INVALID_FILM_BASE",
+    "imageProcessing": {
+      "schemaVersion": 1,
+      "algorithmVersion": "film-digitization-v1",
+      "inputMode": "sensor-raw",
+      "raw": {},
+      "negative": {
+        "enabled": true,
+        "lightSource": { "kind": "camera-white-balance" },
+        "filmBase": { "kind": "manual", "rgb": [0.2, 0.3], "stage": "linear-working" },
+        "density": { "min": 0, "max": 3 },
+        "profile": "generic-color-negative-v1"
+      }
+    }
+  },
+  {
+    "name": "invalid-density",
+    "expectedCode": "IMAGE_PROCESSING_INVALID_DENSITY",
+    "imageProcessing": {
+      "schemaVersion": 1,
+      "algorithmVersion": "film-digitization-v1",
+      "inputMode": "sensor-raw",
+      "raw": {},
+      "negative": {
+        "enabled": true,
+        "lightSource": { "kind": "camera-white-balance" },
+        "filmBase": { "kind": "manual", "rgb": [0.9, 0.8, 0.7], "stage": "linear-working" },
+        "density": { "min": 2, "max": 1 },
+        "profile": "generic-color-negative-v1"
+      }
+    }
+  },
+  {
+    "name": "unregistered-film-profile",
+    "expectedCode": "IMAGE_PROCESSING_INVALID_NEGATIVE",
+    "imageProcessing": {
+      "schemaVersion": 1,
+      "algorithmVersion": "film-digitization-v1",
+      "inputMode": "sensor-raw",
+      "raw": {},
+      "negative": {
+        "enabled": true,
+        "lightSource": { "kind": "camera-white-balance" },
+        "filmBase": { "kind": "manual", "rgb": [0.9, 0.8, 0.7], "stage": "linear-working" },
+        "density": { "min": 0, "max": 3 },
+        "profile": "kodak-gold-200-v1"
+      }
+    }
+  },
+  {
+    "name": "negative-missing-film-base",
+    "expectedCode": "IMAGE_PROCESSING_INVALID_NEGATIVE",
+    "imageProcessing": {
+      "schemaVersion": 1,
+      "algorithmVersion": "film-digitization-v1",
+      "inputMode": "sensor-raw",
+      "raw": {},
+      "negative": {
+        "enabled": true,
+        "lightSource": { "kind": "camera-white-balance" },
+        "density": { "min": 0, "max": 3 },
+        "profile": "generic-color-negative-v1"
+      }
+    }
+  },
+  {
+    "name": "curve-x-not-increasing",
+    "expectedCode": "IMAGE_PROCESSING_INVALID_CURVE",
+    "imageProcessing": {
+      "schemaVersion": 1,
+      "algorithmVersion": "film-digitization-v1",
+      "inputMode": "sensor-raw",
+      "raw": {},
+      "positive": {
+        "masterCurve": {
+          "interpolation": "linear",
+          "points": [
+            { "x": 0, "y": 0 },
+            { "x": 0.6, "y": 0.4 },
+            { "x": 0.5, "y": 0.6 },
+            { "x": 1, "y": 1 }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "curve-endpoints",
+    "expectedCode": "IMAGE_PROCESSING_INVALID_CURVE",
+    "imageProcessing": {
+      "schemaVersion": 1,
+      "algorithmVersion": "film-digitization-v1",
+      "inputMode": "sensor-raw",
+      "raw": {},
+      "positive": {
+        "masterCurve": {
+          "interpolation": "linear",
+          "points": [
+            { "x": 0, "y": 0 },
+            { "x": 0.5, "y": 0.5 },
+            { "x": 0.9, "y": 1 }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "curve-nonmonotonic-y",
+    "expectedCode": "IMAGE_PROCESSING_INVALID_CURVE",
+    "imageProcessing": {
+      "schemaVersion": 1,
+      "algorithmVersion": "film-digitization-v1",
+      "inputMode": "sensor-raw",
+      "raw": {},
+      "positive": {
+        "masterCurve": {
+          "interpolation": "linear",
+          "points": [
+            { "x": 0, "y": 0 },
+            { "x": 0.4, "y": 0.7 },
+            { "x": 0.6, "y": 0.6 },
+            { "x": 1, "y": 1 }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "geometry-zero-width",
+    "expectedCode": "IMAGE_PROCESSING_INVALID_GEOMETRY",
+    "imageProcessing": {
+      "schemaVersion": 1,
+      "algorithmVersion": "film-digitization-v1",
+      "inputMode": "sensor-raw",
+      "raw": {},
+      "sourceGeometry": {
+        "crop": { "x": 0.1, "y": 0.1, "width": 0, "height": 0.5 },
+        "rotationDegrees": 0
+      }
+    }
+  },
+  {
+    "name": "geometry-rotation-out-of-range",
+    "expectedCode": "IMAGE_PROCESSING_INVALID_GEOMETRY",
+    "imageProcessing": {
+      "schemaVersion": 1,
+      "algorithmVersion": "film-digitization-v1",
+      "inputMode": "sensor-raw",
+      "raw": {},
+      "sourceGeometry": {
+        "crop": { "x": 0, "y": 0, "width": 1, "height": 1 },
+        "rotationDegrees": 90
+      }
+    }
+  },
+  {
+    "name": "positive-rgb-balance-length",
+    "expectedCode": "IMAGE_PROCESSING_INVALID_POSITIVE",
+    "imageProcessing": {
+      "schemaVersion": 1,
+      "algorithmVersion": "film-digitization-v1",
+      "inputMode": "sensor-raw",
+      "raw": {},
+      "positive": { "rgbBalanceEv": [0, 0] }
+    }
+  },
+  {
+    "name": "positive-white-black-order",
+    "expectedCode": "IMAGE_PROCESSING_INVALID_POSITIVE",
+    "imageProcessing": {
+      "schemaVersion": 1,
+      "algorithmVersion": "film-digitization-v1",
+      "inputMode": "sensor-raw",
+      "raw": {},
+      "positive": { "blackPoint": 0.8, "whitePoint": 0.7 }
+    }
+  },
+  {
+    "name": "positive-saturation-out-of-range",
+    "expectedCode": "IMAGE_PROCESSING_INVALID_POSITIVE",
+    "imageProcessing": {
+      "schemaVersion": 1,
+      "algorithmVersion": "film-digitization-v1",
+      "inputMode": "sensor-raw",
+      "raw": {},
+      "positive": { "saturation": 3 }
+    }
+  }
+]

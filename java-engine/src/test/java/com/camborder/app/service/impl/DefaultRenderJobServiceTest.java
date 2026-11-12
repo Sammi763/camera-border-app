@@ -43,6 +43,28 @@ final class DefaultRenderJobServiceTest {
     }
 
     @Test
+    void changedFilmSourceFailsBeforeDecodingAfterQueueWait(@org.junit.jupiter.api.io.TempDir final java.nio.file.Path temp)
+            throws Exception {
+        final CountDownLatch release = new CountDownLatch(1);
+        executor.submit(() -> { release.await(5, TimeUnit.SECONDS); return null; });
+        final java.nio.file.Path source = temp.resolve("negative.tif");
+        java.nio.file.Files.writeString(source, "original");
+        final ImageRenderService renderer = mock(ImageRenderService.class);
+        final FilmExportService film = null;
+        final DefaultRenderJobService service = new DefaultRenderJobService(renderer, new RenderJobStore(),
+                executor, new ObjectMapper(), film);
+        final RenderRecipe recipe = com.camborder.app.util.FilmTestFixtures.recipe(source,
+                com.camborder.app.util.FilmTestFixtures.linearProcessing());
+        final RenderJobStatusResponse accepted = service.submitJob(new RenderJobRequest(recipe, export("/exports/test.tif")));
+        java.nio.file.Files.writeString(source, "changed!");
+        release.countDown();
+        final RenderJobStatusResponse terminal = waitForTerminal(service, accepted.getJobId());
+        assertThat(terminal.getStatus()).isEqualTo("failed");
+        assertThat(terminal.getItems().get(0).getError()).contains("源文件已变化");
+        org.mockito.Mockito.verifyNoInteractions(renderer);
+    }
+
+    @Test
     void shouldFreezeRecipeAndExportSettingsAtSubmissionTime() throws Exception {
         ImageRenderService imageRenderService = mock(ImageRenderService.class);
         CountDownLatch composeStarted = new CountDownLatch(1);

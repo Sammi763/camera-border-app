@@ -2,7 +2,7 @@
  * 预览模块的 UI 状态类型。
  */
 
-import type { PreviewResponse } from "../../types/preview"
+import type { PreviewResponse, RenderRecipe } from "../../types/preview"
 
 /**
  * 引擎预览同步状态。
@@ -33,4 +33,16 @@ export type PreviewState =
       readonly engineSyncStatus: EngineSyncStatus
       /** 引擎预览的原始响应，引擎未就绪时为 null。 */
       readonly engineResponse: PreviewResponse | null
+      /**
+       * 底片模式：Canvas 的普通照片像素不能冒充校色结果；此模式下只展示引擎输出，
+       * 未同步时显示明确加载/错误状态。
+       */
+      readonly filmMode?: boolean
+      /**
+       * 底片模式当前稳定快照：主预览、阶段对比和直方图共用同一份配方与代次。
+       * 普通模式为 null/缺省。
+       */
+      readonly engineRecipe?: RenderRecipe | null
+      readonly engineClientId?: string | null
+      readonly engineGeneration?: number | null
     }

@@ -4,57 +4,92 @@
  * 关键点：
  * - 复用 drawPreviewToCanvas（与主预览/导出链路同一个渲染函数），
  *   保证缩略图、中间预览、单图导出、批量导出使用同一配置与几何；
- * - 内部画布按「图片尺寸 + 边框」的真实比例建立（长边压到 ≤900px 保证性能），
- *   通过 CSS 缩放显示，边框/风格装饰保持与真实渲染一致的比例；
+ * - sourceDimensions 提供方向归一后的原图事实时，缩略图几何与主预览
+ *   完全同源（边框/文字按同一比例映射）；缺省时退化为代理图语义；
+ * - 内部画布长边 ≤ MAX_RENDER_DIM 控制性能，CSS 负责缩小显示；
+ * - 仅在卡片进入可视范围（含少量预载边距）时绘制，屏幕外卡片不建立
+ *   像素缓冲（U08）；drawable 由调用方共享，避免每卡重复压缩；
  * - 无当前照片时由调用方回退到纯 CSS 缩略图。
  */
 
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 import type { RenderSettings } from "../../settings/types"
 import { drawPreviewToCanvas, type CanvasDrawableSource } from "../../preview/canvas/canvasRenderer"
 import { calculateImagePlacementGeometry } from "../../preview/canvas/imagePlacementGeometry"
 import { imagePlacementFromSettings } from "../../settings/utils/imageArea"
 
-/** 缩略图内部渲染的最长边上限（性能保护）。 */
-const MAX_RENDER_DIM = 900
+/** 缩略图内部渲染的最长边上限（性能保护）；画廊共享位图复用同一上限。 */
+export const MAX_RENDER_DIM = 900
+
+/** IntersectionObserver 预载边距：提前半个视口开始绘制，滚动时不露白。 */
+const VISIBILITY_ROOT_MARGIN = "50%"
 
 type LiveTemplateThumbnailProps = {
   /** 当前预览照片；null 时组件不渲染内容（调用方负责回退）。 */
   readonly image: HTMLImageElement | null
-  /** 已合并模板 patch 的完整渲染设置。 */
+  /** 已合并模板 patch 的完整渲染设置（含有效文字/品牌解析结果）。 */
   readonly settings: RenderSettings
+  /**
+   * 方向归一后的原图像素事实（与主预览同源）。
+   * 提供时缩略图几何按原图空间 × viewScale 计算；缺省时以图片自身尺寸为语义。
+   */
+  readonly sourceDimensions?: { readonly width: number; readonly height: number } | null
+  /** 调用方共享的缩小位图（同一照片的各卡片复用，避免逐卡重复压缩）。 */
+  readonly sharedDrawable?: CanvasDrawableSource | null
 }
 
-export const LiveTemplateThumbnail = ({ image, settings }: LiveTemplateThumbnailProps): JSX.Element => {
+export const LiveTemplateThumbnail = ({
+  image,
+  settings,
+  sourceDimensions = null,
+  sharedDrawable = null
+}: LiveTemplateThumbnailProps): JSX.Element => {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const wrapperRef = useRef<HTMLDivElement>(null)
+  // 浏览器提供观察器时先不绘制，等 IntersectionObserver 判定可见后再画；
+  // 无观察器环境（测试/降级）保持 true，避免空画廊。
+  const [isVisible, setIsVisible] = useState(() => typeof IntersectionObserver === "undefined")
+
+  // 仅可视卡片绘制：滚动接近时提前触发（rootMargin 预载），离开后停止重绘。
+  useEffect(() => {
+    const wrapper = wrapperRef.current
+    if (wrapper === null || typeof IntersectionObserver === "undefined") {
+      return
+    }
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        setIsVisible(entry.isIntersecting)
+      }
+    }, { rootMargin: VISIBILITY_ROOT_MARGIN })
+    observer.observe(wrapper)
+    return () => observer.disconnect()
+  }, [])
 
   useEffect(() => {
     const canvas = canvasRef.current
-    if (canvas === null || image === null) {
+    if (canvas === null || image === null || !isVisible) {
       return
     }
 
-    // 长边超过上限时先缩到临时位图，避免大图逐卡重绘开销
-    let sourceWidth = image.naturalWidth
-    let sourceHeight = image.naturalHeight
-    // drawable 必须是真正的 HTMLImageElement / HTMLCanvasElement，
-    // 因为 drawPreviewToCanvas 内部会调用 ctx.drawImage(image, ...)，
-    // 普通对象（只有 naturalWidth/naturalHeight）不是合法的 CanvasImageSource，
-    // 浏览器会抛异常或直接跳过绘制，导致模板缩略图空白。
-    let drawable: CanvasDrawableSource = image
-    const largest = Math.max(sourceWidth, sourceHeight)
-    if (largest > MAX_RENDER_DIM && largest > 0) {
-      const k = MAX_RENDER_DIM / largest
-      const off = document.createElement("canvas")
-      off.width = Math.max(1, Math.round(sourceWidth * k))
-      off.height = Math.max(1, Math.round(sourceHeight * k))
-      off.getContext("2d")?.drawImage(image, 0, 0, off.width, off.height)
-      drawable = off
-      sourceWidth = off.width
-      sourceHeight = off.height
+    // 共享 drawable 优先：调用方已按上限压缩过一次，各卡片不再重复建立离屏画布。
+    let drawable: CanvasDrawableSource = sharedDrawable ?? image
+    let sourceWidth = sourceDimensions?.width ?? image.naturalWidth
+    let sourceHeight = sourceDimensions?.height ?? image.naturalHeight
+    if (sharedDrawable === null) {
+      // 无共享位图时按旧契约本地压缩（单卡挂载等场景）。
+      const proxyLargest = Math.max(image.naturalWidth, image.naturalHeight)
+      if (proxyLargest > MAX_RENDER_DIM && proxyLargest > 0) {
+        const k = MAX_RENDER_DIM / proxyLargest
+        const off = document.createElement("canvas")
+        off.width = Math.max(1, Math.round(image.naturalWidth * k))
+        off.height = Math.max(1, Math.round(image.naturalHeight * k))
+        off.getContext("2d")?.drawImage(image, 0, 0, off.width, off.height)
+        drawable = off
+      }
     }
 
-    // 内部分辨率 = 图片 + 边框的真实比例，CSS 负责缩小显示
+    // 内部分辨率 = 完整合成（照片目标区域 + 边框）按上限缩放，CSS 负责显示缩放。
+    // 几何以原图事实为语义：代理图只替代像素来源（U01 同源契约）。
     const placement = calculateImagePlacementGeometry(
       sourceWidth,
       sourceHeight,
@@ -63,22 +98,35 @@ export const LiveTemplateThumbnail = ({ image, settings }: LiveTemplateThumbnail
     if (placement === null) {
       return
     }
-    canvas.width = Math.max(1, Math.round(placement.targetWidth + settings.borderLeft + settings.borderRight))
-    canvas.height = Math.max(1, Math.round(placement.targetHeight + settings.borderTop + settings.borderBottom))
+    const compositionWidth = placement.targetWidth + Math.max(0, settings.borderLeft) + Math.max(0, settings.borderRight)
+    const compositionHeight = placement.targetHeight + Math.max(0, settings.borderTop) + Math.max(0, settings.borderBottom)
+    const largest = Math.max(compositionWidth, compositionHeight)
+    const scale = largest > MAX_RENDER_DIM && largest > 0 ? MAX_RENDER_DIM / largest : 1
+    canvas.width = Math.max(1, Math.round(compositionWidth * scale))
+    canvas.height = Math.max(1, Math.round(compositionHeight * scale))
 
     // 把真正的 drawable 传给共享渲染器，与主预览/导出链路同一份渲染逻辑。
-    drawPreviewToCanvas(canvas, drawable, settings)
-  }, [image, settings])
+    drawPreviewToCanvas(
+      canvas,
+      drawable,
+      settings,
+      null,
+      undefined,
+      { width: sourceWidth, height: sourceHeight }
+    )
+  }, [image, settings, sourceDimensions, sharedDrawable, isVisible])
 
   if (image === null) {
     return <div className="liveThumbEmpty" aria-hidden="true" />
   }
 
   return (
-    <canvas
-      ref={canvasRef}
-      className="liveThumbCanvas"
-      aria-hidden="true"
-    />
+    <div ref={wrapperRef} className="liveThumbWrapper">
+      <canvas
+        ref={canvasRef}
+        className="liveThumbCanvas"
+        aria-hidden="true"
+      />
+    </div>
   )
 }

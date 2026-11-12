@@ -146,14 +146,16 @@ describe("PreviewPanel 单图导出（EXIF 等待 + 解析一致）", () => {
   })
 
   it("预览空间不足时显示明确提示，而不把纯边框当作成功预览", async () => {
+    // 新几何语义下边框随照片等比缩放；只有视口小到照片不足最小可见边长
+    // （667 × 20/787 ≈ 17px < 24px）才判定预览区域不足。
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
       x: 0,
       y: 0,
-      width: 320,
-      height: 100,
+      width: 60,
+      height: 20,
       top: 0,
-      right: 320,
-      bottom: 100,
+      right: 60,
+      bottom: 20,
       left: 0,
       toJSON: () => ({})
     } as DOMRect)
@@ -331,7 +333,8 @@ describe("PreviewPanel 单图导出（EXIF 等待 + 解析一致）", () => {
     })
 
     // 1) 先等待 EXIF 再导出
-    expect(prepareExifForExport).toHaveBeenCalledWith([FILE_PATH])
+    // U06 后导出流程会传递中止 signal（取消等待用），路径仍是第一个参数
+    expect(prepareExifForExport).toHaveBeenCalledWith([FILE_PATH], expect.anything())
     expect(callLog.indexOf("prepare:/photos/A.jpg")).toBeLessThan(callLog.indexOf("job"))
 
     // 2) 单图导出与批量导出共用 resolveQueueItem 解析
@@ -1188,7 +1191,7 @@ describe("PreviewPanel 编辑态叠加（原图 / 网格 / 裁切构图）", () 
     )
   }
 
-  it("按住 \\ 显示无边框原图叠加，松开恢复；切图后自动退出", () => {
+  it("按住 \\ 显示无边框原图叠加，松开恢复；按住期间切图继续显示新图", () => {
     const { rerender } = renderPreview()
 
     expect(screen.queryByTestId("preview-original-overlay")).toBeNull()
@@ -1204,13 +1207,34 @@ describe("PreviewPanel 编辑态叠加（原图 / 网格 / 裁切构图）", () 
     fireEvent.pointerUp(holdButton)
     expect(screen.queryByTestId("preview-original-overlay")).toBeNull()
 
-    // 切换图片时退出叠加状态
+    // 按住期间切换图片：叠加不消失，直接显示新图的无边框原图
     fireEvent.keyDown(window, { key: "\\" })
     const nextState = makeDecodedActiveState()
     if (nextState.kind !== "active") throw new Error("测试需要 active 预览状态")
     rerender(
       <PreviewPanel
         state={{ ...nextState, filePath: "/photos/B.jpg", fileName: "B.jpg" }}
+        settings={makeSettings()}
+        hasSelectedImage={true}
+        queueItems={[makeItem()]}
+        batchExportItems={[]}
+        batchExportLabel=""
+        resolveQueueItem={vi.fn(() => ({ textOverride: null, resolvedLayers: [], brand: null }))}
+        prepareExifForExport={vi.fn(async () => {})}
+        showExportControls={false}
+      />
+    )
+    expect(screen.getByTestId("preview-original-overlay")).toBeDefined()
+    // 松开 \ 后叠加退出
+    fireEvent.keyUp(window, { key: "\\" })
+    expect(screen.queryByTestId("preview-original-overlay")).toBeNull()
+
+    // 未按住时切图则保持隐藏
+    const thirdState = makeDecodedActiveState()
+    if (thirdState.kind !== "active") throw new Error("测试需要 active 预览状态")
+    rerender(
+      <PreviewPanel
+        state={{ ...thirdState, filePath: "/photos/C.jpg", fileName: "C.jpg" }}
         settings={makeSettings()}
         hasSelectedImage={true}
         queueItems={[makeItem()]}

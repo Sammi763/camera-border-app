@@ -9,7 +9,9 @@
 
 import type { PhotoAssetStore, PhotoIdentity, ShootingPreset } from "../metadata/types"
 import type { PhotoMetadata } from "../../types/preview"
+import type { ImageProcessingConfig } from "../../types/imageProcessing"
 import type { IdentitySourceMap } from "../metadata/utils/resolveIdentityFieldSources"
+import type { HistoryEntryMeta } from "../../utils/historySequence"
 
 /** 队列中的图片项。`filePath` 是引擎实际处理的路径（可能是转换后的临时文件）。 */
 export type QueueItem = {
@@ -32,6 +34,12 @@ export type QueueItem = {
   readonly presetId: string | null
   /** 每张图独立的摄影身份覆盖。null 表示使用摄影预设或全局默认。 */
   readonly identityOverride: Partial<PhotoIdentity> | null
+  /** 每张图独立的底片处理配置；缺省/null 表示普通模式。 */
+  readonly imageProcessing?: ImageProcessingConfig | null
+  /** 会话恢复时发现底片配置损坏/版本不支持的解释；有值时处理保持关闭。 */
+  readonly imageProcessingError?: string | null
+  /** 源文件版本（mtime/size 或引擎返回的指纹）；用于失效旧缓存/取样。 */
+  readonly sourceVersion?: string | null
   /** 会话恢复时发现源文件不可读取。保留条目供用户删除或重新导入。 */
   readonly missing?: boolean
 }
@@ -40,6 +48,9 @@ export type QueueItem = {
 export type OperationScope = "active" | "checked" | "all"
 /** 旧名称兼容层；所有新状态与组件统一使用 OperationScope。 */
 export type BatchScope = OperationScope
+
+/** 整卷同步时可独立选择的底片配置字段组。 */
+export type FilmSyncField = "lightSource" | "filmBase" | "density" | "positive" | "curves" | "sourceGeometry"
 
 /** 导入结果（HEIC 转换反馈等）。 */
 export type ImportResult = {
@@ -70,6 +81,10 @@ export type QueueController = {
   readonly activeFilePath: string | null
   /** 当前预览图片的文字覆盖（快捷读取）。 */
   readonly activeTextOverride: string | null
+  /** 当前预览图片的底片处理配置；缺省/null 表示普通模式。 */
+  readonly activeImageProcessing: ImageProcessingConfig | null
+  /** 当前预览图片的底片配置损坏解释；有值时处理保持关闭。 */
+  readonly activeImageProcessingError: string | null
   readonly isBrowserMode: boolean
   /** 最近一次导入的结果（HEIC 转换反馈等）。 */
   readonly lastImportResult: ImportResult | null
@@ -78,6 +93,9 @@ export type QueueController = {
   /** 队列内容与每图覆盖的撤销/重做状态。 */
   readonly canUndo: boolean
   readonly canRedo: boolean
+  /** 栈顶历史元数据（全局序号 + 动作描述），供工作台协调全局 ⌘Z 与按钮提示。 */
+  readonly topUndo: HistoryEntryMeta | null
+  readonly topRedo: HistoryEntryMeta | null
   readonly addImages: () => Promise<void>
   readonly addImageFiles: () => Promise<void>
   readonly addImageFolder: () => Promise<void>
@@ -109,6 +127,26 @@ export type QueueController = {
   readonly redo: () => void
   /** 更新当前预览图片的文字覆盖。 */
   readonly setActiveTextOverride: (text: string | null) => void
+  /**
+   * 更新当前预览图片的底片处理配置（深复制后写入队列历史）。
+   * 相同 historyTag 的连续手势（如曲线拖动）合并为一条撤销历史。
+   */
+  readonly setActiveImageProcessing: (
+    config: ImageProcessingConfig | null,
+    options?: { readonly historyTag?: string; readonly description?: string }
+  ) => void
+  /** 读取指定图片的有效底片配置（深复制）；不存在或普通模式返回 null。 */
+  readonly recordSourceVersion: (id: string, version: string) => void
+  readonly getEffectiveImageProcessing: (id: string) => ImageProcessingConfig | null
+  /**
+   * 选择性同步底片配置到 active/checked/all。只复制指定字段组，其他每图覆盖保留；
+   * 一次调用形成一条撤销历史；损坏配置的条目跳过，不污染其他结果。
+   */
+  readonly syncImageProcessing: (
+    scope: OperationScope,
+    source: ImageProcessingConfig,
+    fields: readonly FilmSyncField[]
+  ) => void
   readonly getEffectiveText: (id: string, globalText: string) => string
   /** 应用摄影预设到指定作用范围。 */
   readonly assignPresetToScope: (presetId: string | null, scope: OperationScope) => void
@@ -120,6 +158,22 @@ export type QueueController = {
   readonly setActiveIdentityOverride: (patch: Partial<PhotoIdentity>) => void
   /** 清除当前预览图片的摄影身份覆盖。 */
   readonly clearActiveIdentityOverride: () => void
+  /**
+   * 重新定位丢失条目到新路径（U11）：保留条目身份、每图覆盖、预设绑定、
+   * 排序与选中，并按 HEIC 规则重建工作文件。失败（不可读/转换失败）返回 false。
+   */
+  readonly relocateItem: (id: string, newPath: string) => Promise<boolean>
+  /**
+   * 文件夹级重定位（U11）：按文件名匹配候选；同名候选唯一时自动绑定，
+   * 多个同名候选不静默绑定，在 ambiguous 中返回候选供用户逐个确认。
+   */
+  readonly relocateMissingFromFolder: (candidatePaths: readonly string[]) => Promise<{
+    readonly relocated: number
+    readonly ambiguous: readonly { readonly itemId: string; readonly fileName: string; readonly candidates: readonly string[] }[]
+    readonly unresolved: readonly string[]
+  }>
+  /** 同名冲突时的人工确认绑定入口。 */
+  readonly relocateItemToCandidate: (id: string, candidatePath: string) => Promise<boolean>
   /**
    * 计算图片的有效摄影身份。
    * 优先级：每图覆盖 > 摄影预设 > EXIF（可选传入）> 空默认。

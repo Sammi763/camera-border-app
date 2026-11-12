@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { buildExportSummary, useExportController } from "./useExportController"
+import { effectiveExportFormat, buildExportSummary, buildNamingPreview, useExportController } from "./useExportController"
 import type { PreviewState } from "../types"
 import type { QueueItem } from "../../queue/types"
 import type { RenderSettings } from "../../settings/types"
@@ -64,6 +64,33 @@ afterEach(() => {
 })
 
 describe("useExportController", () => {
+  it("底片输出组合决定扩展名，混合批次按每张图选择格式", () => {
+    const processing = {} as NonNullable<QueueItem["imageProcessing"]>
+    const configured = { ...settings(20), filmOutput: "tiff16-rec2020" as const }
+    expect(effectiveExportFormat(configured, processing)).toBe("tiff")
+    expect(effectiveExportFormat(configured, null)).toBe("png")
+    expect(buildNamingPreview([first,second],{mode:"original-suffix",prefix:""}, (_item,index)=>index===0?"tif":"png"))
+      .toEqual(["first-border.tif","second-border.png"])
+  })
+
+  it("底片单图使用真实组合扩展名并把源版本与逐图配方送入任务", async () => {
+    const processing = { schemaVersion: 1 } as NonNullable<QueueItem["imageProcessing"]>
+    const item = {...first,imageProcessing:processing,sourceVersion:"pinned-version"}
+    const choose = vi.fn(async () => "/exports/film.tif")
+    ;(window as unknown as {desktop?:unknown}).desktop = {selectExportPath:choose}
+    const fetchMock = vi.fn(async () => jsonResponse({jobId:"film-job",status:"completed",total:1,completed:1,
+      items:[{index:0,status:"completed",outputPath:"/exports/film.tif",actualFormat:"tiff"}]},202))
+    vi.stubGlobal("fetch",fetchMock)
+    const {result} = renderHook(() => useExportController({state,settings:{...settings(20),filmOutput:"tiff16-rec2020"},
+      queueItems:[item],batchExportItems:[],resolveQueueItem:()=>({textOverride:null,resolvedLayers:[],brand:null}),
+      prepareExifForExport:async()=>{},autoOpenExportDirectory:false,engineAvailable:true}))
+    await act(async()=>result.current.startSingleExport())
+    expect(choose).toHaveBeenCalledWith("first-border.tif")
+    const request = JSON.parse(String((fetchMock.mock.calls[0] as unknown as [unknown,RequestInit])[1].body))
+    expect(request.items[0]).toMatchObject({sourceVersion:"pinned-version",recipe:{imageProcessing:processing},
+      export:{format:"tiff",filmOutput:"tiff16-rec2020",tier:"custom"}})
+  })
+
   it("批量失败项的可选专业结果为 null 时仍能归并终态", () => {
     expect(buildExportSummary({
       metadataPreservation: null,
@@ -110,7 +137,8 @@ describe("useExportController", () => {
     act(() => {
       pending = result.current.startBatchExport()
     })
-    await waitFor(() => expect(prepareExifForExport).toHaveBeenCalledWith([first.filePath, second.filePath]))
+    // EXIF 等待现在会传入可中止 signal（U06），路径仍是第一个参数
+    await waitFor(() => expect(prepareExifForExport).toHaveBeenCalledWith([first.filePath, second.filePath], expect.anything()))
 
     // 用户在等待期间继续编辑并改变选中范围；已启动任务不可被这些变化影响。
     rerender({ currentSettings: settings(999), targets: [first] })
@@ -250,5 +278,201 @@ describe("useExportController", () => {
     })
     expect(result.current.batch).toMatchObject({ kind: "cancelled", total: 2, cancelled: 2 })
     await act(async () => { await pending! })
+  })
+
+  it("批量命名 prefix-index：输出路径为前缀-三位序号，无 -border 后缀", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({
+      jobId: "job-2",
+      status: "completed",
+      total: 2,
+      completed: 2,
+      items: [
+        { index: 0, status: "completed", outputPath: "/exports/kyoto-001.png", actualFormat: "png" },
+        { index: 1, status: "completed", outputPath: "/exports/kyoto-002.png", actualFormat: "png" }
+      ]
+    }, 202))
+    vi.stubGlobal("fetch", fetchMock)
+    ;(window as unknown as { desktop?: unknown }).desktop = {
+      selectExportDirectory: vi.fn(async () => "/exports")
+    }
+
+    const namingSettings: RenderSettings = {
+      ...settings(20),
+      exportNaming: { mode: "prefix-index", prefix: "kyoto" }
+    }
+    const resolveQueueItem = vi.fn(() => ({ textOverride: null, resolvedLayers: [], brand: null }))
+    const { result } = renderHook(() => useExportController({
+      state,
+      settings: namingSettings,
+      queueItems: [first, second],
+      batchExportItems: [first, second],
+      resolveQueueItem,
+      prepareExifForExport: vi.fn(async () => {}),
+      autoOpenExportDirectory: false,
+      engineAvailable: true
+    }))
+
+    await act(async () => { await result.current.startBatchExport() })
+
+    const request = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))
+    expect(request.items[0].export.outputPath).toBe("/exports/kyoto-001.png")
+    expect(request.items[1].export.outputPath).toBe("/exports/kyoto-002.png")
+  })
+
+  it("buildNamingPreview 展示实际输出文件名样例", () => {
+    expect(buildNamingPreview(
+      [first, second],
+      { mode: "original-suffix", prefix: "" },
+      "png"
+    )).toEqual(["first-border.png", "second-border.png"])
+    expect(buildNamingPreview(
+      [first, second],
+      { mode: "prefix-index", prefix: "kyoto" },
+      "jpg"
+    )).toEqual(["kyoto-001.jpg", "kyoto-002.jpg"])
+    // 空前缀回退 export
+    expect(buildNamingPreview(
+      [first],
+      { mode: "prefix-index", prefix: "  " },
+      "png"
+    )).toEqual(["export-001.png"])
+  })
+
+  it("准备阶段取消：EXIF 等待期间置本地令牌，异步返回后不再提交任务", async () => {
+    let releaseExif!: () => void
+    const prepareExifForExport = vi.fn(() => new Promise<void>((resolve) => { releaseExif = resolve }))
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ error: "unexpected" }, 500))
+    vi.stubGlobal("fetch", fetchMock)
+    ;(window as unknown as { desktop?: unknown }).desktop = {
+      selectExportPath: vi.fn(async () => "/exports/first-border.png")
+    }
+
+    const { result } = renderHook(() => useExportController({
+      state,
+      settings: settings(20),
+      queueItems: [first],
+      batchExportItems: [first],
+      resolveQueueItem: () => ({ textOverride: null, resolvedLayers: [], brand: null }),
+      prepareExifForExport,
+      autoOpenExportDirectory: false,
+      engineAvailable: true
+    }))
+
+    let pending: Promise<void>
+    act(() => {
+      pending = result.current.startSingleExport()
+    })
+    await waitFor(() => expect(prepareExifForExport).toHaveBeenCalled())
+
+    // 尚未取得 jobId：取消进入本地令牌，不发送引擎 DELETE
+    await act(async () => { await result.current.cancelActiveExport() })
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    releaseExif()
+    await act(async () => { await pending! })
+    // 后续选择器/预检结果不得继续提交任务
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(result.current.single.kind).toBe("cancelled")
+  })
+
+  it("查询中断进入状态待确认并保留 jobId；重新查询原任务后收敛到终态", async () => {
+    let pollAttempts = 0
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith("/api/render-jobs") && init?.method === "POST") {
+        return jsonResponse({ jobId: "job-9", status: "running", total: 1 }, 202)
+      }
+      pollAttempts += 1
+      if (pollAttempts === 1) {
+        throw new TypeError("network down")
+      }
+      return jsonResponse({
+        jobId: "job-9",
+        status: "completed",
+        total: 1,
+        completed: 1,
+        items: [{ index: 0, status: "completed", outputPath: "/exports/first-border.png", actualFormat: "png" }]
+      })
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    ;(window as unknown as { desktop?: unknown }).desktop = {
+      selectExportPath: vi.fn(async () => "/exports/first-border.png")
+    }
+
+    const { result } = renderHook(() => useExportController({
+      state,
+      settings: settings(20),
+      queueItems: [first],
+      batchExportItems: [],
+      resolveQueueItem: () => ({ textOverride: null, resolvedLayers: [], brand: null }),
+      prepareExifForExport: vi.fn(async () => {}),
+      autoOpenExportDirectory: false,
+      engineAvailable: true
+    }))
+
+    await act(async () => { await result.current.startSingleExport() })
+    expect(result.current.single).toMatchObject({ kind: "unconfirmed", jobId: "job-9" })
+
+    await act(async () => { await result.current.requeryUnconfirmed() })
+    expect(result.current.single).toMatchObject({ kind: "completed", outputPath: "/exports/first-border.png" })
+  })
+
+  it("重新查询时引擎已重启（404）：解释任务记录失效，不伪装为可续跑", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith("/api/render-jobs") && init?.method === "POST") {
+        return jsonResponse({ jobId: "job-8", status: "running", total: 1 }, 202)
+      }
+      return jsonResponse({ error: "render job not found" }, 404)
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    ;(window as unknown as { desktop?: unknown }).desktop = {
+      selectExportPath: vi.fn(async () => "/exports/first-border.png")
+    }
+
+    const { result } = renderHook(() => useExportController({
+      state,
+      settings: settings(20),
+      queueItems: [first],
+      batchExportItems: [],
+      resolveQueueItem: () => ({ textOverride: null, resolvedLayers: [], brand: null }),
+      prepareExifForExport: vi.fn(async () => {}),
+      autoOpenExportDirectory: false,
+      engineAvailable: true
+    }))
+
+    await act(async () => { await result.current.startSingleExport() })
+    expect(result.current.single.kind).toBe("unconfirmed")
+
+    await act(async () => { await result.current.requeryUnconfirmed() })
+    expect(result.current.single.kind).toBe("unconfirmed")
+    expect((result.current.single as { message: string }).message).toContain("引擎中没有该任务记录")
+  })
+
+  it("提交响应丢失（网络断开且无 jobId）：进入结果未知，不自动重复提交", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+      throw new TypeError("post network down")
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    ;(window as unknown as { desktop?: unknown }).desktop = {
+      selectExportPath: vi.fn(async () => "/exports/first-border.png")
+    }
+
+    const { result } = renderHook(() => useExportController({
+      state,
+      settings: settings(20),
+      queueItems: [first],
+      batchExportItems: [],
+      resolveQueueItem: () => ({ textOverride: null, resolvedLayers: [], brand: null }),
+      prepareExifForExport: vi.fn(async () => {}),
+      autoOpenExportDirectory: false,
+      engineAvailable: true
+    }))
+
+    await act(async () => { await result.current.startSingleExport() })
+    expect(result.current.single).toMatchObject({ kind: "unconfirmed", jobId: null })
+    // POST 只发出一次：结果未知时不自动重发
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect((result.current.single as { message: string }).message).toContain("不会自动重复提交")
   })
 })

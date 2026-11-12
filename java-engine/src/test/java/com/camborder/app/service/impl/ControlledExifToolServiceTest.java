@@ -60,6 +60,16 @@ final class ControlledExifToolServiceTest {
         assertThat(commands).hasSize(2);
     }
 
+    @Test void parsesRawSubIfdWithoutConfusingEmbeddedJpeg(@TempDir Path temp) throws IOException {
+        final String json = "[{\"SubIFD:ImageWidth\":7168,\"SubIFD:ImageHeight\":5120,\"SubIFD:BitsPerSample\":14,"
+                + "\"IFD2:ImageWidth\":7008,\"IFD2:ImageHeight\":4672,\"IFD2:BitsPerSample\":\"8 8 8\",\"IFD0:Orientation\":8}]";
+        final ControlledExifToolService service = new ControlledExifToolService(executable(temp.resolve("tool")).toString(),1000,new ObjectMapper(),
+                (command,timeout,maxOutput) -> new ControlledExifToolService.ProcessResult(0,command.contains("-ver")?"13.59":json,""));
+        final ExifToolService.Inspection inspection = service.inspect(temp.resolve("input.ARW"));
+        assertThat(inspection.isValid()).isTrue(); assertThat(inspection.getWidth()).isEqualTo(7168);
+        assertThat(inspection.getBitDepth()).isEqualTo(14); assertThat(inspection.getOrientation()).isEqualTo(8);
+    }
+
     @Test
     void rejectsNonZeroInspectionOutput(@TempDir final Path tempDir) throws IOException {
         Path executable = executable(tempDir.resolve("exiftool"));

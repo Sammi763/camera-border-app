@@ -174,6 +174,11 @@ export type DesktopBridge = {
   ) => Promise<LocalImagePreview | null>
   /** 检查已恢复会话中的图片源路径是否仍可读取；不返回文件内容。 */
   readonly checkImagePaths?: (paths: readonly string[]) => Promise<readonly boolean[]>
+  /**
+   * 重新定位丢失源文件（U11）：打开单选对话框（默认定位到原文件所在目录），
+   * 返回用户选择的图片绝对路径；取消返回 null。仅返回路径，不做文件 IO 代理。
+   */
+  readonly pickReplacementFile?: (missingFilePath: string) => Promise<string | null>
   /** 读取图片 mtime 与字节数，供预览缓存按源文件版本失效。 */
   readonly getImageFileVersions?: (paths: readonly string[]) => Promise<readonly (ImageFileVersion | null)[]>
   /**

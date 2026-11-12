@@ -5,7 +5,9 @@ package com.camborder.app.dto;
  *
  * mode 取值：
  * - standard：标准格式（JPEG/PNG/TIFF 等）由 ImageIO 直接读取；
- * - embedded-jpeg：RAW 只使用文件内嵌 JPEG 作为像素来源。
+ * - embedded-jpeg：普通模式 RAW 只使用文件内嵌 JPEG 作为像素来源；
+ * - sensor-raw：显式底片模式使用真实传感器 RAW；
+ * - linear-tiff：显式底片模式使用声明了线性传递函数的测试栅格。
  *
  * warning：非空时给出 RAW 像素来源受限等可解释说明。
  */
@@ -13,8 +15,13 @@ public final class SourceDecode {
 
     public static final String MODE_STANDARD = "standard";
     public static final String MODE_EMBEDDED_JPEG = "embedded-jpeg";
+    public static final String MODE_SENSOR_RAW = "sensor-raw";
+    public static final String MODE_LINEAR_TIFF = "linear-tiff";
 
     private String mode;
+    private String calibrationSpaceKey;
+    public String getCalibrationSpaceKey() { return calibrationSpaceKey; }
+    public void setCalibrationSpaceKey(final String value) { calibrationSpaceKey = value; }
     private String format;
     private String warning;
     /** 解码边界读取到的 EXIF Orientation，范围固定为 1–8。 */
@@ -30,6 +37,8 @@ public final class SourceDecode {
     private int fullHeight;
     /** 是否已经在解码边界处理过方向。 */
     private boolean orientationApplied;
+    /** 传感器有效位深（已知时）；普通模式与未知来源为 null。 */
+    private Integer sensorBitDepth;
 
     public SourceDecode() {
     }
@@ -49,6 +58,16 @@ public final class SourceDecode {
     public static SourceDecode embeddedJpeg(final String format) {
         return new SourceDecode(MODE_EMBEDDED_JPEG, format,
                 "RAW 仅使用文件内嵌 JPEG 像素，不代表传感器 RAW 显影");
+    }
+
+    /** 显式底片模式使用真实传感器 RAW。 */
+    public static SourceDecode sensorRaw(final String format) {
+        return new SourceDecode(MODE_SENSOR_RAW, format, null);
+    }
+
+    /** 显式底片模式的线性测试栅格。 */
+    public static SourceDecode linearTiff(final String format) {
+        return new SourceDecode(MODE_LINEAR_TIFF, format, null);
     }
 
     public String getMode() {
@@ -137,5 +156,13 @@ public final class SourceDecode {
 
     public void setOrientationApplied(final boolean orientationApplied) {
         this.orientationApplied = orientationApplied;
+    }
+
+    public Integer getSensorBitDepth() {
+        return sensorBitDepth;
+    }
+
+    public void setSensorBitDepth(final Integer sensorBitDepth) {
+        this.sensorBitDepth = sensorBitDepth;
     }
 }

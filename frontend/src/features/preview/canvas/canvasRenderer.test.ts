@@ -1,94 +1,114 @@
 import { describe, expect, it } from "vitest"
 import {
+  calculateCompositionLayout,
   calculateFocalFromPointer,
-  calculatePreviewImageLayout,
   computeTextPosition,
   drawBorderStyle,
   drawImageGridOverlay,
+  drawPreviewToCanvas,
   MIN_VISIBLE_PREVIEW_IMAGE_EDGE
 } from "./canvasRenderer"
+import { DEFAULT_SETTINGS } from "../../settings/hooks/useSettings"
 
-describe("calculatePreviewImageLayout", () => {
-  it("默认摄影信息卡在足够的预览空间中保留实际照片区域", () => {
-    const layout = calculatePreviewImageLayout(
-      640,
-      360,
-      5035,
-      3339,
-      56,
-      160,
-      56,
-      56
+describe("预览帧生命周期", () => {
+  it("即使新构图无法绘制，也清空含 DPR 和旧变换的上一帧", () => {
+    let stalePixels = true
+    let identity = false
+    const context = {
+      save: () => undefined,
+      restore: () => undefined,
+      setTransform: (...matrix: number[]) => { identity = matrix.join() === "1,0,0,1,0,0" },
+      clearRect: (x: number, y: number, width: number, height: number) => {
+        if (identity && x === 0 && y === 0 && width === 1280 && height === 960) stalePixels = false
+      },
+      scale: () => undefined
+    } as unknown as CanvasRenderingContext2D
+    const canvas = { width: 1280, height: 960, getContext: () => context } as unknown as HTMLCanvasElement
+    drawPreviewToCanvas(canvas, { naturalWidth: 0, naturalHeight: 0 } as HTMLImageElement,
+      DEFAULT_SETTINGS, null, { logicalWidth: 640, logicalHeight: 480, pixelRatio: 2 })
+    expect(stalePixels).toBe(false)
+  })
+})
+
+describe("calculateCompositionLayout", () => {
+  const PHOTO_INFO_CARD = { borderTop: 56, borderBottom: 160, borderLeft: 56, borderRight: 56 }
+
+  it("整个逻辑合成空间等比缩放并居中：边框按比例缩小，不再从视口扣除固定像素", () => {
+    // 合成空间 = 5035+56+56 × 3339+56+160 = 5147×3555；viewScale = min(640/5147, 360/3555)
+    const layout = calculateCompositionLayout(640, 360, 5035, 3339, PHOTO_INFO_CARD)
+
+    expect(layout).not.toBeNull()
+    const viewScale = 360 / 3555
+    expect(layout!.viewScale).toBeCloseTo(viewScale, 6)
+    // 合成高度恰好填满画布，宽度按比例居中留白
+    expect(layout!.compositionRect.height).toBeCloseTo(360, 6)
+    expect(layout!.compositionRect.width).toBeCloseTo(5147 * viewScale, 6)
+    expect(layout!.compositionRect.x).toBeCloseTo((640 - 5147 * viewScale) / 2, 6)
+    // 边框被等比缩放（旧实现会在小视口仍占用 56/160 像素把照片挤小）
+    expect(layout!.borders.top).toBeCloseTo(56 * viewScale, 6)
+    expect(layout!.borders.bottom).toBeCloseTo(160 * viewScale, 6)
+    // 照片区域仍大于最小可见边长
+    expect(layout!.photoRect.width).toBeGreaterThan(MIN_VISIBLE_PREVIEW_IMAGE_EDGE)
+    expect(layout!.photoRect.height).toBeGreaterThan(MIN_VISIBLE_PREVIEW_IMAGE_EDGE)
+  })
+
+  it("同一配方在不同画布尺寸下边框:合成比例恒定（预览与导出同源一致）", () => {
+    const small = calculateCompositionLayout(640, 360, 5035, 3339, PHOTO_INFO_CARD)
+    const large = calculateCompositionLayout(1280, 720, 5035, 3339, PHOTO_INFO_CARD)
+    expect(small).not.toBeNull()
+    expect(large).not.toBeNull()
+    const ratioOf = (layout: NonNullable<ReturnType<typeof calculateCompositionLayout>>): number =>
+      layout.borders.bottom / layout.compositionRect.height
+    expect(ratioOf(small!)).toBeCloseTo(ratioOf(large!), 6)
+    expect(ratioOf(small!)).toBeCloseTo(160 / 3555, 6)
+  })
+
+  it("极小视口中照片小于最小可见尺寸时返回 null，明确提示而不是绘制纯边框", () => {
+    // 合成高 3555，画布高 25 → 照片高 ≈ 23.5 < 24
+    expect(calculateCompositionLayout(640, 25, 5035, 3339, PHOTO_INFO_CARD)).toBeNull()
+  })
+
+  it("零边框模板使用整个合成空间作为照片区域", () => {
+    const layout = calculateCompositionLayout(640, 360, 5035, 3339, {
+      borderTop: 0, borderBottom: 0, borderLeft: 0, borderRight: 0
+    })
+
+    expect(layout).not.toBeNull()
+    expect(layout!.photoRect.x).toBeCloseTo(48.5714)
+    expect(layout!.photoRect.y).toBe(0)
+    expect(layout!.photoRect.width).toBeCloseTo(542.8571)
+    expect(layout!.photoRect.height).toBe(360)
+    expect(layout!.viewScale).toBe(360 / 3339)
+  })
+
+  it("90° 旋转时照片区域使用旋转后的实际包围盒", () => {
+    const layout = calculateCompositionLayout(640, 360, 64, 48, {
+      borderTop: 0, borderBottom: 0, borderLeft: 0, borderRight: 0
+    }, { rotation: 90 })
+
+    expect(layout).not.toBeNull()
+    // 合成空间 = 旋转包围盒 48×64，viewScale = min(640/48, 360/64) = 5.625
+    expect(layout!.viewScale).toBeCloseTo(5.625, 6)
+    expect(layout!.photoRect.x).toBeCloseTo(185)
+    expect(layout!.photoRect.y).toBe(0)
+    expect(layout!.photoRect.width).toBeCloseTo(270)
+    expect(layout!.photoRect.height).toBeCloseTo(360)
+  })
+
+  it("actual 模式 viewScale=1，合成矩形跟随视口偏移（100% 原图坐标契约）", () => {
+    const layout = calculateCompositionLayout(
+      640, 360, 5035, 3339, PHOTO_INFO_CARD,
+      null,
+      { mode: "actual", offsetX: -120, offsetY: -40 }
     )
 
     expect(layout).not.toBeNull()
-    expect(layout!.width).toBeGreaterThan(MIN_VISIBLE_PREVIEW_IMAGE_EDGE)
-    expect(layout!.height).toBeGreaterThan(MIN_VISIBLE_PREVIEW_IMAGE_EDGE)
-  })
-
-  it("边框已占满空间时返回 null，供界面显示明确提示而不是绘制纯边框", () => {
-    expect(calculatePreviewImageLayout(
-      640,
-      216,
-      5035,
-      3339,
-      56,
-      160,
-      56,
-      56
-    )).toBeNull()
-  })
-
-  it("即使可用空间为正，照片短边不足最小可见尺寸时仍返回 null", () => {
-    expect(calculatePreviewImageLayout(
-      640,
-      239,
-      5035,
-      3339,
-      56,
-      160,
-      56,
-      56
-    )).toBeNull()
-  })
-
-  it("零边框模板使用整个 Canvas 作为可绘制照片区域", () => {
-    const layout = calculatePreviewImageLayout(
-      640,
-      360,
-      5035,
-      3339,
-      0,
-      0,
-      0,
-      0
-    )
-
-    expect(layout).not.toBeNull()
-    expect(layout!.x).toBeCloseTo(48.5714)
-    expect(layout!.y).toBe(0)
-    expect(layout!.width).toBeCloseTo(542.8571)
-    expect(layout!.height).toBe(360)
-  })
-
-  it("90° 旋转时诊断区域使用旋转后的实际照片包围盒", () => {
-    const layout = calculatePreviewImageLayout(
-      640,
-      360,
-      64,
-      48,
-      0,
-      0,
-      0,
-      0,
-      { rotation: 90 }
-    )
-
-    expect(layout).not.toBeNull()
-    expect(layout!.x).toBeCloseTo(185)
-    expect(layout!.y).toBe(0)
-    expect(layout!.width).toBeCloseTo(270)
-    expect(layout!.height).toBeCloseTo(360)
+    expect(layout!.viewScale).toBe(1)
+    expect(layout!.compositionRect).toEqual({ x: -120, y: -40, width: 5147, height: 3555 })
+    expect(layout!.photoRect.width).toBe(5035)
+    expect(layout!.photoRect.height).toBe(3339)
+    expect(layout!.borders.top).toBe(56)
+    // actual 模式不受最小可见边长限制（原生尺寸绘制）
   })
 })
 

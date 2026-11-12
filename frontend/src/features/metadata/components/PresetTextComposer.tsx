@@ -38,7 +38,8 @@ const scopeLabel = (scope: OperationScope): string => {
  */
 export const PresetTextComposer = ({ operationScope, onCreate }: PresetTextComposerProps): JSX.Element => {
   const [draft, setDraft] = useState<PresetDraft>(EMPTY_DRAFT)
-  const [open, setOpen] = useState(false)
+  // U10/U12：这是预设创建的主入口，默认直接填写；资料库引用在下方面板补全。
+  const [open, setOpen] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   const updateDraft = useCallback(<K extends keyof PresetDraft>(key: K, value: PresetDraft[K]): void => {
@@ -72,11 +73,11 @@ export const PresetTextComposer = ({ operationScope, onCreate }: PresetTextCompo
 
   if (!open) {
     return (
-      <section className="presetTextComposer" aria-label="从文字创建摄影预设">
+      <section className="presetTextComposer" aria-label="新建拍摄信息预设">
         <div className="presetTextComposerHeader">
           <div>
-            <h3 className="presetTextComposerTitle">文字录入预设</h3>
-            <p className="presetTextComposerHint">直接填写相机、镜头或胶片，保存后应用到{scopeLabel(operationScope)}。</p>
+            <h3 className="presetTextComposerTitle">新建拍摄信息预设</h3>
+            <p className="presetTextComposerHint">直接填写后保存并应用到{scopeLabel(operationScope)}；资料库引用可在下方补充。</p>
           </div>
           <button type="button" className="ghostButton" onClick={() => setOpen(true)}>开始录入</button>
         </div>
@@ -85,11 +86,11 @@ export const PresetTextComposer = ({ operationScope, onCreate }: PresetTextCompo
   }
 
   return (
-    <section className="presetTextComposer" aria-label="从文字创建摄影预设">
+    <section className="presetTextComposer" aria-label="新建拍摄信息预设">
       <div className="presetTextComposerHeader">
         <div>
-          <h3 className="presetTextComposerTitle">文字录入预设</h3>
-          <p className="presetTextComposerHint">保存并应用到{scopeLabel(operationScope)}。</p>
+          <h3 className="presetTextComposerTitle">新建拍摄信息预设</h3>
+          <p className="presetTextComposerHint">保存并应用到{scopeLabel(operationScope)}（创建预设同时应用到当前范围）。</p>
         </div>
         <button type="button" className="ghostButton" onClick={reset}>收起</button>
       </div>

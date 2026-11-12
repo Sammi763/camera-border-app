@@ -1,0 +1,19 @@
+{
+  "recipe": {
+    "imagePath": "/tmp/film-digitization/ordinary.jpg",
+    "border": { "top": 24, "bottom": 24, "left": 24, "right": 24, "color": "#ffffff" },
+    "gradient": null,
+    "texts": [],
+    "imagePlacement": {
+      "mode": "fit",
+      "focalX": 0.5,
+      "focalY": 0.5,
+      "rotation": 0,
+      "targetAspectRatio": null
+    },
+    "logo": null,
+    "borderStyle": null
+  },
+  "maxWidth": 1600,
+  "maxHeight": 1200
+}

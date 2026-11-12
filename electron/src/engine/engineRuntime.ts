@@ -56,6 +56,28 @@ export const resolveBundledComponentManifest = (): string | null => {
   return existsSync(candidate) ? candidate : null
 }
 
+/**
+ * 随包 LibRaw helper 解析。
+ * 仅 macOS arm64 正式目标；缺失或未完成构建时返回 null，Java 端把能力报告为 false。
+ * 不做 PATH 搜索，也不在运行时下载。
+ */
+export const resolveBundledLibRawHelperExecutable = (): string | null => {
+  if (process.platform !== "darwin" || process.arch !== "arm64") return null
+  const candidate = path.join(
+    professionalToolsDir, "libraw", "macos-arm64", "film-raw-helper"
+  )
+  return existsSync(candidate) ? candidate : null
+}
+
+/** 随包 LibRaw helper 清单（版本、源码/二进制校验和、架构）。 */
+export const resolveBundledLibRawHelperManifest = (): string | null => {
+  if (process.platform !== "darwin" || process.arch !== "arm64") return null
+  const candidate = path.join(
+    professionalToolsDir, "libraw", "macos-arm64", "helper.json"
+  )
+  return existsSync(candidate) ? candidate : null
+}
+
 /** 随包字体目录；缺失时 Java 端必须把字体能力报告为 false。 */
 export const resolveBundledFontsDirectory = (): string | null => {
   const candidate = path.join(professionalToolsDir, "fonts")

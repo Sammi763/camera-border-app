@@ -87,6 +87,7 @@ cd electron && pnpm dev:managed   # Electron 自行启动 jar + 加载 frontend/
 | `pnpm --filter electron typecheck` | Electron 类型检查 |
 | `pnpm --filter electron test` | Electron 全量测试（Vitest） |
 | `pnpm test:scripts` | 脚本级测试：Windows 图标生成、打包产物校验、Electron 开发运行时准备、Java Runtime 解压布局（`scripts/*.test.*`） |
+| `bash scripts/build-libraw-helper.sh` | 构建随包 LibRaw helper（macOS arm64；T03 真实 RAW 解码，源码 SHA-256 锁定） |
 | `pnpm perf:smoke` | 性能 smoke：反查并校验已启动的本地 Java 引擎 PID，连续两轮运行每轮 100 项队列、双并发预览和异步导出，记录 Java RSS 基线/峰值/空闲/两轮空闲增长；默认阈值为启动基线 +600MB，产物写入并清理专属临时目录 |
 | `cd electron && pnpm dev:managed` | Electron 托管模式 |
 | `pnpm typecheck` | 根目录快捷：electron + frontend 类型检查 |
@@ -163,3 +164,21 @@ T-05A 只验收打包实现和可在本机执行的合成检查；安装、启�
 - 新增能力或修改行为时，同步更新对应模块 README；操作步骤写入 [docs/cookbook.md](docs/cookbook.md)。
 - 开发文档、注释使用简体中文（[ARCHITECTURE.md §8](ARCHITECTURE.md)）。
 - 移动/重命名文档后，用 grep 检查所有指向它的链接。
+
+
+### 安装包独立进程内存测量（macOS）
+
+从 DMG 复制安装应用后执行：
+
+```bash
+node scripts/measure-packaged-memory.mjs \
+  --app "/绝对路径/Camera Border.app" \
+  --film-sample "/绝对路径/样片.ARW" \
+  --output "/绝对路径/证据/process-memory.json"
+```
+
+脚本使用独立用户目录、空闲端口和随包 JRE，按父子关系采样主进程、Renderer、Java 与
+LibRaw helper；完成后清理本次启动的进程及临时目录。JSON 和相邻 `.log` 保留证据。
+默认普通链路每轮只跑 2 项；追加 `--count 100` 才覆盖原有两轮百图内存场景。
+未观测角色不会写成零占用；周期采样只报告观测峰值，不保证捕获短时尖峰。
+32GB 上的数据不能用于宣称 16GB 实机验收通过。

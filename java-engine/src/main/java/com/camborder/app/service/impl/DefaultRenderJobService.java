@@ -11,6 +11,7 @@ import com.camborder.app.service.ImageRenderService;
 import com.camborder.app.service.RenderJobService;
 import com.camborder.app.util.ImageEncoder;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -42,15 +43,38 @@ public final class DefaultRenderJobService implements RenderJobService {
     private final RenderJobStore renderJobStore;
     private final ExecutorService renderJobExecutor;
     private final ObjectMapper objectMapper;
+    private final FilmExportService filmExportService;
+    private final com.camborder.app.service.FilmTaskScheduler filmTaskScheduler;
 
     public DefaultRenderJobService(final ImageRenderService imageRenderService,
                                    final RenderJobStore renderJobStore,
                                    @Qualifier("renderJobExecutor") final ExecutorService renderJobExecutor,
                                    final ObjectMapper objectMapper) {
+        this(imageRenderService, renderJobStore, renderJobExecutor, objectMapper, null, null);
+    }
+
+    public DefaultRenderJobService(final ImageRenderService imageRenderService,
+                                   final RenderJobStore renderJobStore,
+                                   @Qualifier("renderJobExecutor") final ExecutorService renderJobExecutor,
+                                   final ObjectMapper objectMapper,
+                                   final FilmExportService filmExportService) {
+        this(imageRenderService, renderJobStore, renderJobExecutor, objectMapper,
+                filmExportService, null);
+    }
+
+    @Autowired
+    public DefaultRenderJobService(final ImageRenderService imageRenderService,
+                                   final RenderJobStore renderJobStore,
+                                   @Qualifier("renderJobExecutor") final ExecutorService renderJobExecutor,
+                                   final ObjectMapper objectMapper,
+                                   final FilmExportService filmExportService,
+                                   final com.camborder.app.service.FilmTaskScheduler filmTaskScheduler) {
         this.imageRenderService = imageRenderService;
         this.renderJobStore = renderJobStore;
         this.renderJobExecutor = renderJobExecutor;
         this.objectMapper = objectMapper;
+        this.filmExportService = filmExportService;
+        this.filmTaskScheduler = filmTaskScheduler;
     }
 
     /**
@@ -95,7 +119,16 @@ public final class DefaultRenderJobService implements RenderJobService {
         for (RenderJobSnapshot snapshot : source) {
             // ObjectMapper 经过 JSON 树复制所有可变嵌套模型（文字、渐变、边框、导出设置），
             // 使排队任务与控制器收到的请求对象完全断开引用。
-            frozen.add(objectMapper.convertValue(snapshot, RenderJobSnapshot.class));
+            final RenderJobSnapshot copy = objectMapper.convertValue(snapshot, RenderJobSnapshot.class);
+            if (copy.getRecipe().getImageProcessing() != null) {
+                final String current = FilmProcessingPipeline.sourceVersion(
+                        java.nio.file.Path.of(copy.getRecipe().getImagePath()));
+                if (copy.getSourceVersion() != null && !copy.getSourceVersion().equals(current)) {
+                    throw new ApiException("提交时源文件已变化，请刷新并重新预检", HttpStatus.CONFLICT, "FILM_SOURCE_CHANGED");
+                }
+                copy.setSourceVersion(current);
+            }
+            frozen.add(copy);
         }
         return frozen;
     }
@@ -106,17 +139,18 @@ public final class DefaultRenderJobService implements RenderJobService {
             if (!record.startItem(index)) {
                 return;
             }
-            RenderJobSnapshot snapshot = snapshots.get(index);
+            final RenderJobSnapshot snapshot = snapshots.get(index);
+            final int itemIndex = index;
             try {
-                ExportSettings export = snapshot.getExport();
-                ImageRenderService.ComposeOutcome outcome = imageRenderService.compose(
-                        snapshot.getRecipe(), export.getMaxWidth(), export.getMaxHeight());
-                BufferedImage composited = outcome.getImage();
-                ImageEncoder.ExportResult exportResult = outcome.getSourceInfo() == null
-                        ? imageRenderService.writeToFile(composited, export, snapshot.getRecipe().getImagePath())
-                        : imageRenderService.writeToFile(
-                        composited, export, snapshot.getRecipe().getImagePath(), outcome.getSourceInfo());
-                record.completeItem(index, exportResult, outcome.getSourceDecode());
+                if (filmTaskScheduler != null) {
+                    filmTaskScheduler.run(com.camborder.app.service.FilmTaskKind.EXPORT,
+                            null, 0, null, () -> {
+                                runItem(record, itemIndex, snapshot);
+                                return null;
+                            });
+                } else {
+                    runItem(record, index, snapshot);
+                }
             } catch (RuntimeException exception) {
                 record.failItem(index, safeErrorMessage(exception));
             }
@@ -125,6 +159,32 @@ public final class DefaultRenderJobService implements RenderJobService {
                 record.startItem(index + 1 < snapshots.size() ? index + 1 : index);
                 return;
             }
+        }
+    }
+
+    /** 实际执行一个导出项；冻结快照与源版本校验都在这里完成。 */
+    private void runItem(final RenderJobRecord record, final int index,
+                         final RenderJobSnapshot snapshot) {
+        ExportSettings export = snapshot.getExport();
+        if (snapshot.getRecipe().getImageProcessing() != null) {
+            if (!snapshot.getSourceVersion().equals(FilmProcessingPipeline.sourceVersion(
+                    java.nio.file.Path.of(snapshot.getRecipe().getImagePath())))) {
+                throw new ApiException("排队期间源文件已变化，请刷新并重新预检", HttpStatus.CONFLICT, "FILM_SOURCE_CHANGED");
+            }
+            if (filmExportService == null) {
+                throw new ApiException("底片导出服务未配置", HttpStatus.INTERNAL_SERVER_ERROR);
+            }
+            FilmExportService.Result filmResult = filmExportService.export(snapshot.getRecipe(), export, snapshot.getSourceVersion());
+            record.completeItem(index, filmResult.getExportResult(), filmResult.getSourceDecode());
+        } else {
+            ImageRenderService.ComposeOutcome outcome = imageRenderService.compose(
+                    snapshot.getRecipe(), export.getMaxWidth(), export.getMaxHeight());
+            BufferedImage composited = outcome.getImage();
+            ImageEncoder.ExportResult exportResult = outcome.getSourceInfo() == null
+                    ? imageRenderService.writeToFile(composited, export, snapshot.getRecipe().getImagePath())
+                    : imageRenderService.writeToFile(
+                    composited, export, snapshot.getRecipe().getImagePath(), outcome.getSourceInfo());
+            record.completeItem(index, exportResult, outcome.getSourceDecode());
         }
     }
 

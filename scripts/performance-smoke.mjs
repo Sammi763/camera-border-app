@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
 import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs"
 import path from "node:path"
-import { tmpdir } from "node:os"
+import { tmpdir, totalmem } from "node:os"
 import { fileURLToPath } from "node:url"
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
@@ -15,6 +15,9 @@ const REQUEST_TIMEOUT_MS = 30_000
 const JOB_TIMEOUT_MS = 10 * 60_000
 const RSS_SAMPLE_INTERVAL_MS = 250
 const DEFAULT_MAX_IDLE_GROWTH_MB = 600
+const DEFAULT_FILM_TUNING_COUNT = 8
+const DEFAULT_FILM_EXPORT_COUNT = 5
+const GIB = 1024 * 1024 * 1024
 
 const sleep = async (ms) => await new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -49,6 +52,7 @@ const readOption = (name) => {
 
 const usage = () => {
   console.log("用法：pnpm perf:smoke [--count 100] [--base-url http://127.0.0.1:8099] [--sample /绝对路径/样片.jpg] [--engine-pid PID] [--max-idle-growth-mb 600]")
+  console.log("     追加底片场景：--film-sample /绝对路径/真实.RAW [--film-tuning-count 8] [--film-export-count 5]")
   console.log("前置：本地 Java 引擎已启动。脚本通过监听端口确认 Java PID，执行两轮 100 项约 20MP 图片队列，并采集引擎 RSS。")
 }
 
@@ -331,6 +335,145 @@ const runRound = async ({ baseUrl, count, samplePath, outputDir, round, sampler 
 
 const toMiB = (bytes) => (bytes / (1024 * 1024)).toFixed(1)
 
+const filmInputMode = (imagePath) => /\.(?:nef|cr2|cr3|arw|raf|dng|orf|rw2|pef)$/i.test(imagePath)
+  ? "sensor-raw" : "linear-tiff"
+
+const filmProcessing = (imagePath, exposureEv) => ({
+  schemaVersion: 1,
+  algorithmVersion: "film-digitization-v1",
+  inputMode: filmInputMode(imagePath),
+  raw: filmInputMode(imagePath) === "sensor-raw"
+    ? { whiteBalance: "camera", autoBright: false, gamma: "linear", highlight: "clip", crop: "vendor-inset" }
+    : null,
+  linearInput: filmInputMode(imagePath) === "linear-tiff"
+    ? { transferFunction: "linear", colorSpace: "linear-rec2020", bitDepth: 16, iccSha256: null }
+    : null,
+  negative: {
+    enabled: true,
+    profile: "generic-color-negative-v1",
+    lightSource: { kind: "camera-white-balance" },
+    filmBase: { kind: "manual", stage: "linear-working", rgb: [0.5, 0.5, 0.5] },
+    density: { min: 0, max: 3 }
+  },
+  positive: {
+    exposureEv,
+    rgbBalanceEv: [0, 0, 0],
+    blackPoint: 0,
+    whitePoint: 1,
+    saturation: 1
+  },
+  sourceGeometry: { crop: { x: 0, y: 0, width: 1, height: 1 }, rotationDegrees: 0 }
+})
+
+const filmRecipe = (imagePath, exposureEv) => ({
+  imagePath,
+  border: { top: 20, bottom: 20, left: 20, right: 20, color: "#ffffff" },
+  gradient: null,
+  texts: [],
+  imagePlacement: { mode: "fit", focalX: 0.5, focalY: 0.5, rotation: 0, targetAspectRatio: null },
+  logo: null,
+  borderStyle: null,
+  imageProcessing: filmProcessing(imagePath, exposureEv)
+})
+
+const filmAnalysis = (imagePath, exposureEv) => ({
+  recipe: filmRecipe(imagePath, exposureEv),
+  stage: "current-positive",
+  outputSpace: "srgb"
+})
+
+const filmExportSnapshot = (imagePath, exposureEv, outputPath) => ({
+  recipe: filmRecipe(imagePath, exposureEv),
+  export: {
+    format: "jpeg",
+    outputPath,
+    jpegQuality: 92,
+    maxWidth: 2048,
+    maxHeight: 2048,
+    preserveMetadata: false,
+    preserveColorProfile: false,
+    preferHighBitDepth: false,
+    tier: "custom",
+    filmOutput: "srgb-jpeg",
+    borderlessMaster: false
+  }
+})
+
+const timed = async (fn) => {
+  const startedAt = Date.now()
+  const value = await fn()
+  return { value, ms: Date.now() - startedAt }
+}
+
+const runFilmScenario = async ({ baseUrl, samplePath, tuningCount, exportCount, outputDir, sampler }) => {
+  const statsBefore = await fetchJson(`${baseUrl}/api/film-stage-cache`)
+  const tuning = []
+  const cold = await timed(() => fetchJson(`${baseUrl}/api/preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ recipe: filmRecipe(samplePath, 0), maxWidth: 1280, maxHeight: 1280,
+      stage: "current-positive", clientId: "perf_film", generation: 1 })
+  }))
+  assert.equal(cold.value.previewAvailable, true, "底片冷缓存预览必须可用")
+  const coldAnalysis = await timed(() => fetchJson(`${baseUrl}/api/image-analysis`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...filmAnalysis(samplePath, 0), clientId: "perf_film_analysis", generation: 1 })
+  }))
+  for (let index = 1; index <= tuningCount; index++) {
+    sampler.assertHealthy()
+    const exposure = ((index % 5) - 2) * 0.2
+    const preview = await timed(() => fetchJson(`${baseUrl}/api/preview`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ recipe: filmRecipe(samplePath, exposure), maxWidth: 1280, maxHeight: 1280,
+        stage: "current-positive", clientId: "perf_film", generation: index + 1 })
+    }))
+    const analysis = await timed(() => fetchJson(`${baseUrl}/api/image-analysis`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...filmAnalysis(samplePath, exposure), clientId: "perf_film_analysis", generation: index + 1 })
+    }))
+    tuning.push({ generation: index + 1, previewMs: preview.ms, analysisMs: analysis.ms })
+    sampler.sample(`底片调参 ${index}/${tuningCount}`)
+  }
+  const statsAfterTuning = await fetchJson(`${baseUrl}/api/film-stage-cache`)
+  assert.ok(statsAfterTuning.hits > statsBefore.hits, "连续调参必须命中 raw/base 阶段缓存")
+
+  const exportDir = path.join(outputDir, "film-export")
+  mkdirSync(exportDir, { recursive: true })
+  const snapshots = Array.from({ length: exportCount }, (_, index) =>
+    filmExportSnapshot(samplePath, 0, path.join(exportDir, `film-${String(index + 1).padStart(2, "0")}.jpg`)))
+  const exportStartedAt = Date.now()
+  const accepted = await fetchJson(`${baseUrl}/api/render-jobs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ items: snapshots })
+  })
+  const terminal = await waitForTerminalJob(baseUrl, accepted.jobId, () => sampler.sample("底片批量导出轮询"))
+  assert.equal(terminal.status, "completed", `底片批量导出失败：${JSON.stringify(terminal.items ?? terminal)}`)
+  assert.equal(terminal.completed, exportCount, "底片批量导出必须逐项完成")
+  const statsAfterExport = await fetchJson(`${baseUrl}/api/film-stage-cache`)
+  const totalMemory = totalmem()
+  const sixteenGbMachine = totalMemory >= 15 * GIB && totalMemory <= 18 * GIB
+  return {
+    status: "RUN",
+    samplePath,
+    initialCacheState: statsBefore.entries === 0 ? "EMPTY" : "NON_EMPTY",
+    coldPreviewMs: statsBefore.entries === 0 ? cold.ms : null,
+    firstPreviewMs: cold.ms,
+    coldAnalysisMs: coldAnalysis.ms,
+    tuning,
+    exportMs: Date.now() - exportStartedAt,
+    exportCount,
+    statsBefore,
+    statsAfterTuning,
+    statsAfterExport,
+    machineTotalMemoryBytes: totalMemory,
+    sixteenGbAcceptance: sixteenGbMachine ? "RUN_ON_16GB_MACHINE" : "NOT_ACCEPTED_ON_THIS_MACHINE"
+  }
+}
+
 const main = async () => {
   if (process.argv.includes("--help")) {
     usage()
@@ -346,8 +489,21 @@ const main = async () => {
     readOption("--max-idle-growth-mb") ?? process.env.CAMBORDER_PERF_MAX_IDLE_GROWTH_MB ?? DEFAULT_MAX_IDLE_GROWTH_MB,
     "max-idle-growth-mb"
   )
+  const filmSampleValue = readOption("--film-sample") ?? process.env.CAMBORDER_PERF_FILM_SAMPLE
+  const filmSamplePath = filmSampleValue === undefined ? null : path.resolve(filmSampleValue)
+  const filmTuningCount = parsePositiveInteger(
+    readOption("--film-tuning-count") ?? process.env.CAMBORDER_PERF_FILM_TUNING_COUNT ?? DEFAULT_FILM_TUNING_COUNT,
+    "film-tuning-count"
+  )
+  const filmExportCount = parsePositiveInteger(
+    readOption("--film-export-count") ?? process.env.CAMBORDER_PERF_FILM_EXPORT_COUNT ?? DEFAULT_FILM_EXPORT_COUNT,
+    "film-export-count"
+  )
   if (!existsSync(samplePath) || !statSync(samplePath).isFile()) {
     throw new Error(`找不到性能样片：${samplePath}`)
+  }
+  if (filmSamplePath !== null && (!existsSync(filmSamplePath) || !statSync(filmSamplePath).isFile())) {
+    throw new Error(`找不到底片性能样片：${filmSamplePath}`)
   }
 
   const outputDir = mkdtempSync(path.join(tmpdir(), "camborder-performance-smoke-"))
@@ -369,7 +525,6 @@ const main = async () => {
       sampler.assertHealthy()
       roundIdleRss.push(await runRound({ baseUrl, count, samplePath, outputDir, round, sampler }))
     }
-
     sampler.assertHealthy()
     const finalIdle = sampler.sample("最终空闲确认")
     const engineRssBaseline = baseline.rssBytes
@@ -388,6 +543,20 @@ const main = async () => {
       `两轮空闲 RSS 持续增长超过阈值：${toMiB(roundIdleGrowth)}MiB > ${maxIdleGrowthMb}MiB`
     )
 
+    // 底片场景在原有普通链路闸门之后执行；阶段缓存会合法保留全幅浮点结果，
+    // 不能用普通链路的 600MB 空闲增长阈值约束，改为记录峰值/命中率/预算证据。
+    const filmSampleStart = sampler.samples.length
+    const filmScenario = filmSamplePath === null
+      ? { status: "NOT_RUN", reason: "未提供 --film-sample" }
+      : await runFilmScenario({ baseUrl, samplePath: filmSamplePath, tuningCount: filmTuningCount,
+        exportCount: filmExportCount, outputDir, sampler })
+    const filmIdle = sampler.sample("底片场景结束空闲")
+    if (filmScenario.status === "RUN") {
+      filmScenario.rssPeakBytes = Math.max(...sampler.samples.slice(filmSampleStart).map((sample) => sample.rssBytes))
+      filmScenario.rssPeakDuringFilmBytes = filmScenario.rssPeakBytes
+      filmScenario.rssIdleBytes = filmIdle.rssBytes
+    }
+
     const evidence = {
       enginePid,
       engineCommand: engineProcess.commandLine,
@@ -400,13 +569,15 @@ const main = async () => {
       maxIdleGrowthBytes,
       samplePath,
       count,
-      rounds: PERFORMANCE_ROUNDS
+      rounds: PERFORMANCE_ROUNDS,
+      filmScenario
     }
     console.log(`[performance-smoke] engineRssBaseline=${engineRssBaseline} bytes (${toMiB(engineRssBaseline)}MiB)`)
     console.log(`[performance-smoke] engineRssPeak=${engineRssPeak} bytes (${toMiB(engineRssPeak)}MiB)`)
     console.log(`[performance-smoke] engineRssIdle=${engineRssIdle} bytes (${toMiB(engineRssIdle)}MiB)`)
     console.log(`[performance-smoke] engineIdleGrowth=${engineIdleGrowth} bytes (${toMiB(engineIdleGrowth)}MiB)`)
     console.log(`[performance-smoke] 两轮空闲 RSS：round1=${toMiB(roundIdleRss[0])}MiB，round2=${toMiB(roundIdleRss[1])}MiB，增长=${toMiB(roundIdleGrowth)}MiB`)
+    console.log(`[performance-smoke] 底片场景：${JSON.stringify(filmScenario)}`)
     console.log(`[performance-smoke] 证据 JSON：${JSON.stringify(evidence)}`)
     console.log(`[performance-smoke] PASS，总耗时=${Date.now() - startedAt}ms`)
   } finally {

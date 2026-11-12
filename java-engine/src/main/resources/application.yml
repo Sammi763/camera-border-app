@@ -12,3 +12,17 @@ app:
     max-terminal-jobs: 256
     # 终态任务首次被存储观察到后最多保留 30 分钟；过期查询返回 HTTP 404。
     terminal-ttl-seconds: 1800
+  film:
+    memory:
+      # 0 表示自动：B=min(4GiB, 物理内存 25%)，物理内存未知时回退 2GiB。
+      total-budget-bytes: 0
+      # 0 表示自动：H=min(B, JVM 最大堆 70%)。
+      java-budget-bytes: 0
+      # 估算余量，0–1；默认 25%。
+      safety-margin: 0.25
+    stage-cache:
+      # 回归比较时可关闭；预算与调度保护始终生效。
+      enabled: true
+      # 0 表示自动：C=min(1.5GiB, H 的 50%)，包含在预算内。
+      max-bytes: 0
+      idle-seconds: 120

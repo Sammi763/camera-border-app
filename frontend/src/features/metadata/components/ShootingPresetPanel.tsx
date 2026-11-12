@@ -246,8 +246,10 @@ export const ShootingPresetPanel = ({
           </div>
 
           <div className="presetActions">
+            {/* U10/U12：直接填写的创建入口已统一为上方「新建拍摄信息预设」；
+                此入口专用于引用资料库资产（相机/镜头/胶片）的预设。 */}
             <button type="button" className="ghostButton" onClick={handleStartCreate}>
-              新建摄影预设
+              引用资料库新建预设
             </button>
           </div>
 
@@ -463,7 +465,7 @@ export const ShootingPresetPanel = ({
           )}
 
           <div className="presetEditorActions">
-            <button type="button" className="ghostButton" onClick={handleSave}>保存</button>
+            <button type="button" className="ghostButton" onClick={handleSave}>保存（不应用）</button>
             <button type="button" className="ghostButton" onClick={handleCancel}>取消</button>
           </div>
         </div>

@@ -19,7 +19,7 @@ public final class GlobalExceptionHandler {
 
     @ExceptionHandler(ApiException.class)
     public ResponseEntity<ErrorResponse> handleApiException(final ApiException e) {
-        return ResponseEntity.status(e.getStatus()).body(new ErrorResponse(e.getMessage()));
+        return ResponseEntity.status(e.getStatus()).body(new ErrorResponse(e.getMessage(), e.getCode()));
     }
 
     @ExceptionHandler(HttpMessageNotReadableException.class)

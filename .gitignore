@@ -36,6 +36,7 @@ electron/build/
 professional-tools/
 .cache/fonts/
 .cache/professional-tools/
+.cache/libraw/
 
 # 阶段基线证据可能包含 EXIF、GPS、截图和本机运行信息，只保留在本机。
 .local/

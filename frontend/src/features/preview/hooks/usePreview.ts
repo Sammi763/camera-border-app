@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { requestPreview } from "../../../services/engine/previewApi"
 import { EngineHttpError } from "../../../services/engine/engineClient"
+import { cancelFilmRequests, isFilmCancellation } from "../../../services/engine/filmRequestsApi"
+import { TuningScheduler } from "../../../services/engine/tuningScheduler"
 import {
   createPreviewCacheKey,
   hashRenderRecipe,
@@ -11,6 +13,7 @@ import { toFileName } from "../../../utils/fileName"
 import { buildPlainImagePreviewRequest, buildPreviewRequest } from "../../settings/utils/buildRecipe"
 import { loadLocalImagePreview, isLocalPreviewSupported, isRawOrHeicFile } from "../../../services/desktop/localImagePreview"
 import type { PreviewRequest } from "../../../types/preview"
+import type { ImageProcessingConfig } from "../../../types/imageProcessing"
 import type { RenderSettings } from "../../settings/types"
 import type { PreviewState } from "../types"
 
@@ -86,9 +89,19 @@ export const usePreview = (
   settingsVersion: number,
   textOverride?: string | null,
   resolvedTextLayers?: readonly (string | null)[] | null,
-  resolvedBrand?: string | null
+  resolvedBrand?: string | null,
+  imageProcessing?: ImageProcessingConfig | null
 ): PreviewState => {
+  const requestClient = useRef(`preview_${Math.random().toString(36).slice(2)}`)
+  const schedulerRef = useRef<TuningScheduler | null>(null)
+  const filmModeRef = useRef(false)
+  const flushRequestedRef = useRef(false)
   const [state, setState] = useState<PreviewState>({ kind: "idle" })
+  const filmMode = imageProcessing !== null && imageProcessing !== undefined
+  filmModeRef.current = filmMode
+  const imageProcessingSignature = imageProcessing === null || imageProcessing === undefined
+    ? ""
+    : JSON.stringify(imageProcessing)
 
   // WorkspacePage 解析拍摄信息时会在每次重绘生成新的数组引用。以内容签名稳定它，
   // 否则本 effect 的 cleanup 会取消刚发送、但尚未返回的引擎预览请求，使状态永久停在同步中。
@@ -101,20 +114,6 @@ export const usePreview = (
     }
     return [...resolvedTextLayers]
   }, [textLayersSignature])
-
-  const lastRequestedRef = useRef<{
-    filePath: string | null
-    version: number
-    textOverride: string | null | undefined
-    textLayersSig: string
-    brand: string | null | undefined
-  }>({
-    filePath: null,
-    version: 0,
-    textOverride: undefined,
-    textLayersSig: "",
-    brand: undefined
-  })
 
   // 加载图片元素（引擎优先；失败时降级到本地 nativeImage 预览）
   useEffect(() => {
@@ -135,8 +134,17 @@ export const usePreview = (
       currentImage: null,
       engineDisplayUrl: null,
       engineSyncStatus: "idle",
-      engineResponse: null
+      engineResponse: null,
+      filmMode
     })
+
+    // 底片模式只显示引擎校色结果：普通源图/本地 nativeImage 不能冒充当前结果。
+    if (filmMode) {
+      return () => {
+        active = false
+        requestController.abort()
+      }
+    }
 
     // RAW/HEIC 等系统缩略图无法解码的格式：直接走本地预览失败路径，
     // 提示用户「本地预览不可用，需等待引擎恢复」，不静默伪装成正常预览。
@@ -265,55 +273,108 @@ export const usePreview = (
         URL.revokeObjectURL(ownedObjectUrl)
       }
     }
-  }, [selectedFilePath])
+  }, [selectedFilePath, filmMode])
 
-  // 后台引擎预览请求
+  // 每个“文件 + 模式”创建一个调度器；切换图片/关闭底片模式/卸载视图时取消后端旧代次。
+  useEffect(() => {
+    const scheduler = new TuningScheduler({
+      throttleMs: 250,
+      onSupersede: (generation) => {
+        if (filmModeRef.current) {
+          void cancelFilmRequests(requestClient.current, generation).catch(() => {
+            // 取消是尽力而为；不把旧任务取消失败展示成引擎不可达。
+          })
+        }
+      }
+    })
+    schedulerRef.current = scheduler
+    return () => {
+      const generation = scheduler.dispose()
+      if (schedulerRef.current === scheduler) {
+        schedulerRef.current = null
+      }
+      if (filmMode) {
+        void cancelFilmRequests(requestClient.current, generation).catch(() => {
+          // 切图/卸载时引擎可能已退出；旧任务不会写回新视图。
+        })
+      }
+    }
+  }, [selectedFilePath, filmMode])
+
+  // 松手、失焦或确认输入立即提交最终快照；拖动期间由调度器节流到 250ms。
+  useEffect(() => {
+    const flush = (): void => {
+      flushRequestedRef.current = true
+      schedulerRef.current?.flush()
+    }
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Enter") flush()
+    }
+    window.addEventListener("pointerup", flush, true)
+    window.addEventListener("pointercancel", flush, true)
+    window.addEventListener("blur", flush, true)
+    document.addEventListener("focusout", flush, true)
+    document.addEventListener("change", flush, true)
+    document.addEventListener("keydown", onKeyDown, true)
+    return () => {
+      window.removeEventListener("pointerup", flush, true)
+      window.removeEventListener("pointercancel", flush, true)
+      window.removeEventListener("blur", flush, true)
+      document.removeEventListener("focusout", flush, true)
+      document.removeEventListener("change", flush, true)
+      document.removeEventListener("keydown", onKeyDown, true)
+    }
+  }, [])
+
+  // 后台引擎预览请求：稳定快照、单一在途、最新待提交；等待期间保留上一张正确画面。
   useEffect(() => {
     if (selectedFilePath === null) {
       return
     }
-
-    // 构建去重签名：resolvedTextLayers 变化时需要重新请求
-    const fileUnchanged = selectedFilePath === lastRequestedRef.current.filePath
-    const versionUnchanged = settingsVersion === lastRequestedRef.current.version
-    const textOverrideUnchanged = textOverride === lastRequestedRef.current.textOverride
-    const textLayersUnchanged = textLayersSignature === lastRequestedRef.current.textLayersSig
-    const brandUnchanged = resolvedBrand === lastRequestedRef.current.brand
-
-    if (fileUnchanged && versionUnchanged
-      && textOverrideUnchanged && textLayersUnchanged && brandUnchanged && state.kind !== "idle") {
+    const scheduler = schedulerRef.current
+    if (scheduler === null) {
       return
     }
-    lastRequestedRef.current = {
-      filePath: selectedFilePath,
-      version: settingsVersion,
-      textOverride,
-      textLayersSig: textLayersSignature,
-      brand: resolvedBrand
-    }
 
-    let active = true
-    // 设置变更时 cleanup 会主动终止旧请求；引擎只保留最新 RenderRecipe 的预览工作。
-    const requestController = new AbortController()
-
-    setState((prev) => {
-      if (prev.kind !== "active") {
-        return prev
-      }
-      return { ...prev, engineSyncStatus: "syncing" }
-    })
-
-    void requestPreviewWithStartupRetry(buildPreviewRequest(
+    const plainEngineRequest = buildPreviewRequest(
       selectedFilePath, settings, PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT,
-      textOverride, stableResolvedTextLayers, resolvedBrand
-    ), requestController.signal)
-      .then((response) => {
-        if (!active) {
+      textOverride, stableResolvedTextLayers, resolvedBrand, imageProcessing
+    )
+    const snapshotKey = `${selectedFilePath}|${filmMode ? "film" : "plain"}|`
+      + `${hashRenderRecipe(plainEngineRequest.recipe)}|${PREVIEW_MAX_WIDTH}x${PREVIEW_MAX_HEIGHT}`
+    const immediate = flushRequestedRef.current
+    flushRequestedRef.current = false
+
+    const scheduled = scheduler.schedule(snapshotKey, async (generation, signal) => {
+      const engineRequest: PreviewRequest = filmMode
+        ? { ...plainEngineRequest, clientId: requestClient.current, generation }
+        : plainEngineRequest
+      try {
+        const versions = await getImageFileVersions([selectedFilePath])
+        if (signal.aborted) return
+        const cacheKey = createPreviewCacheKey({
+          imagePath: selectedFilePath,
+          maxWidth: PREVIEW_MAX_WIDTH,
+          maxHeight: PREVIEW_MAX_HEIGHT,
+          modifiedAtMs: versions[0]?.mtimeMs ?? null,
+          sourceSizeBytes: versions[0]?.sizeBytes ?? null,
+          recipeHash: hashRenderRecipe(engineRequest.recipe)
+        })
+        const cachedUrl = previewUrlCache.get(cacheKey)
+        if (cachedUrl !== null) {
+          if (generation !== scheduler.generation) return
+          setState((prev) => {
+            if (prev.kind !== "active" || prev.filePath !== selectedFilePath) return prev
+            return { ...prev, engineDisplayUrl: cachedUrl, engineSyncStatus: "synced" }
+          })
           return
         }
+        const response = await requestPreviewWithStartupRetry(engineRequest, signal)
+        if (signal.aborted || generation !== scheduler.generation) return
         const displayUrl = response.previewAvailable
           ? resolveDisplayUrl(response.previewUrl)
           : null
+        if (displayUrl !== null) previewUrlCache.set(cacheKey, displayUrl)
         setState((prev) => {
           if (prev.kind !== "active" || prev.filePath !== selectedFilePath) {
             return prev
@@ -325,10 +386,17 @@ export const usePreview = (
             engineResponse: response
           }
         })
-      })
-      .catch((error: unknown) => {
-        if (!active) {
-          return
+      } catch (error: unknown) {
+        if (signal.aborted || generation !== scheduler.generation) {
+          throw error
+        }
+        if (filmMode && isFilmCancellation(error)) {
+          // 取消/被替代是正常状态：保留上一张正确画面，继续显示同步中。
+          setState((prev) => {
+            if (prev.kind !== "active" || prev.filePath !== selectedFilePath) return prev
+            return { ...prev, engineSyncStatus: "syncing" }
+          })
+          throw error
         }
         setState((prev) => {
           if (prev.kind !== "active" || prev.filePath !== selectedFilePath) {
@@ -345,20 +413,40 @@ export const usePreview = (
             }
           }
         })
-      })
+        throw error
+      }
+    }, { immediate })
 
-    return () => {
-      active = false
-      requestController.abort()
+    if (scheduled !== "scheduled") {
+      return
     }
+    const scheduledGeneration = scheduler.generation
+    setState((prev) => {
+      if (prev.kind !== "active" || prev.filePath !== selectedFilePath) {
+        return prev
+      }
+      return {
+        ...prev,
+        engineSyncStatus: "syncing",
+        ...(filmMode
+          ? {
+            engineRecipe: JSON.parse(JSON.stringify(plainEngineRequest.recipe)) as PreviewRequest["recipe"],
+            engineClientId: requestClient.current,
+            engineGeneration: scheduledGeneration
+          }
+          : {})
+      }
+    })
   }, [
     selectedFilePath,
-    settingsVersion,
+    filmMode,
     settings,
     textOverride,
     stableResolvedTextLayers,
     textLayersSignature,
-    resolvedBrand
+    resolvedBrand,
+    imageProcessing,
+    imageProcessingSignature
   ])
 
   return state

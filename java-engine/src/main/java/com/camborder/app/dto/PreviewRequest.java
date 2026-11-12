@@ -7,7 +7,26 @@ import com.camborder.app.model.RenderRecipe;
  */
 public final class PreviewRequest {
 
+    private String clientId;
+    private long generation;
+    public String getClientId() { return clientId; }
+    public void setClientId(final String value) { clientId = value; }
+    public long getGeneration() { return generation; }
+    public void setGeneration(final long value) { generation = value; }
+
     private RenderRecipe recipe;
+    /** 底片对比阶段；缺省为当前正片。 */
+    private String stage;
+    private boolean actualPixels;
+    public boolean isActualPixels() { return actualPixels; }
+    public void setActualPixels(final boolean value) { actualPixels = value; }
+    /** 取样视图使用完整有向源坐标，不应用编辑几何和版式。 */
+    private boolean sourceCoordinates;
+    public String getStage() { return stage; }
+    public void setStage(final String stage) { this.stage = stage; }
+    public boolean isSourceCoordinates() { return sourceCoordinates; }
+    public void setSourceCoordinates(final boolean value) { sourceCoordinates = value; }
+
     private int maxWidth;
     private int maxHeight;
 

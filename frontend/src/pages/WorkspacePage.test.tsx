@@ -202,7 +202,7 @@ describe("WorkspacePage wiring（摄影预设 + EXIF 批量导出闭环）", () 
     })
 
     // 2) 设置面板的画幅下拉同时包含 6x10 与 6x12（契约：画幅目录检索）
-    const formatSelect = await screen.findByLabelText(/画幅格式/)
+    const formatSelect = await screen.findByLabelText(/拍摄画幅/)
     await waitFor(() => {
       expect(within(formatSelect).getByRole("option", { name: "6×10" })).toBeTruthy()
       expect(within(formatSelect).getByRole("option", { name: "6×12" })).toBeTruthy()
@@ -211,15 +211,17 @@ describe("WorkspacePage wiring（摄影预设 + EXIF 批量导出闭环）", () 
     // 3) 打开摄影信息页签与预设管理抽屉，新建 6x10 预设
     fireEvent.click(screen.getByRole("tab", { name: "摄影信息" }))
     fireEvent.click(screen.getByRole("button", { name: "管理拍摄信息预设" }))
-    fireEvent.click(await screen.findByRole("button", { name: "新建摄影预设" }))
-    fireEvent.change(screen.getByPlaceholderText("例如：135 Portra 日常"), {
+    fireEvent.click(await screen.findByRole("button", { name: "引用资料库新建预设" }))
+    // 主创建表单（PresetTextComposer）默认展开；资料库表单查询限定在编辑器容器内
+    const presetEditor = document.querySelector(".presetEditor") as HTMLElement
+    fireEvent.change(within(presetEditor).getByPlaceholderText("例如：135 Portra 日常"), {
       target: { value: "超宽 6x10" }
     })
-    fireEvent.change(screen.getByPlaceholderText("例如：135 胶片 / 数码常用 / 旅行"), {
+    fireEvent.change(within(presetEditor).getByPlaceholderText("例如：135 胶片 / 数码常用 / 旅行"), {
       target: { value: "中画幅" }
     })
-    fireEvent.change(screen.getByLabelText(/拍摄画幅/), { target: { value: "6x10" } })
-    fireEvent.click(screen.getByRole("button", { name: "保存" }))
+    fireEvent.change(within(presetEditor).getByLabelText(/拍摄画幅/), { target: { value: "6x10" } })
+    fireEvent.click(within(presetEditor).getByRole("button", { name: "保存（不应用）" }))
     // 预设名会同时出现在列表行与应用下拉框中，等待其出现即可
     await screen.findAllByText("超宽 6x10")
 
@@ -232,7 +234,7 @@ describe("WorkspacePage wiring（摄影预设 + EXIF 批量导出闭环）", () 
     fireEvent.click(screen.getByRole("button", { name: "应用全部" }))
 
     // 5) 批量导出两张
-    fireEvent.click(screen.getByRole("button", { name: /批量导出 2 张/ }))
+    fireEvent.click(screen.getByRole("button", { name: /导出全部 2 张/ }))
 
     // 6) 两张图的 RenderRecipe 都提交成功
     await waitFor(() => {
@@ -348,7 +350,9 @@ describe("WorkspacePage 统一工作台（首屏与默认模板）", () => {
     expect(within(findClassicCard()).getByRole("button", { name: "已应用" })).toBeTruthy()
 
     // 清空并重新导入：仍保持经典白边，不自动覆盖回摄影信息卡
-    fireEvent.click(screen.getByRole("button", { name: "清空" }))
+    // 清空已收进队列底部“更多”浮层，避免破坏性操作常驻。
+    fireEvent.click(screen.getByRole("button", { name: "更多" }))
+    fireEvent.click(screen.getByRole("button", { name: "清空队列" }))
     fireEvent.click(await screen.findByRole("button", { name: "选择照片" }))
     await waitFor(() => {
       expect(screen.getByText("A.jpg")).toBeTruthy()
@@ -356,7 +360,7 @@ describe("WorkspacePage 统一工作台（首屏与默认模板）", () => {
     expect(within(findClassicCard()).getByRole("button", { name: "已应用" })).toBeTruthy()
   })
 
-  it("有照片后固定显示三页签、底部导出 Dock，并把管理入口放进抽屉", async () => {
+  it("有照片后固定显示四个页签、底部导出 Dock，并把管理入口放进抽屉", async () => {
     setupWorkspace()
     const { container } = render(<WorkspacePage runtime={runtime} />)
 
@@ -365,15 +369,17 @@ describe("WorkspacePage 统一工作台（首屏与默认模板）", () => {
       expect(screen.getByText("A.jpg")).toBeTruthy()
     })
 
-    expect(screen.getAllByRole("tab")).toHaveLength(3)
+    expect(screen.getAllByRole("tab")).toHaveLength(4)
     expect(screen.getByRole("tab", { name: "样式" })).toBeTruthy()
     expect(screen.getByRole("tab", { name: "摄影信息" })).toBeTruthy()
+    expect(screen.getByRole("tab", { name: "底片" })).toBeTruthy()
     expect(screen.getByRole("tab", { name: "输出" })).toBeTruthy()
     expect(screen.getByRole("group", { name: "导出" })).toBeTruthy()
     expect(screen.queryByRole("button", { name: "管理用户版式" })).toBeTruthy()
 
     const themeSelect = screen.getByRole("combobox", { name: "界面主题" })
-    expect((themeSelect as HTMLSelectElement).value).toBe("dark")
+    // 新用户默认跟随系统；已保存的显式主题仍优先。
+    expect((themeSelect as HTMLSelectElement).value).toBe("system")
     fireEvent.change(themeSelect, { target: { value: "warm" } })
     expect(container.querySelector(".workspaceShell")?.getAttribute("data-theme")).toBe("warm")
 
@@ -382,6 +388,194 @@ describe("WorkspacePage 统一工作台（首屏与默认模板）", () => {
     expect(screen.getByRole("dialog", { name: "资料库" })).toBeTruthy()
     fireEvent.keyDown(screen.getByRole("dialog", { name: "资料库" }), { key: "Escape" })
     expect(screen.queryByRole("dialog", { name: "资料库" })).toBeNull()
+  })
+
+  it("工作台不重复渲染队列导入入口：顶栏保留唯一的文件/文件夹入口", async () => {
+    setupWorkspace()
+    render(<WorkspacePage runtime={runtime} />)
+
+    fireEvent.click(await screen.findByRole("button", { name: "选择照片" }))
+    await waitFor(() => {
+      expect(screen.getByText("A.jpg")).toBeTruthy()
+    })
+
+    // 顶栏导入组仍是唯一入口；队列面板不再自带一套“选择图片文件/文件夹”
+    const importGroup = screen.getByRole("group", { name: "导入照片" })
+    expect(within(importGroup).getByRole("button", { name: "选择照片" })).toBeTruthy()
+    expect(within(importGroup).getByRole("button", { name: "选择文件夹" })).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "选择图片文件" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "选择图片文件夹" })).toBeNull()
+    expect(screen.getAllByRole("button", { name: "选择照片" })).toHaveLength(1)
+    expect(screen.getAllByRole("button", { name: "选择文件夹" })).toHaveLength(1)
+  })
+
+  it("焦点在按钮上时 Space/Delete 不被全局队列快捷键劫持", async () => {
+    setupWorkspace()
+    render(<WorkspacePage runtime={runtime} />)
+
+    fireEvent.click(await screen.findByRole("button", { name: "选择照片" }))
+    await waitFor(() => {
+      expect(screen.getByText("A.jpg")).toBeTruthy()
+    })
+    await screen.findByText("已应用")
+    const checkbox = screen.getByLabelText("批量选中 A.jpg") as HTMLInputElement
+    expect(checkbox.checked).toBe(false)
+
+    // 模板“应用”按钮：Space 必须保留给按钮原生激活，全局层不能勾选当前图
+    const classicCard = screen.getByText("经典白边").closest(".templateGalleryCard") as HTMLElement
+    const applyButton = within(classicCard).getByRole("button", { name: "应用" })
+    applyButton.focus()
+    const spaceEvent = new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true })
+    fireEvent(applyButton, spaceEvent)
+    expect(spaceEvent.defaultPrevented).toBe(false)
+    expect(checkbox.checked).toBe(false)
+    expect(screen.getByText("A.jpg")).toBeTruthy()
+
+    // “更多”按钮：Delete 不能被全局层解释为删除当前图
+    const moreButton = screen.getByRole("button", { name: "更多" })
+    moreButton.focus()
+    const deleteEvent = new KeyboardEvent("keydown", { key: "Delete", bubbles: true, cancelable: true })
+    fireEvent(moreButton, deleteEvent)
+    expect(deleteEvent.defaultPrevented).toBe(false)
+    expect(screen.getByText("A.jpg")).toBeTruthy()
+    expect(screen.getByText("B.jpg")).toBeTruthy()
+  })
+
+  it("仅修改输出格式保留模板“已应用”，修改视觉边框才清除", async () => {
+    setupWorkspace()
+    render(<WorkspacePage runtime={runtime} />)
+
+    fireEvent.click(await screen.findByRole("button", { name: "选择照片" }))
+    await waitFor(() => {
+      expect(screen.getByText("A.jpg")).toBeTruthy()
+    })
+    await screen.findByText("已应用")
+
+    fireEvent.click(screen.getByRole("tab", { name: "输出" }))
+    const formatSelect = await screen.findByLabelText("输出格式") as HTMLSelectElement
+    const nextFormat = formatSelect.value === "png" ? "jpeg" : "png"
+    fireEvent.change(formatSelect, { target: { value: nextFormat } })
+
+    fireEvent.click(screen.getByRole("tab", { name: "样式" }))
+    await waitFor(() => expect(screen.getByText("已应用")).toBeTruthy())
+
+    // 视觉设置（边框颜色）变化才撤销模板标记
+    fireEvent.change(screen.getByLabelText("边框颜色"), { target: { value: "#123456" } })
+    await waitFor(() => expect(screen.queryByText("已应用")).toBeNull())
+  })
+
+  it("设置撤销后不保留可能虚假的模板“已应用”状态", async () => {
+    setupWorkspace()
+    render(<WorkspacePage runtime={runtime} />)
+
+    fireEvent.click(await screen.findByRole("button", { name: "选择照片" }))
+    await waitFor(() => {
+      expect(screen.getByText("A.jpg")).toBeTruthy()
+    })
+    await screen.findByText("已应用")
+
+    const classicCard = screen.getByText("经典白边").closest(".templateGalleryCard") as HTMLElement
+    fireEvent.click(within(classicCard).getByRole("button", { name: "应用" }))
+    expect(within(classicCard).getByRole("button", { name: "已应用" })).toBeTruthy()
+
+    fireEvent.keyDown(document.body, { key: "z", ctrlKey: true })
+    await waitFor(() => expect(screen.queryByText("已应用")).toBeNull())
+  })
+
+  it("设置面板“撤销设置”后同样不保留虚假的模板“已应用”状态", async () => {
+    setupWorkspace()
+    render(<WorkspacePage runtime={runtime} />)
+
+    fireEvent.click(await screen.findByRole("button", { name: "选择照片" }))
+    await waitFor(() => {
+      expect(screen.getByText("A.jpg")).toBeTruthy()
+    })
+    await screen.findByText("已应用")
+
+    const classicCard = screen.getByText("经典白边").closest(".templateGalleryCard") as HTMLElement
+    fireEvent.click(within(classicCard).getByRole("button", { name: "应用" }))
+    expect(within(classicCard).getByRole("button", { name: "已应用" })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole("button", { name: "撤销设置" }))
+    await waitFor(() => expect(screen.queryByText("已应用")).toBeNull())
+  })
+
+  it("保留已保存的主题偏好：localStorage 中的 dark 优先于默认跟随系统", async () => {
+    setupWorkspace()
+    localStorage.setItem("workspace.theme", "dark")
+    const { container } = render(<WorkspacePage runtime={runtime} />)
+
+    expect(await screen.findByRole("button", { name: "选择照片" })).toBeTruthy()
+    const themeSelect = screen.getByRole("combobox", { name: "界面主题" })
+    expect((themeSelect as HTMLSelectElement).value).toBe("dark")
+    expect(container.querySelector(".workspaceShell")?.getAttribute("data-theme")).toBe("dark")
+  })
+
+  it.each([true, false])("跨队列与设置撤销后按原操作顺序重做（队列操作在先：%s）", async (queueFirst) => {
+    setupWorkspace()
+    render(<WorkspacePage runtime={runtime} />)
+    fireEvent.click(await screen.findByRole("button", { name: "选择照片" }))
+    await screen.findByText("已应用")
+    const colorInput = screen.getByLabelText("边框颜色") as HTMLInputElement
+    const initialColor = colorInput.value
+    const changeColor = (): void => {
+      fireEvent.change(colorInput, { target: { value: "#123456" } })
+    }
+    const removePhoto = (): void => {
+      fireEvent.click(screen.getByRole("button", { name: "删除 B.jpg" }))
+    }
+    if (queueFirst) {
+      removePhoto()
+      changeColor()
+    } else {
+      changeColor()
+      removePhoto()
+    }
+    fireEvent.keyDown(document.body, { key: "z", ctrlKey: true })
+    fireEvent.keyDown(document.body, { key: "z", ctrlKey: true })
+    expect(screen.getByText("B.jpg")).toBeTruthy()
+    expect(colorInput.value).toBe(initialColor)
+
+    fireEvent.keyDown(document.body, { key: "z", ctrlKey: true, shiftKey: true })
+    if (queueFirst) {
+      expect(screen.queryByText("B.jpg")).toBeNull()
+      expect(colorInput.value).toBe(initialColor)
+    } else {
+      expect(screen.getByText("B.jpg")).toBeTruthy()
+      expect(colorInput.value).toBe("#123456")
+    }
+    fireEvent.keyDown(document.body, { key: "z", ctrlKey: true, shiftKey: true })
+    expect(screen.queryByText("B.jpg")).toBeNull()
+    expect(colorInput.value).toBe("#123456")
+  })
+
+  it.each([
+    { label: "调整源图片栏宽度", initial: 260, left: 244, acceleratedRight: 308, minimum: 240, maximum: 400 },
+    { label: "调整检查器栏宽度", initial: 360, left: 376, acceleratedRight: 360, minimum: 360, maximum: 560 }
+  ])("$label 的键盘方向与分隔线实际移动一致，支持加速、复位及边界", async (example) => {
+    setupWorkspace()
+    render(<WorkspacePage runtime={runtime} />)
+    fireEvent.click(await screen.findByRole("button", { name: "选择照片" }))
+    await screen.findByText("已应用")
+    const separator = screen.getByRole("separator", { name: example.label })
+    const width = (): number => Number(separator.getAttribute("aria-valuenow"))
+    expect(width()).toBe(example.initial)
+    fireEvent.keyDown(separator, { key: "ArrowLeft" })
+    expect(width()).toBe(example.left)
+    fireEvent.keyDown(separator, { key: "ArrowRight" })
+    expect(width()).toBe(example.initial)
+    fireEvent.keyDown(separator, { key: "ArrowRight", shiftKey: true })
+    expect(width()).toBe(example.acceleratedRight)
+    fireEvent.keyDown(separator, { key: "Home" })
+    expect(width()).toBe(example.initial)
+    for (let index = 0; index < 5; index += 1) {
+      fireEvent.keyDown(separator, { key: "ArrowRight", shiftKey: true })
+    }
+    expect(width()).toBe(example.label === "调整源图片栏宽度" ? example.maximum : example.minimum)
+    for (let index = 0; index < 8; index += 1) {
+      fireEvent.keyDown(separator, { key: "ArrowLeft", shiftKey: true })
+    }
+    expect(width()).toBe(example.label === "调整源图片栏宽度" ? example.minimum : example.maximum)
   })
 })
 
@@ -407,6 +601,18 @@ describe("WorkspacePage 帮助与快捷键", () => {
     fireEvent.keyDown(document.body, { key: "?" })
     expect(screen.getByText("快捷键速查")).toBeTruthy()
 
+    // 焦点圈定：面板内唯一可聚焦元素上 Tab / Shift+Tab 都被拦截在面板内
+    const closeButton = screen.getByRole("button", { name: "关闭快捷键速查" })
+    closeButton.focus()
+    expect(document.activeElement).toBe(closeButton)
+    const tabEvent = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true })
+    closeButton.dispatchEvent(tabEvent)
+    expect(tabEvent.defaultPrevented).toBe(true)
+    expect(document.activeElement).toBe(closeButton)
+    const shiftTabEvent = new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true, cancelable: true })
+    closeButton.dispatchEvent(shiftTabEvent)
+    expect(shiftTabEvent.defaultPrevented).toBe(true)
+
     fireEvent.keyDown(document.body, { key: "?" })
     expect(screen.queryByText("快捷键速查")).toBeNull()
 
@@ -421,6 +627,25 @@ describe("WorkspacePage 帮助与快捷键", () => {
     fireEvent.keyDown(input, { key: "?" })
     expect(screen.queryByText("快捷键速查")).toBeNull()
     input.remove()
+  })
+
+  it("帮助抽屉打开期间 ? 不叠加快捷键面板，关闭抽屉后恢复", async () => {
+    setupWorkspace()
+    render(<WorkspacePage runtime={runtime} />)
+    expect(await screen.findByRole("button", { name: "选择照片" })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole("button", { name: "打开帮助" }))
+    expect(await screen.findByText("四步上手")).toBeTruthy()
+
+    // 模态抽屉打开期间不叠加第二个对话框（焦点在 body 上也暂停）
+    fireEvent.keyDown(document.body, { key: "?" })
+    expect(screen.queryByText("快捷键速查")).toBeNull()
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭帮助" }))
+    await waitFor(() => expect(screen.queryByText("四步上手")).toBeNull())
+
+    fireEvent.keyDown(document.body, { key: "?" })
+    expect(screen.getByText("快捷键速查")).toBeTruthy()
   })
 
   it("欢迎页显示按 ? 查看快捷键提示", async () => {

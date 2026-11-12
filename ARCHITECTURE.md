@@ -29,6 +29,7 @@
 
 项目已过“先搭稳定框架”阶段：工作台骨架、Java 引擎生命周期、预览/渲染接口、模板系统、摄影资产库均已落地。
 当前处于可安装摄影师 MVP 的稳定化阶段：数码走 EXIF，胶片走可分类摄影预设，具体任务与优先级见 [docs/prd.md](docs/prd.md) 第 8、9 节和 [docs/tasks.md](docs/tasks.md)。
+另有显式底片数字化模式在实施中（真实 RAW、彩负转正与校色），边界见 [ADR-0007](docs/adr/0007-explicit-film-digitization-mode.md)；验收完成前不得宣称支持。
 
 架构上仍遵守本文件约束；是否新增抽象/分层按第 7 节规则判断。
 
@@ -115,6 +116,10 @@ java-engine/src/main/java/com/camborder/app/
 - 使用 `RenderRecipe` 作为共享核心模型。
 - `PreviewRequest` 和 `RenderJobRequest` 只能在外围补充预览尺寸、导出设置等差异字段。
 - 禁止为预览和导出维护两套意义相同但字段不一致的配置结构。
+- 底片数字化新增的可选处理参数进入 `RenderRecipe.imageProcessing`（缺省或 `null` 为
+  普通模式）；预览、分析、单图导出和批量导出读取同一份有效配方，不得各存一套。
+  字段、枚举和版本以 T02 冻结的契约为准，见
+  [ADR-0007](docs/adr/0007-explicit-film-digitization-mode.md)。
 
 ### 4.2 本地语义优先
 
@@ -136,9 +141,13 @@ java-engine/src/main/java/com/camborder/app/
 - 可选边框风格使用 `RenderRecipe.borderStyle`（id/intensity/edgeWidth/holeCount/paperTone）：
   Canvas 与 Java2D 使用同一套风格 ID 与几何规格（权威定义在
   `java-engine/util/BorderStyleRenderer` 类注释）；未识别 id 或缺省时两端都保持原行为
-- 图片解码来源 `sourceDecode {mode, format, warning}` 随预览/导出响应返回；
-  RAW 只允许使用文件内嵌 JPEG；报告必须明确像素来源和尺寸，禁止把传感器 RAW
-  当作已完成显影，也不得提供外部显影分支。
+- 图片解码来源 `sourceDecode {mode, format, warning}` 随预览/导出响应返回。
+  普通模式 RAW 只允许使用文件内嵌 JPEG；报告必须明确像素来源和尺寸，禁止把传感器 RAW
+  当作已完成显影。
+- 底片数字化模式是用户显式开启的独立模式：只有该模式可以读取真实传感器 RAW，且必须由
+  `imageProcessing` 明确表达输入模式；真实 RAW 失败不得自动回退内嵌 JPEG。不得把新语义
+  塞进普通模式，也不得在普通模式提供外部显影分支。范围与验收见
+  [ADR-0007](docs/adr/0007-explicit-film-digitization-mode.md)。
 
 ### 4.4 接口风格
 
@@ -147,6 +156,20 @@ java-engine/src/main/java/com/camborder/app/
 - 异步导出任务使用 job 风格接口，例如：
   - `POST /api/render-jobs`
   - `GET /api/render-jobs/{jobId}`
+- 交互取消使用 `DELETE /api/film-requests/{clientId}?generation=n`，幂等返回 `204`；
+  只取消该视图不高于指定代次的交互任务，不取消冻结导出项。
+
+### 4.5 底片重型任务与内存准入
+
+- 预览、分析、导出预检和导出项必须经过 `FilmTaskScheduler`；不得再新增独立的
+  `Semaphore`/单线程锁形成第二套串行保护。
+- 交互请求复用 `clientId` + `generation`；同一代次允许预览与分析协作，同类重复请求
+  共享结果。新代次取消旧代次的等待与执行中交互计算；导出项不登记视图，不因调参取消。
+- 大数组分配前必须通过 `FilmInputProbe` 获取尺寸；未知尺寸明确失败，不得猜测后分配。
+- 任务执行必须持有 `FilmMemoryBudgetService` 租约，覆盖解码、分析、编码与写出；
+  `FilmProcessingPipeline.Processed` 必须用 try-with-resources 关闭。
+- 阶段缓存只保存只读 float32 照片阶段结果；缓存键不得包含边框/文字/Logo/几何/输出格式。
+  源文件与参考帧必须使用 SHA-256 内容版本。缓存关闭配置只影响命中率，不影响正确性。
 
 ## 5. 校验与错误处理
 
@@ -166,6 +189,10 @@ java-engine/src/main/java/com/camborder/app/
 - 4xx：请求不合法
 - 5xx：服务内部异常
 - 受控异常应返回明确的 4xx/5xx 响应（经 `GlobalExceptionHandler`），不能吞掉明显的非法输入
+- 底片内存准入：`422 / FILM_MEMORY_BUDGET_EXCEEDED` 表示回收缓存后仍超预算；
+  `429 / FILM_BUSY` 表示等待队列已满或暂时繁忙。两者都不得静默降低精度或输出尺寸。
+- 取消/被新代次替代：`408 / FILM_REQUEST_CANCELLED`，属于正常交互状态，界面不得显示
+  「引擎不可达」，也不得回写旧代次结果。
 
 ## 6. 测试规则
 

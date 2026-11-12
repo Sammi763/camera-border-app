@@ -9,6 +9,7 @@ import {
 import { getImageFileVersions } from "../../../services/desktop/imageFileVersion"
 import { loadLocalImagePreview, isLocalPreviewSupported, isRawOrHeicFile } from "../../../services/desktop/localImagePreview"
 import type { PreviewRequest, RenderRecipe } from "../../../types/preview"
+import type { ImageProcessingConfig } from "../../../types/imageProcessing"
 import type { ImageFileVersion } from "../../../types/runtime"
 
 /**
@@ -84,9 +85,11 @@ const fetchThumbnail = async (
   filePath: string,
   maxWidth: number,
   maxHeight: number,
-  signal: AbortSignal
+  signal: AbortSignal,
+  processing?: ImageProcessingConfig | null
 ): Promise<ThumbnailPayload | null> => {
-  const request = buildThumbnailRequest(filePath, maxWidth, maxHeight)
+  const base = buildThumbnailRequest(filePath, maxWidth, maxHeight)
+  const request = processing == null ? base : { ...base, recipe: { ...base.recipe, imageProcessing: processing } }
   try {
     const response = await requestPreview(request, undefined, signal)
     if (response.previewAvailable) {
@@ -115,7 +118,7 @@ const fetchThumbnail = async (
     // 取消时不再做本地兜底；其他引擎失败才进入 nativeImage 路径。
     if (signal.aborted) return null
   }
-  if (signal.aborted || isRawOrHeicFile(filePath) || !isLocalPreviewSupported(filePath)) {
+  if (processing != null || signal.aborted || isRawOrHeicFile(filePath) || !isLocalPreviewSupported(filePath)) {
     return null
   }
   const local = await loadLocalImagePreview(filePath, maxWidth, maxHeight)
@@ -132,7 +135,7 @@ const versionForPath = (
 ): ImageFileVersion | null =>
   versions.get(filePath) ?? null
 
-const thumbnailKey = (filePath: string, version: ImageFileVersion | null): string => {
+const thumbnailKey = (filePath: string, version: ImageFileVersion | null, processing?: ImageProcessingConfig | null): string => {
   const request = buildThumbnailRequest(filePath, THUMB_MAX, THUMB_MAX)
   return createPreviewCacheKey({
     imagePath: filePath,
@@ -140,17 +143,18 @@ const thumbnailKey = (filePath: string, version: ImageFileVersion | null): strin
     maxHeight: THUMB_MAX,
     modifiedAtMs: version?.mtimeMs ?? null,
     sourceSizeBytes: version?.sizeBytes ?? null,
-    recipeHash: hashRenderRecipe(request.recipe)
+    recipeHash: hashRenderRecipe({ ...request.recipe, ...(processing == null ? {} : { imageProcessing: processing }) })
   })
 }
 
 const cachedThumbnailMap = (
   filePaths: readonly string[],
-  versions: ReadonlyMap<string, ImageFileVersion | null>
+  versions: ReadonlyMap<string, ImageFileVersion | null>,
+  processing: ReadonlyMap<string, ImageProcessingConfig | null>
 ): Map<string, string> => {
   const result = new Map<string, string>()
   for (const filePath of filePaths) {
-    const cached = thumbnailUrlCache.get(thumbnailKey(filePath, versionForPath(versions, filePath)))
+    const cached = thumbnailUrlCache.get(thumbnailKey(filePath, versionForPath(versions, filePath), processing.get(filePath)))
     if (cached !== null) {
       result.set(filePath, cached)
     }
@@ -158,8 +162,11 @@ const cachedThumbnailMap = (
   return result
 }
 
-export const useThumbnails = (filePaths: readonly string[]): Map<string, string> => {
-  const pathSignature = useMemo(() => [...filePaths].join("\u0000"), [filePaths])
+const EMPTY_PROCESSING: ReadonlyMap<string, ImageProcessingConfig | null> = new Map()
+export const useThumbnails = (inputPaths: readonly string[], processing: ReadonlyMap<string, ImageProcessingConfig | null> = EMPTY_PROCESSING): Map<string, string> => {
+  const processingSignature = JSON.stringify([...processing])
+  const pathSignature = inputPaths.join("\u0000")
+  const filePaths = useMemo(() => [...inputPaths], [pathSignature])
   const [versions, setVersions] = useState<ReadonlyMap<string, ImageFileVersion | null>>(new Map())
   const [thumbnails, setThumbnails] = useState<Map<string, string>>(new Map())
   const ownedThumbnailKeys = useRef<Map<string, string>>(new Map())
@@ -190,7 +197,7 @@ export const useThumbnails = (filePaths: readonly string[]): Map<string, string>
     }
 
     if (!versionsReady) {
-      setThumbnails(cachedThumbnailMap(filePaths, versions))
+      setThumbnails(cachedThumbnailMap(filePaths, versions, processing))
       return
     }
 
@@ -201,7 +208,7 @@ export const useThumbnails = (filePaths: readonly string[]): Map<string, string>
     const uniquePaths = [...new Set(filePaths)]
     const currentThumbnailKeys = new Map<string, string>()
     for (const filePath of uniquePaths) {
-      const cacheKey = thumbnailKey(filePath, versionForPath(versions, filePath))
+      const cacheKey = thumbnailKey(filePath, versionForPath(versions, filePath), processing.get(filePath))
       const previousKey = ownedThumbnailKeys.current.get(filePath)
       if (previousKey !== undefined && previousKey !== cacheKey) {
         thumbnailUrlCache.delete(previousKey)
@@ -210,13 +217,13 @@ export const useThumbnails = (filePaths: readonly string[]): Map<string, string>
     }
     ownedThumbnailKeys.current = currentThumbnailKeys
     const uncached = uniquePaths.filter((filePath) =>
-      thumbnailUrlCache.get(thumbnailKey(filePath, versionForPath(versions, filePath))) === null)
+      thumbnailUrlCache.get(thumbnailKey(filePath, versionForPath(versions, filePath), processing.get(filePath))) === null)
 
-    setThumbnails(cachedThumbnailMap(filePaths, versions))
+    setThumbnails(cachedThumbnailMap(filePaths, versions, processing))
 
     const publish = (): void => {
       if (active) {
-        setThumbnails(cachedThumbnailMap(filePaths, versions))
+        setThumbnails(cachedThumbnailMap(filePaths, versions, processing))
       }
     }
 
@@ -229,7 +236,7 @@ export const useThumbnails = (filePaths: readonly string[]): Map<string, string>
         controllers.add(controller)
         running++
 
-        void fetchThumbnail(filePath, THUMB_MAX, THUMB_MAX, controller.signal)
+        void fetchThumbnail(filePath, THUMB_MAX, THUMB_MAX, controller.signal, processing.get(filePath))
           .then((payload) => {
             if (payload === null) return
             if (!active) {
@@ -238,7 +245,7 @@ export const useThumbnails = (filePaths: readonly string[]): Map<string, string>
               return
             }
             thumbnailUrlCache.set(
-              thumbnailKey(filePath, versionForPath(versions, filePath)),
+              thumbnailKey(filePath, versionForPath(versions, filePath), processing.get(filePath)),
               payload.url,
               payload.byteSize
             )
@@ -260,7 +267,7 @@ export const useThumbnails = (filePaths: readonly string[]): Map<string, string>
       active = false
       for (const controller of controllers) controller.abort()
     }
-  }, [filePaths, pathSignature, versions, versionsReady])
+  }, [filePaths, pathSignature, versions, versionsReady, processingSignature])
 
   useEffect(() => () => {
     // 组件卸载时释放当前可见范围持有的 URL；范围切换只释放移出范围的项目。

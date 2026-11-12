@@ -80,6 +80,7 @@ describe("app:// 安全协议代理", () => {
   it.each([
     ["GET", "app://app/api/health"],
     ["POST", "app://app/api/preview"],
+    ["POST", "app://app/api/image-analysis"],
     ["GET", "app://app/api/render-jobs/job-1"],
     ["DELETE", "app://app/api/render-jobs/job-1"],
     ["GET", "app://app/previews/preview-1"]

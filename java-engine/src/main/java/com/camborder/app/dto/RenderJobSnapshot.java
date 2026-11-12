@@ -12,6 +12,11 @@ public final class RenderJobSnapshot {
 
     private RenderRecipe recipe;
     private ExportSettings export;
+    /** 底片任务接受时冻结的内容指纹，执行前再次核对。 */
+    private String sourceVersion;
+
+    public String getSourceVersion() { return sourceVersion; }
+    public void setSourceVersion(final String sourceVersion) { this.sourceVersion = sourceVersion; }
 
     public RenderJobSnapshot() {
     }

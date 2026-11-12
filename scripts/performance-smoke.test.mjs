@@ -40,3 +40,13 @@ test("性能 smoke 的导出产物只写入并清理专属临时目录", () => {
   assert.match(script, /mkdtempSync\(path\.join\(tmpdir\(\), "camborder-performance-smoke-"\)\)/)
   assert.match(script, /rmSync\(outputDir, \{ recursive: true, force: true \}\)/)
 })
+
+test("性能 smoke 可选追加连续底片调参与批量导出场景", () => {
+  assert.match(script, /--film-sample/)
+  assert.match(script, /runFilmScenario/)
+  assert.match(script, /api\/film-stage-cache/)
+  assert.match(script, /statsAfterTuning\.hits > statsBefore\.hits/)
+  assert.match(script, /filmOutput: "srgb-jpeg"/)
+  assert.match(script, /sixteenGbAcceptance/)
+  assert.match(script, /NOT_ACCEPTED_ON_THIS_MACHINE/)
+})

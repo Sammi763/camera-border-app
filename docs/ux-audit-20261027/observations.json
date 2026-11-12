@@ -1,0 +1,50 @@
+{
+  "capturedAt": "2026-10-27",
+  "mode": "browser-development",
+  "viewport": {
+    "width": 588,
+    "height": 758,
+    "dpr": 2
+  },
+  "sample": "78330006.jpg",
+  "fit": {
+    "canvasCss": {
+      "width": 573,
+      "height": 331
+    },
+    "sourceProxy": {
+      "width": 1280,
+      "height": 849
+    },
+    "border": {
+      "top": 56,
+      "bottom": 160,
+      "left": 56,
+      "right": 56
+    },
+    "photoRect": {
+      "width": 173.38044758539456,
+      "height": 115
+    }
+  },
+  "actual": {
+    "canvasCss": {
+      "width": 1392,
+      "height": 1065
+    },
+    "sourceProxy": {
+      "width": 1280,
+      "height": 849
+    },
+    "displayedOutput": {
+      "width": 5147,
+      "height": 3555
+    }
+  },
+  "gallery": {
+    "cards": 27,
+    "canvasPixels": 17905757
+  },
+  "desktopStartup": "blocked-local-electron-signature",
+  "export": "not-executed"
+}

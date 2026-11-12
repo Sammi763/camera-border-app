@@ -348,6 +348,34 @@ export const registerFileDialogIpc = (): void => {
     }
   )
 
+  // ---- 重新定位丢失源文件（U11）：单选对话框，默认定位到原文件所在目录 ----
+  // 安全边界：仅接受受支持图片扩展名的绝对路径作为默认位置；只返回用户选择
+  // 的绝对路径，不读取文件内容，渲染进程不获得文件系统权限。
+
+  ipcMain.handle(
+    IPC_CHANNELS.PICK_REPLACEMENT_FILE,
+    async (_event, missingFilePath: string): Promise<string | null> => {
+      if (typeof missingFilePath !== "string" || missingFilePath.trim().length === 0
+        || !isAbsolute(missingFilePath)) {
+        return null
+      }
+      const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+      if (parent === undefined) return null
+      const result = await dialog.showOpenDialog(parent, {
+        title: "重新定位源文件",
+        properties: ["openFile"],
+        filters: IMAGE_FILTERS,
+        defaultPath: dirname(missingFilePath)
+      })
+      if (result.canceled || result.filePaths.length === 0) return null
+      const picked = result.filePaths[0] ?? null
+      if (picked !== null && isSupportedImage(picked)) {
+        rememberDir("import", dirname(picked))
+      }
+      return picked
+    }
+  )
+
   // ---- 独立图片文件夹选择（仅目录） ----------------------------------------
 
   ipcMain.handle(

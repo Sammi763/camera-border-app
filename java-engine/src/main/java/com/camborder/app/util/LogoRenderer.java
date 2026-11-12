@@ -40,9 +40,21 @@ public final class LogoRenderer {
      */
     public void draw(final BufferedImage canvas, final LogoConfig logo,
                      final BorderConfig border) {
+        draw(canvas, logo, border, 1.0);
+    }
+
+    /**
+     * 按渲染比例缩放品牌标识后绘制。
+     *
+     * 配方中的 size 与边距以全分辨率源图像素为语义基准；照片被等比缩小时
+     * 必须按同一 renderScale 缩放，保证预览与导出构图一致。renderScale=1 时行为不变。
+     */
+    public void draw(final BufferedImage canvas, final LogoConfig logo,
+                     final BorderConfig border, final double renderScale) {
         if (logo == null || !logo.isEnabled()) {
             return;
         }
+        final double scale = Double.isFinite(renderScale) && renderScale > 0 ? renderScale : 1.0;
 
         String placement = logo.getPlacement();
         if (placement == null || placement.isBlank()) {
@@ -62,7 +74,7 @@ public final class LogoRenderer {
                     RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
             int canvasWidth = canvas.getWidth();
             int canvasHeight = canvas.getHeight();
-            int[] insets = BorderComposer.insets(border);
+            int[] insets = BorderComposer.insets(border, scale);
             int borderTop = insets[0];
             int borderBottom = insets[1];
             int borderLeft = insets[2];
@@ -71,14 +83,14 @@ public final class LogoRenderer {
             if (logo.getImagePath() != null && !logo.getImagePath().isBlank()) {
                 drawImage(graphics, canvas, logo, placement, borderTop, borderBottom,
                         borderLeft, borderRight, canvasWidth, canvasHeight,
-                        border == null ? null : border.getColor());
+                        border == null ? null : border.getColor(), scale);
                 return;
             }
 
             String brandText = logo.getBrand();
             if (brandText == null || brandText.isBlank()) return;
             drawText(graphics, logo, brandText, border == null ? new BorderConfig() : border, borderTop, borderBottom,
-                    borderLeft, borderRight, canvasWidth, canvasHeight);
+                    borderLeft, borderRight, canvasWidth, canvasHeight, scale);
         } finally {
             graphics.dispose();
         }
@@ -87,15 +99,16 @@ public final class LogoRenderer {
     private void drawText(final Graphics2D graphics, final LogoConfig logo, final String brandText,
                           final BorderConfig border, final int borderTop, final int borderBottom,
                           final int borderLeft, final int borderRight,
-                          final int canvasWidth, final int canvasHeight) {
+                          final int canvasWidth, final int canvasHeight, final double scale) {
         int fontSize = logo.getSize() > 0 ? logo.getSize() : 14;
-        Font font = new Font(Font.SANS_SERIF, Font.BOLD, fontSize);
+        Font font = new Font(Font.SANS_SERIF, Font.BOLD, fontSize)
+                .deriveFont((float) Math.max(1.0, fontSize * scale));
         graphics.setFont(font);
         FontMetrics metrics = graphics.getFontMetrics();
         int textWidth = metrics.stringWidth(brandText);
         int textHeight = metrics.getHeight();
         int ascent = metrics.getAscent();
-        int margin = 12;
+        int margin = (int) Math.round(12 * scale);
         int x = logo.getPlacement().contains("left")
                 ? borderLeft + margin
                 : logo.getPlacement().contains("right")
@@ -115,7 +128,7 @@ public final class LogoRenderer {
                            final int borderTop, final int borderBottom,
                            final int borderLeft, final int borderRight,
                            final int canvasWidth, final int canvasHeight,
-                           final String borderColor) {
+                           final String borderColor, final double scale) {
         final Path path = Path.of(logo.getImagePath());
         final BufferedImage image;
         try {
@@ -127,11 +140,11 @@ public final class LogoRenderer {
             throw new PreviewGenerationException("logo image could not be decoded: " + logo.getImagePath());
         }
 
-        final double maxEdge = Math.max(8, logo.getSize() > 0 ? logo.getSize() : 32);
+        final double maxEdge = Math.max(8, logo.getSize() > 0 ? logo.getSize() : 32) * scale;
         final double imageScale = maxEdge / Math.max(image.getWidth(), image.getHeight());
         final int width = Math.max(1, (int) Math.round(image.getWidth() * imageScale));
         final int height = Math.max(1, (int) Math.round(image.getHeight() * imageScale));
-        final int margin = 12;
+        final int margin = (int) Math.round(12 * scale);
         final int x = placement.contains("left")
                 ? borderLeft + margin
                 : placement.contains("right")

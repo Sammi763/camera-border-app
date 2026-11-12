@@ -18,7 +18,9 @@
 
 ## 1. Atmosphere & Identity
 
-一个安静、专业、偏摄影工作台感的桌面应用。界面不追求营销感，而强调秩序、可信度和长时间使用时的耐看度。视觉签名是浅暖灰底上的深色信息层级，用克制的边框和排版来承接照片本身，而不是抢照片的注意力。
+一个安静、通透的摄影工作台。界面像一层悬浮在冷白空间里的液态玻璃：照片始终占据视觉中心，工具面板以低对比度的玻璃层次包裹操作，而不与照片争夺注意力。视觉签名是冷白／深色玻璃、iOS 蓝强调色、圆润高光边缘和轻微 Q 弹回馈；不使用桌面壁纸透视，也不把玻璃滤镜叠加到照片画布上。
+
+关键词：**雾白、通透、圆润、悬浮、轻盈**。
 
 ## 2. Color
 
@@ -26,26 +28,37 @@
 
 | Role | Token | Light | Dark | Usage |
 |------|-------|-------|------|-------|
-| Surface/primary | --surface-primary | #f6f1e8 | #171411 | Main background |
-| Surface/secondary | --surface-secondary | #efe8dc | #201c18 | Panels |
-| Surface/elevated | --surface-elevated | #fffaf1 | #2a241f | Cards, dialogs |
-| Text/primary | --text-primary | #221d18 | #f6efe4 | Headlines, body |
-| Text/secondary | --text-secondary | #62574c | #c3b6a8 | Secondary copy |
-| Text/tertiary | --text-tertiary | #8b7d6f | #9a8d80 | Hints |
-| Border/default | --border-default | #d8cfc1 | #3a322b | Standard borders |
-| Border/subtle | --border-subtle | #e8dfd2 | #2d2620 | Soft dividers |
-| Accent/primary | --accent-primary | #6c4b2c | #c58a53 | Primary action |
-| Accent/hover | --accent-hover | #8a5e36 | #d89b61 | Hover state |
-| Status/success | --status-success | #2f6a47 | #6db388 | Success |
-| Status/warning | --status-warning | #aa6a1f | #d79b45 | Warning |
-| Status/error | --status-error | #9e3f34 | #de7d73 | Error |
-| Status/info | --status-info | #6c4b2c | #c58a53 | Info |
+| Surface/base | --workspace-base | #f4f6fa | #0d1117 | App 背景与光晕底色 |
+| Glass/panel | --glass-bg | rgba(255,255,255,.68) | rgba(31,37,49,.68) | 顶栏、侧栏、Dock |
+| Glass/strong | --glass-bg-strong | rgba(255,255,255,.84) | rgba(38,45,59,.84) | 弹窗、抽屉、悬浮工具条 |
+| Glass/border | --glass-border | rgba(255,255,255,.72) | rgba(255,255,255,.16) | 高光边缘 |
+| Text/primary | --text-primary | #1b2230 | #f3f6fb | 标题、正文 |
+| Text/secondary | --text-secondary | #4b5566 | #c2cbd9 | 次要说明 |
+| Text/tertiary | --text-tertiary | #556173 | #8f9aab | 提示、元数据 |
+| Border/default | --border-default | rgba(21,36,61,.13) | rgba(255,255,255,.13) | 输入框、分隔 |
+| Border/subtle | --border-subtle | rgba(21,36,61,.075) | rgba(255,255,255,.08) | 内部轻分隔 |
+| Accent/primary | --accent-primary | #007aff | #0a84ff | 主操作、选中态、焦点 |
+| Accent/text | --accent-text | #0066d6 | #4fa3ff | 小字号蓝色文字（保证对比度） |
+| Accent/hover | --accent-hover | #0066d6 | #3f9bff | 悬停 |
+| Status/success | --status-success | #17643a | #6fd59a | 成功 |
+| Status/warning | --status-warning | #9a6200 | #f0bf6a | 警告 |
+| Status/error | --status-error | #b3261e | #ff8a84 | 错误 |
+| Preview/black | --studio-preview-black | #111111 | #111111 | 中性黑预览底 |
+| Preview/gray | --studio-preview-gray | #4F4F4F | #4F4F4F | 中性灰预览底 |
+| Preview/white | --studio-preview-white | #F7F7F7 | #F7F7F7 | 中性白预览底 |
 
 ### Rules
 
-- 主背景保持柔和，不用纯白。
-- 强调色只用于交互和焦点，不用于大面积装饰。
-- 除 DESIGN.md 外，不直接引入新的原始颜色值。
+- 浅色底使用冷白 `#F4F6FA`，不使用纯白大面积铺底；深色底使用近黑蓝灰，不使用纯黑。
+- 蓝色只用于交互、选中和焦点，不做大面积装饰。
+- 小字号蓝色文字使用 `--accent-text`（浅色 #0066d6 / 深色 #4fa3ff），边框与焦点环保留 #007AFF；
+  主按钮使用更深的蓝色渐变承载白色文字，避免纯 #007AFF 上的文字对比度不足。
+- 冰蓝光晕只出现在界面外围（顶栏与欢迎页径向渐变），不进入照片画布。
+- 玻璃外壳不透明度保持在 68%–84%，内容区提高不透明度保证文字清晰。
+- 预览背景固定为中性黑 `#111111`、中性灰 `#4F4F4F`、中性白 `#F7F7F7`，浅色与深色主题共用；
+  该 token 只影响工作台预览底色，不进入 RenderRecipe 或导出配方。
+- 主题 `warm` 是既有持久化标识，界面文案为「浅色玻璃」；新用户默认「跟随系统」。
+- 除 DESIGN.md 与 `styles.css` 的 token 定义外，不直接引入新的原始颜色值。
 
 ## 3. Typography
 
@@ -53,28 +66,29 @@
 
 | Level | Size | Weight | Line Height | Tracking | Usage |
 |-------|------|--------|-------------|----------|-------|
-| Display | 44px / 2.75rem | 700 | 1.1 | -0.02em | App hero |
-| H1 | 32px / 2rem | 700 | 1.15 | -0.015em | Main headings |
-| H2 | 26px / 1.625rem | 600 | 1.25 | -0.01em | Section headings |
-| H3 | 20px / 1.25rem | 600 | 1.35 | 0 | Panel titles |
-| Body/lg | 18px / 1.125rem | 400 | 1.6 | 0 | Lead text |
-| Body | 16px / 1rem | 400 | 1.6 | 0 | Default text |
-| Body/sm | 14px / 0.875rem | 400 | 1.5 | 0 | Secondary text |
-| Caption | 12px / 0.75rem | 500 | 1.4 | 0.02em | Metadata |
-| Overline | 11px / 0.6875rem | 600 | 1.3 | 0.08em | Labels |
+| Display | 48px / 3rem | 700 | 1.12 | -0.03em | 欢迎页主标题 |
+| H1 | 32px / 2rem | 700 | 1.15 | -0.02em | 主标题 |
+| H2 | 20px / 1.25rem | 650 | 1.25 | -0.01em | 抽屉/弹窗标题 |
+| H3 | 16px / 1rem | 650 | 1.35 | 0 | 面板标题 |
+| Body/lg | 16px / 1rem | 400 | 1.6 | 0 | 引导文本 |
+| Body | 14px / 0.875rem | 400 | 1.5 | 0 | 正文、控件 |
+| Caption | 12px / 0.75rem | 500 | 1.4 | 0.02em | 次要元数据 |
+| Overline | 12px / 0.75rem | 600 | 1.3 | 0.08em | 分组标签 |
 
 ### Font Stack
 
-- Primary: `"Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif`
+- Primary: `-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif`
 - Mono: `"SFMono-Regular", "JetBrains Mono", Consolas, monospace`
 
 ### Rules
 
-- 标题和说明以衬线字体建立摄影出版感。
-- 参数类文本和代码类文本使用等宽字体。
-- 正文不低于 14px。
+- 标题、正文和控件统一使用本机系统无衬线字体；不再使用衬线字体建立摄影出版感。
+- 尺寸、比例、色值、文件名等参数使用等宽字体并保持等宽数字。
+- 正文、按钮、输入框、页签和表单字段标签不低于 14px；仅次要元数据与徽标使用 12px，
+  不再使用 12px 以下的文字字号。
+- 不使用随意的字号解决三栏布局溢出，优先调整间距与换行。
 
-## 4. Spacing & Layout
+## 4. Spacing, Radii & Layout
 
 ### Base Unit
 
@@ -93,36 +107,73 @@
 | --space-12 | 48px | Major split |
 | --space-16 | 64px | Page rhythm |
 
+### Radii
+
+| Token | Value | Usage |
+|-------|-------|-------|
+| --radius-control | 12px | 按钮、输入框、分段控件内层 |
+| --radius-panel | 20px | 顶栏、侧栏、Dock |
+| --radius-modal | 24px | 抽屉、弹窗、欢迎页 |
+
 ### Grid
 
-- Max content width: 1440px
-- Column system: 12-column
-- Breakpoints: sm 640px, md 768px, lg 1024px, xl 1280px
-
-### Rules
-
-- 桌面优先采用工作台式三栏布局。
+- 桌面优先采用工作台式三栏：左队列 / 中预览 / 右检查器。
+- 三栏之间使用 12px 间距与 12px 外边距；窄窗口（≤1100px）按 预览 → 队列 → 检查器 纵向堆叠。
+- 栏宽可拖拽调整，也可用方向键、Shift 加速和 Home 复位。
 - 不使用随意的 magic number。
 
 ## 5. Components
 
 ### Workspace Shell
 
-- **Structure**: 顶部标题栏 + 左侧队列 + 中间预览 + 右侧设置
-- **Variants**: desktop, narrow
-- **Spacing**: `--space-4`, `--space-6`, `--space-8`
-- **States**: default
-- **Accessibility**: landmark clear, readable contrast
-- **Motion**: none at MVP
+- **Structure**: 悬浮玻璃顶栏 + 左侧玻璃队列 + 中间预览 + 右侧玻璃检查器 + 悬浮玻璃导出 Dock。
+- **Variants**: light glass, dark glass, system; desktop, narrow.
+- **Spacing**: 12px 外壳留白，20px 面板圆角。
+- **Accessibility**: landmark clear，焦点环 2px 蓝色，分栏手柄键盘可达。
+- **Motion**: 仅页签底座、抽屉、弹窗和按压使用 transform/opacity。
 
-### Status Card
+### Queue Item
 
-- **Structure**: title + body + mono meta row
-- **Variants**: neutral, success, warning
-- **Spacing**: `--space-4`
-- **States**: default
-- **Accessibility**: semantic heading structure
-- **Motion**: subtle fade-in only if needed later
+- **Structure**: 复选框 + 46px 缩略图 + 文件名（完整路径放在 title 提示中）+ 定位/删除。
+- **Height**: 常规行 60–64px；RAW/HEIC、预设、身份覆盖等状态徽标变多时允许自然增高，不裁切提示。
+- **Name & badges**: `.queueFileName` 单行省略完整文件名（完整名称由 `aria-label`/`title` 提供）；
+  徽标位于同名 `.queueName` 的可换行 flex 容器中，空间不足时整体换行而不是压缩或裁切。
+- **Actions**: 底部常驻“数量 + 全选/撤销/重做/更多”；280px 左栏下数量独立一行，四个按钮同排，
+  全选占两格、其余各一格，不横向溢出。排序、删除已选与清空队列收进 208px 玻璃“更多”浮层。
+- **States**: default, hover, active, checked, missing, dragging, drop target.
+- **Rules**: 当前照片使用淡蓝底与细描边；批量勾选是独立状态；队列条目自身不叠加 backdrop-filter。
+- **Portal menus**: “更多”浮层与右键菜单都 Portal 到 `body`，共用 `--queue-menu-*` 浮层 token
+  （背景、边框、文字、hover、danger、分隔线、阴影）；浅色/深色主题通过
+  `body:has(.workspaceShell[data-theme])` 补齐，不支持 backdrop-filter 时回退为不透明面板。
+
+### Preview & Floating Toolbar
+
+- **Structure**: 照片画布 + 底部悬浮玻璃工具条（网格 / 原图 / 适应 / 100%）。
+- **Rules**: 照片区域四周留白，画布不应用模糊或颜色滤镜；工具条只在自身背景上做玻璃效果。
+- **States**: idle, loading, active, area-insufficient, engine sync, actual-pixel badges.
+
+### Template Gallery
+
+- **Structure**: 固定双列模板卡片 + 画廊下方独立的“当前版式设置”分组。
+- **Rules**: 卡片首屏只显示 4:3 缩略图、名称、“详情”文字按钮和应用按钮；长说明与字段默认收在
+  `.templateGalleryDetails[hidden]` 中。摄影信息卡的布局/边框控件不再嵌在卡片里，只用轻分隔与留白分组。
+- **States**: default, hover, active, recommended, details expanded, scrolled gallery.
+
+### Tabs & Settings
+
+- **Structure**: 圆润分段控件（样式 / 摄影信息 / 输出）+ 分组设置。
+- **Rules**: 选中底座使用 transform 平滑移动；页签支持 roving tabindex 与方向键切换；设置分组用留白与轻分隔，不用重复边框卡片；输入框统一 12px 圆角。
+
+### Export Dock
+
+- **Structure**: 悬浮玻璃 Dock + 范围分段 + 单一主导出按钮 + 输出摘要 + 就近进度/失败/重试。
+- **Rules**: 每个范围只有一个主命令；引擎不可用或档位不可用时在主按钮之前解释。状态区可同时包含
+  预检、错误与进度等多个 span，使用可换行的 `inline-flex` 与 4/10px 间距，避免相邻状态文本粘连。
+
+### Welcome, Drawers & Dialogs
+
+- **Structure**: 玻璃欢迎页、侧滑抽屉、缩放淡入弹窗。
+- **Rules**: 统一 24px 圆角与玻璃材质；抽屉支持焦点圈定、Escape 关闭并恢复打开者焦点。
 
 ## 6. Motion & Interaction
 
@@ -130,23 +181,37 @@
 
 | Type | Duration | Easing | Usage |
 |------|----------|--------|-------|
-| Micro | 120ms | ease-out | Hover |
-| Standard | 220ms | ease-in-out | Panel state |
-| Emphasis | 420ms | cubic-bezier(0.16, 1, 0.3, 1) | Major reveal |
+| Micro | 120–160ms | ease-out | Hover、颜色 |
+| Press | 90ms 按下 / 220ms 回弹 | cubic-bezier(0.34, 1.56, 0.64, 1) | 按钮缩放至 0.97 后回弹 |
+| Tab | 240ms | cubic-bezier(0.34, 1.56, 0.64, 1) | 分段底座移动 |
+| Drawer | 300ms | cubic-bezier(0.22, 1, 0.36, 1) | 侧滑/上滑，末尾轻微回弹 |
+| Dialog | 240ms | cubic-bezier(0.34, 1.56, 0.64, 1) | 0.97 → 1 缩放并淡入 |
+| Content | 220ms | ease-out | 页签内容短暂淡入 |
 
 ### Rules
 
-- MVP 阶段动画尽量克制。
-- 只允许 `transform` 和 `opacity` 动画。
-- 后续如加入预览切换动画，必须支持 `prefers-reduced-motion`。
+- 只允许 `transform` 和 `opacity` 动画；本轮不引入动画依赖。
+- 快速连续操作立即响应最新状态，不等待动画结束。
+- 切换照片不应用弹跳或缩放动画。
+- 启用 `prefers-reduced-motion` 时取消位移、缩放和回弹，仅保留即时状态变化。
 
-## 7. Depth & Surface
+## 7. Depth, Surface & Fallback
 
 ### Strategy
 
-选择 `borders-only`。
+选择 `glass-over-neutral`：中性照片画布 + 低对比度玻璃外壳。
 
 | Type | Value | Usage |
 |------|-------|-------|
-| Default | 1px solid var(--border-default) | Cards, panels |
-| Subtle | 1px solid var(--border-subtle) | Internal separators |
+| Glass shell | background + 20px blur + 1px light border + soft shadow | 顶栏、侧栏、Dock、抽屉、弹窗 |
+| Content surface | 84%+ 不透明度 | 表单、设置与文字密集区域 |
+| Neutral canvas | 黑/灰/白纯色 | 照片预览区，不使用模糊 |
+| Fallback | `@supports not (backdrop-filter)` 高不透明度面板 | 不支持模糊的 WebView |
+
+### Rules
+
+- 模糊只用于主要玻璃外壳，不对每个队列项、每张卡片或照片画布叠加。
+- 照片区域不受玻璃滤镜影响；导出配方与画质判断不能依赖界面材质。
+- 边框与阴影用于建立层次，不靠重色块或强对比分割。
+- 队列“更多”浮层与右键菜单是临时浮层：使用玻璃底、轻边框和现有阴影层级，
+  不新增模糊强度；减少动态效果时只保留即时显示。

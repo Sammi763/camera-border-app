@@ -5,6 +5,7 @@ import com.camborder.app.model.BorderConfig;
 import com.camborder.app.model.RenderRecipe;
 import com.camborder.app.model.TextItem;
 import com.camborder.app.testsupport.AbstractControllerTest;
+import com.camborder.app.util.FilmTestFixtures;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -29,6 +30,17 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * 预览接口 POST /api/preview 的测试。
  */
 final class PreviewControllerTest extends AbstractControllerTest {
+
+    @Test
+    void invalidComparisonStageAndConflictingActualSizeAreRejected() throws Exception {
+        final PreviewRequest request = new PreviewRequest(new RenderRecipe(writeTempImage(),null,null,null,false),100,100);
+        request.setStage("unknown");
+        mockMvc.perform(post("/api/preview").contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest());
+        request.setStage(null); request.setActualPixels(true);
+        mockMvc.perform(post("/api/preview").contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest());
+    }
 
     @Test
     void shouldReturnPreviewForValidRequest() throws Exception {
@@ -314,5 +326,46 @@ final class PreviewControllerTest extends AbstractControllerTest {
                         .content(body))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("maxHeight must be non-negative"));
+    }
+
+    @Test
+    void shouldReturnFilmPreviewForValidLinearProcessing() throws Exception {
+        final String path = FilmTestFixtures.writeLinearTiff(tempDir, 2, 1,
+                new int[]{20000, 20000, 20000, 30000, 30000, 30000}).toString();
+        final com.camborder.app.model.ImageProcessingConfig processing =
+                FilmTestFixtures.linearProcessing();
+        processing.setNegative(FilmTestFixtures.manualNegative(new double[]{0.5, 0.5, 0.5}));
+        RenderRecipe recipe = new RenderRecipe(path, null, null, null, false);
+        recipe.setImageProcessing(processing);
+
+        mockMvc.perform(post("/api/preview")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new PreviewRequest(recipe, 800, 600))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("ok"))
+                .andExpect(jsonPath("$.previewAvailable").value(true))
+                .andExpect(jsonPath("$.sourceDecode.mode").value("linear-tiff"));
+    }
+
+    @Test
+    void shouldRejectInvalidFilmProcessingBeforeAvailabilityGate() throws Exception {
+        RenderRecipe recipe = new RenderRecipe(writeTempImage(), null, null, null, false);
+        final com.camborder.app.model.ImageProcessingConfig processing = minimalFilmProcessing();
+        processing.getRaw().setAutoBright(true);
+        recipe.setImageProcessing(processing);
+
+        mockMvc.perform(post("/api/preview")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new PreviewRequest(recipe, 800, 600))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("IMAGE_PROCESSING_UNSUPPORTED_OPTION"));
+    }
+
+    private static com.camborder.app.model.ImageProcessingConfig minimalFilmProcessing() {
+        final com.camborder.app.model.ImageProcessingConfig processing =
+                new com.camborder.app.model.ImageProcessingConfig();
+        processing.setInputMode("sensor-raw");
+        processing.setRaw(new com.camborder.app.model.ImageProcessingConfig.RawOptions());
+        return processing;
     }
 }

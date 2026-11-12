@@ -18,6 +18,59 @@ import {
 import { normalizeTextPlacement, textPlacementOptions } from "../utils/textPlacementOptions"
 import { CUSTOM_LONG_EDGE_MAX, CUSTOM_LONG_EDGE_MIN, OUTPUT_SIZE_PRESETS } from "../utils/outputSizePresets"
 import type { CapabilitiesResponse, FidelityTier, FilmFormatInfo } from "../../../types/preview"
+import type { EngineCapabilitiesState } from "../../preview/hooks/useEngineCapabilities"
+
+/**
+ * 能力状态反馈（U07）：区分检查中 / 已就绪 / 缺少组件 / 请求失败，
+ * 展示可理解的具体原因并提供重新检查入口；后端预检仍是最终防线。
+ */
+const CapabilityFeedback = ({
+  capabilitiesState,
+  onRecheck
+}: {
+  readonly capabilitiesState: EngineCapabilitiesState | null
+  readonly onRecheck?: (() => void) | undefined
+}): JSX.Element => {
+  if (capabilitiesState === null || capabilitiesState === undefined) {
+    return <p className="settingsCapabilityHint">专业输出能力尚未探测到，当前不显示导出控件。</p>
+  }
+  if (capabilitiesState.kind === "loading") {
+    return <p className="settingsCapabilityHint" role="status">正在检查导出能力…</p>
+  }
+  if (capabilitiesState.kind === "unavailable") {
+    return (
+      <p className="settingsCapabilityHint" role="status">
+        {capabilitiesState.message}，导出能力暂不可用。恢复后将自动重新检查。
+      </p>
+    )
+  }
+  if (capabilitiesState.kind === "error") {
+    return (
+      <div className="settingsCapabilityHint" role="alert">
+        <p>能力探测失败：{capabilitiesState.message}</p>
+        {onRecheck !== undefined && (
+          <button type="button" className="ghostButton" onClick={onRecheck}>重新检查</button>
+        )}
+      </div>
+    )
+  }
+  // ready 但没有任何可用档位：列出具体缺少的随包组件。
+  const missing = Object.entries(capabilitiesState.capabilities.components)
+    .filter(([, component]) => component.available !== true)
+    .map(([id, component]) => (component.reason ? `${id}（${component.reason}）` : id))
+  return (
+    <div className="settingsCapabilityHint" role="alert">
+      <p>
+        {missing.length > 0
+          ? `当前引擎缺少以下组件，无法提供专业导出档位：${missing.join("、")}。请使用完整安装包或重新安装应用组件。`
+          : "当前引擎未提供可用的导出档位。"}
+      </p>
+      {onRecheck !== undefined && (
+        <button type="button" className="ghostButton" onClick={onRecheck}>重新检查</button>
+      )}
+    </div>
+  )
+}
 import { OutputPresetPanel } from "../../output/components/OutputPresetPanel"
 
 type SettingsPanelProps = {
@@ -36,8 +89,18 @@ type SettingsPanelProps = {
   readonly showStyleSettings?: boolean
   /** 是否渲染输出控制组；样式页签复用本组件时关闭。 */
   readonly showOutputSettings?: boolean
+  /** 底片输出组合独立决定格式、ICC 与容器位深。 */
+  readonly filmMode?: boolean
   /** 当前进程能力快照；缺失或探测失败时不渲染专业输出控件。 */
   readonly capabilities?: CapabilitiesResponse | null
+  /**
+   * 能力探测的完整状态（U07）：区分检查中 / 已就绪 / 缺组件 / 请求失败，
+   * 并提供重新检查入口。缺省时保持旧文案行为。
+   */
+  readonly capabilitiesState?: EngineCapabilitiesState | null
+  readonly onRecheckCapabilities?: () => void
+  /** U13：批量命名样例（前 3 个实际输出文件名）；空时隐藏预览行。 */
+  readonly namingPreview?: readonly string[]
 }
 
 /** 内置画幅选项（后端不可用时的回退；含 6x10 与 6x12）。 */
@@ -109,9 +172,13 @@ export const SettingsPanel = ({
   detectedBrandLabel,
   showStyleSettings = true,
   showOutputSettings = true,
-  capabilities = null
+  filmMode = false,
+  capabilities = null,
+  capabilitiesState = null,
+  onRecheckCapabilities = undefined,
+  namingPreview = []
 }: SettingsPanelProps): JSX.Element => {
-  const { settings, update, updateNumber, updateTextLayer, resetTextLayers, replaceTextLayers, canUndo, canRedo, undo, redo } = controller
+  const { settings, update, updateNumber, updateTextLayer, resetTextLayers, replaceTextLayers, canUndo, canRedo, topUndo, topRedo, undo, redo } = controller
   const { fonts } = useSystemFonts()
   const availableFonts = fonts.filter((font) => font.engineAvailable)
   const [filmFormats, setFilmFormats] = useState<readonly FilmFormatInfo[]>(FALLBACK_FORMATS)
@@ -124,7 +191,7 @@ export const SettingsPanel = ({
     ? null
     : BORDER_STYLE_PARAMETERS[settings.borderStyle.id] ?? { edgeWidth: true, holeCount: true, paperTone: true }
 
-  const effectiveTier: FidelityTier = settings.tier ?? "standard-delivery"
+  const effectiveTier: FidelityTier = filmMode ? "custom" : settings.tier ?? "standard-delivery"
   const availableTiers = (Object.keys(capabilities?.tiers ?? {}) as FidelityTier[])
     .filter((tier) => tier !== "custom" && capabilities?.tiers[tier]?.available === true)
   const availableFormats = (["jpeg", "png", "tiff"] as const)
@@ -303,8 +370,8 @@ export const SettingsPanel = ({
       {showStyleSettings && (
         <>
           <div className="presetActions" aria-label="渲染设置历史">
-            <button type="button" className="ghostButton" disabled={!canUndo} onClick={undo}>撤销设置</button>
-            <button type="button" className="ghostButton" disabled={!canRedo} onClick={redo}>重做设置</button>
+            <button type="button" className="ghostButton" disabled={!canUndo} onClick={undo} title={topUndo === null ? undefined : `撤销：${topUndo.description}`}>撤销设置</button>
+            <button type="button" className="ghostButton" disabled={!canRedo} onClick={redo} title={topRedo === null ? undefined : `重做：${topRedo.description}`}>重做设置</button>
           </div>
           {!hasSelectedImage && (
             <p className="settingsCapabilityHint">
@@ -312,12 +379,12 @@ export const SettingsPanel = ({
             </p>
           )}
 
-      {/* 画幅 */}
+      {/* 拍摄画幅（U12 术语统一：与摄影信息中的「拍摄画幅」同名；只提供边框布局建议，不自动裁剪） */}
       <fieldset className="settingGroup">
-        <legend className="settingLabel">画幅</legend>
+        <legend className="settingLabel">拍摄画幅</legend>
         <div className="settingRow">
           <label className="settingFieldLabel">
-            画幅格式
+            拍摄画幅
             <select
               className="settingSelect"
               value={settings.layoutPresetId ?? ""}
@@ -331,7 +398,7 @@ export const SettingsPanel = ({
           </label>
           {settings.layoutPresetId !== null && settings.layoutPresetId !== undefined && (
             <p className="settingsCapabilityHint">
-              切换画幅时已自动填充推荐边框值。可手动调整。
+              已按拍摄画幅填入边框布局建议值（仅推荐边框，不自动裁剪照片）。可手动调整。
             </p>
           )}
         </div>
@@ -1043,10 +1110,13 @@ export const SettingsPanel = ({
 
       {showOutputSettings && (
         <>
-          <fieldset className="settingGroup">
+          {!filmMode && <fieldset className="settingGroup">
             <legend className="settingLabel">导出档位</legend>
             {availableTiers.length === 0 ? (
-              <p className="settingsCapabilityHint">专业输出能力尚未探测到，当前不显示导出控件。</p>
+              <CapabilityFeedback
+                capabilitiesState={capabilitiesState}
+                onRecheck={onRecheckCapabilities}
+              />
             ) : (
               <>
                 <p className="settingHint">档位由当前引擎能力决定；格式是固定档位的可选变体，修改尺寸或策略后才会变为自定义。</p>
@@ -1079,9 +1149,56 @@ export const SettingsPanel = ({
                 </p>
               </>
             )}
-          </fieldset>
+          </fieldset>}
 
-          {availableTiers.length > 0 && availableFormats.length > 0 && (
+          {(filmMode || availableTiers.length > 0) && (
+            <fieldset className="settingGroup">
+              <legend className="settingLabel">批量命名</legend>
+              <div className="settingRow">
+                <label className="settingFieldLabel">
+                  命名方式
+                  <select
+                    className="settingSelect"
+                    aria-label="批量命名方式"
+                    data-testid="export-naming-mode"
+                    value={settings.exportNaming?.mode ?? "original-suffix"}
+                    onChange={(e) => update({
+                      exportNaming: {
+                        mode: e.target.value as "original-suffix" | "prefix-index",
+                        prefix: settings.exportNaming?.prefix ?? ""
+                      }
+                    })}
+                  >
+                    <option value="original-suffix">原文件名＋后缀</option>
+                    <option value="prefix-index">自定义前缀＋序号</option>
+                  </select>
+                </label>
+                {settings.exportNaming?.mode === "prefix-index" && (
+                  <label className="settingFieldLabel">
+                    前缀
+                    <input
+                      type="text"
+                      className="settingTextInput"
+                      placeholder="例如：kyoto-2026"
+                      value={settings.exportNaming.prefix}
+                      onChange={(e) => update({
+                        exportNaming: { mode: "prefix-index", prefix: e.target.value.replace(/[/\\:*?"<>|]/g, "") } // 输入即清洗，保证样例与实际输出一致
+                      })}
+                    />
+                  </label>
+                )}
+              </div>
+              {namingPreview.length > 0 && (
+                <p className="settingsCapabilityHint" data-testid="export-naming-preview">
+                  实际文件名样例：{namingPreview.join("、")}
+                  {namingPreview.length >= 3 ? "…" : ""}
+                </p>
+              )}
+              <p className="settingsCapabilityHint">同名文件冲突时导出会被预检阻断，不会静默覆盖；可在批次内自动追加序号。</p>
+            </fieldset>
+          )}
+
+          {!filmMode && availableTiers.length > 0 && availableFormats.length > 0 && (
             <fieldset className="settingGroup">
               <legend className="settingLabel">输出格式</legend>
               <div className="settingRow">
@@ -1104,11 +1221,11 @@ export const SettingsPanel = ({
             </fieldset>
           )}
 
-          {availableTiers.length > 0 && effectiveTier === "custom" && (
+          {(filmMode || availableTiers.length > 0) && effectiveTier === "custom" && (
             <>
               <fieldset className="settingGroup">
                 <legend className="settingLabel">自定义输出</legend>
-                {settings.exportFormat === "jpeg" && (
+                {(filmMode ? (settings.filmOutput ?? "srgb-jpeg") === "srgb-jpeg" : settings.exportFormat === "jpeg") && (
                   <div className="settingRow">
                     <label className="settingFieldLabel">
                       JPEG 质量
@@ -1154,7 +1271,7 @@ export const SettingsPanel = ({
 
               <fieldset className="settingGroup">
                 <legend className="settingLabel">自定义保真策略</legend>
-                <div className="settingRow">
+                {!filmMode && <div className="settingRow">
                   <label className="settingFieldLabel">色彩配置
                     <select className="settingSelect" value={settings.colorProfilePolicy ?? "source"}
                       onChange={(e) => updateCustomOutput({ colorProfilePolicy: e.target.value as "source" | "srgb" | "none" })}>
@@ -1163,7 +1280,8 @@ export const SettingsPanel = ({
                       <option value="none">不嵌入 ICC</option>
                     </select>
                   </label>
-                </div>
+                </div>}
+                {filmMode && <p className="settingsCapabilityHint">色彩空间与位深由上方底片输出组合决定；ICC 始终随实际编码嵌入。</p>}
                 <div className="settingRow">
                   <label className="settingFieldLabel">元数据
                     <select className="settingSelect" value={settings.metadataPolicy ?? "preserve"}
@@ -1174,7 +1292,7 @@ export const SettingsPanel = ({
                     </select>
                   </label>
                 </div>
-                <div className="settingRow">
+                {!filmMode && <div className="settingRow">
                   <label className="settingFieldLabel">位深
                     <select className="settingSelect" value={settings.bitDepthPolicy ?? "8"}
                       onChange={(e) => updateCustomOutput({ bitDepthPolicy: e.target.value as "source" | "8" })}>
@@ -1182,11 +1300,11 @@ export const SettingsPanel = ({
                       <option value="source">源位深（仅真实 8/16-bit）</option>
                     </select>
                   </label>
-                </div>
+                </div>}
               </fieldset>
             </>
           )}
-          {availableTiers.length > 0 && <OutputPresetPanel settings={settings} onApply={(patch) => update(patch)} />}
+          {!filmMode && availableTiers.length > 0 && <OutputPresetPanel settings={settings} onApply={(patch) => update(patch)} />}
         </>
       )}
     </div>

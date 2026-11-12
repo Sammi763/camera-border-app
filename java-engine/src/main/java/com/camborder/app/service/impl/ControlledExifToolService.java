@@ -156,6 +156,8 @@ public final class ControlledExifToolService implements ExifToolService {
             }
             if ("srgb".equalsIgnoreCase(colorSpace)) {
                 arguments.add("-ExifIFD:ColorSpace=sRGB");
+            } else if (targetIcc != null && targetIcc.length > 0) {
+                arguments.add("-ExifIFD:ColorSpace=Uncalibrated");
             }
             if (targetIcc != null && targetIcc.length > 0) {
                 iccFile = Files.createTempFile(normalizedOutput.getParent(), ".camborder-icc-", ".icc");
@@ -187,11 +189,11 @@ public final class ControlledExifToolService implements ExifToolService {
 
     private Inspection parseInspection(final JsonNode node) {
         int width = intValue(node, "File:ImageWidth", "PNG:ImageWidth", "ImageWidth",
-                "IFD0:ImageWidth", "TIFF:ImageWidth");
+                "IFD0:ImageWidth", "TIFF:ImageWidth", "SubIFD:ImageWidth");
         int height = intValue(node, "File:ImageHeight", "PNG:ImageHeight", "ImageHeight",
-                "IFD0:ImageHeight", "TIFF:ImageHeight");
+                "IFD0:ImageHeight", "TIFF:ImageHeight", "SubIFD:ImageHeight");
         int bitDepth = intValue(node, "File:BitDepth", "File:BitsPerSample", "PNG:BitDepth", "BitDepth",
-                "IFD0:BitsPerSample", "BitsPerSample", "TIFF:BitsPerSample");
+                "IFD0:BitsPerSample", "BitsPerSample", "TIFF:BitsPerSample", "SubIFD:BitsPerSample");
         int orientation = orientationValue(node, "EXIF:Orientation", "ExifIFD:Orientation",
                 "IFD0:Orientation", "Orientation");
         String colorSpace = textValue(node, "ExifIFD:ColorSpace", "EXIF:ColorSpace",

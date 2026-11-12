@@ -7,6 +7,7 @@ import com.camborder.app.dto.FidelityReport;
 import com.camborder.app.dto.RenderJobRequest;
 import com.camborder.app.dto.RenderJobSnapshot;
 import com.camborder.app.exception.ApiException;
+import com.camborder.app.model.ImageProcessingConfig;
 import com.camborder.app.service.CapabilitiesService;
 import com.camborder.app.service.ExportPreflightService;
 import com.camborder.app.util.ImageReader;
@@ -34,11 +35,27 @@ public final class DefaultExportPreflightService implements ExportPreflightServi
 
     private final ImageReader imageReader;
     private final CapabilitiesService capabilitiesService;
+    private final FilmExportService filmExportService;
+    private final com.camborder.app.service.FilmTaskScheduler filmTaskScheduler;
 
     public DefaultExportPreflightService(final ImageReader imageReader,
                                          final CapabilitiesService capabilitiesService) {
+        this(imageReader, capabilitiesService, null, null);
+    }
+
+    public DefaultExportPreflightService(final ImageReader imageReader, final CapabilitiesService capabilitiesService,
+                                         final FilmExportService filmExportService) {
+        this(imageReader, capabilitiesService, filmExportService, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public DefaultExportPreflightService(final ImageReader imageReader, final CapabilitiesService capabilitiesService,
+                                         final FilmExportService filmExportService,
+                                         final com.camborder.app.service.FilmTaskScheduler filmTaskScheduler) {
         this.imageReader = imageReader;
         this.capabilitiesService = capabilitiesService;
+        this.filmExportService = filmExportService;
+        this.filmTaskScheduler = filmTaskScheduler;
     }
 
     @Override
@@ -70,7 +87,9 @@ public final class DefaultExportPreflightService implements ExportPreflightServi
         if (imagePathValue == null || imagePathValue.isBlank()) {
             throw new ApiException("items[" + index + "] imagePath is required", HttpStatus.BAD_REQUEST);
         }
-        RenderRecipeValidator.validateImagePlacement(snapshot.getRecipe(), "items[" + index + "] ");
+        RenderRecipeValidator.validateRecipe(snapshot.getRecipe(), "items[" + index + "] ");
+        com.camborder.app.util.ImageProcessingValidator.validateFilmOutput(
+                export, snapshot.getRecipe().getImageProcessing(), "items[" + index + "] ");
         final Path imagePath = path(imagePathValue, "imagePath", index);
         if (!Files.isRegularFile(imagePath) || !Files.isReadable(imagePath)) {
             throw new ApiException("items[" + index + "] imagePath must point to a readable file", HttpStatus.BAD_REQUEST);
@@ -84,6 +103,55 @@ public final class DefaultExportPreflightService implements ExportPreflightServi
                 effectiveTier(export), effectiveFormat(export));
         item.setReport(report);
         final List<String> reasons = new ArrayList<>();
+
+        final ImageProcessingConfig imageProcessing = snapshot.getRecipe().getImageProcessing();
+        if (imageProcessing != null) {
+            report.setPixelSource("sensor-raw".equals(imageProcessing.getInputMode())
+                    ? "sensor-raw" : "linear-tiff");
+            final CapabilitiesResponse filmCapabilities = capabilitiesService.snapshot();
+            final CapabilitiesResponse.FilmDigitizationCapability film =
+                    filmCapabilities.getFilmDigitization();
+            if (film == null || !film.isAvailable()) {
+                reasons.add("底片数字化能力不可用");
+            } else if (film.getOutputs() == null
+                    || !Boolean.TRUE.equals(film.getOutputs().get(export.getFilmOutput()))) {
+                reasons.add("当前运行时不支持输出组合 " + export.getFilmOutput());
+            }
+            if (film != null && (film.getInputModes() == null
+                    || !film.getInputModes().contains(imageProcessing.getInputMode()))) {
+                reasons.add("当前运行时不支持输入模式 " + imageProcessing.getInputMode());
+            }
+            if ("sensor-raw".equals(imageProcessing.getInputMode()) && !isRawExtension(imagePathValue)) {
+                reasons.add("sensor-raw 需要真实 RAW 源文件");
+            }
+            if ("linear-tiff".equals(imageProcessing.getInputMode())
+                    && !imagePathValue.toLowerCase(java.util.Locale.ROOT).endsWith(".tif")
+                    && !imagePathValue.toLowerCase(java.util.Locale.ROOT).endsWith(".tiff")) {
+                reasons.add("linear-tiff 需要 16-bit TIFF 源文件");
+            }
+            if (!outputs.add(outputPath)) reasons.add("输出路径与批次内其他项冲突");
+            if (imagePath.equals(outputPath)) reasons.add("输出路径不能覆盖源图");
+            if (Files.exists(outputPath)) reasons.add("输出路径已存在");
+            if (!isWritableParent(outputPath)) reasons.add("输出目录不可写");
+            if (reasons.isEmpty() && filmExportService != null) {
+                try {
+                    if (filmTaskScheduler == null) {
+                        item.setReport(filmExportService.preflight(snapshot.getRecipe(), export, snapshot.getSourceVersion()));
+                    } else {
+                        item.setReport(filmTaskScheduler.run(
+                                com.camborder.app.service.FilmTaskKind.EXPORT, null, 0, null,
+                                () -> filmExportService.preflight(snapshot.getRecipe(), export,
+                                        snapshot.getSourceVersion())));
+                    }
+                } catch (RuntimeException exception) {
+                    reasons.add("底片源图预检失败：" + exception.getMessage());
+                }
+            }
+            item.getReport().getBlockingReasons().addAll(reasons);
+            item.setBlockingReasons(reasons);
+            item.setStatus(reasons.isEmpty() ? "ready" : "blocked");
+            return item;
+        }
 
         try {
             final ImageReader.ReadResult read = imageReader.readWithSource(imagePath.toString());
@@ -227,6 +295,14 @@ public final class DefaultExportPreflightService implements ExportPreflightServi
                                      final int bitDepth) {
         for (int supported : capability.getBitDepths()) {
             if (supported == bitDepth) return true;
+        }
+        return false;
+    }
+
+    private static boolean isRawExtension(final String path) {
+        final String lower = path.toLowerCase(java.util.Locale.ROOT);
+        for (String extension : new String[]{".nef", ".cr2", ".cr3", ".arw", ".raf", ".dng", ".orf", ".rw2", ".pef"}) {
+            if (lower.endsWith(extension)) return true;
         }
         return false;
     }

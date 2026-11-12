@@ -1,0 +1,28 @@
+审查日期：2026-10-27
+源码基线：0641bf9 + 审查开始时的工作区改动
+
+已完成
+- pnpm --filter frontend typecheck：通过
+- pnpm --filter frontend test：通过
+  提示：jsdom 未实现 HTMLCanvasElement.getContext；通过不代表实际像素渲染一致。
+- pnpm --filter electron typecheck：通过
+- 本地 Vite + Java 源码启动：成功
+- 浏览器样片导入、页签切换、预设抽屉、100% 视图：完成观察与截图
+- 同配方不同尺寸的 Java 预览请求：成功，见 engine-preview-geometry.json
+- 运行时能力读取：成功，见 capabilities.json；当前本地环境缺随包专业组件
+
+桌面启动阻断
+命令：pnpm --filter electron dev
+失败环节：scripts/prepare-electron-dev.mjs 的本地 Electron 签名检查
+核心错误：
+Electron.app: bundle format is ambiguous (could be app or framework)
+In subcomponent: Electron.app/Contents/Frameworks/Electron Framework.framework
+[electron-dev] Electron 开发运行时签名校验失败，请重新执行 pnpm install
+未重装或修改签名脚本；不能据此判定安装包存在同样问题。
+
+未执行
+- Java 全量测试
+- 系统文件选择、桌面拖放、实际文件导出
+- 真实导出文件的像素/ICC/EXIF 独立核验
+- 正式安装包、断网、清洁系统验证
+- 前端大队列性能压测、读屏器、摄影用户研究

@@ -65,6 +65,20 @@ public final class BorderStyleRenderer {
     /** 渲染入口：style 为 null 或未识别时直接返回（保持原行为）。 */
     public void draw(final BufferedImage canvas, final BorderStyle style,
                      final BorderConfig border, final int imageWidth, final int imageHeight) {
+        draw(canvas, style, border, imageWidth, imageHeight, 1.0);
+    }
+
+    /**
+     * 按渲染比例缩放装饰参数后绘制。
+     *
+     * 配方中的 edgeWidth 与边框条带以全分辨率源图像素为语义基准；照片被等比
+     * 缩小时装饰必须按同一 renderScale 缩放，保证预览与导出构图一致。
+     * renderScale=1 时行为不变；各风格的 clamp 下限（如齿孔最小孔高）仍按
+     * 画布像素空间生效，与前端 canvasRenderer.drawBorderStyle 一致。
+     */
+    public void draw(final BufferedImage canvas, final BorderStyle style,
+                     final BorderConfig border, final int imageWidth, final int imageHeight,
+                     final double renderScale) {
         if (canvas == null || style == null) {
             return;
         }
@@ -77,9 +91,10 @@ public final class BorderStyleRenderer {
         if (fi <= 0) {
             return;
         }
-        final int ew = Math.max(0, style.getEdgeWidth());
+        final double scale = Double.isFinite(renderScale) && renderScale > 0 ? renderScale : 1.0;
+        final int ew = (int) Math.round(Math.max(0, style.getEdgeWidth()) * scale);
 
-        final int[] insets = BorderComposer.insets(border);
+        final int[] insets = BorderComposer.insets(border, scale);
         final int top = insets[0];
         final int bottom = insets[1];
         final int left = insets[2];

@@ -56,6 +56,17 @@ public interface ImageRenderService {
      */
     ComposeOutcome compose(RenderRecipe recipe, int maxWidth, int maxHeight);
 
+    /**
+     * 使用已经完成底片处理的 sRGB 栅格继续做版式合成（T10 预览）。
+     * 普通模式仍走 compose(recipe,...) 的源图读取路径。
+     */
+    default ComposeOutcome composeProcessed(final BufferedImage image, final RenderRecipe recipe,
+                                            final int maxWidth, final int maxHeight,
+                                            final SourceDecode sourceDecode,
+                                            final SourceImageInfo sourceInfo) {
+        throw new UnsupportedOperationException("composeProcessed is not implemented");
+    }
+
     /** 把合成图编码为 PNG 字节，供预览存储使用。 */
     byte[] toPng(BufferedImage image);
 

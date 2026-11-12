@@ -106,7 +106,13 @@ JavaBridge 的实际端口只存在于主进程，不通过 preload、IPC 或运
 - 专业导出只使用 `professional-tools/` 中由打包脚本固定注入的 ExifTool 和组件清单；路径
   缺失或版本/校验和不满足时由 `/api/capabilities` 如实报告不可用，Renderer 不得自行寻找
   系统工具或下载替代版本。
-- RAW 输入：只接受引擎读取到的内嵌 JPEG 预览；无可读取预览时明确失败。Electron 不携带、注入或启动任何外部 RAW 显影工具。
+- RAW 输入：普通模式只接受引擎读取到的内嵌 JPEG 预览；无可读取预览时明确失败。Electron
+  不为普通模式携带、注入或启动任何外部 RAW 显影工具。底片数字化模式计划使用随包、固定
+  版本的受控 helper，当前实施中，见
+  [ADR-0007](../docs/adr/0007-explicit-film-digitization-mode.md)。
+- LibRaw helper：仅 macOS arm64 随包时通过 `CAMBORDER_LIBRAW_HELPER_PATH` 注入 Java 引擎；
+  缺失时不注入，Java 能力探测为 false，不回退 PATH。构建见
+  [docs/cookbook.md](../docs/cookbook.md) 与 [java-engine/README.md](../java-engine/README.md)。
 - 引擎端口可用环境变量 `CAMBORDER_ENGINE_PORT` 覆盖（默认 8099）。
 - macOS 本地开发：`scripts/prepare-electron-dev.mjs` 会检查 Electron.app 是否完整，并修复 npm 开发副本的 ad-hoc 签名/隔离属性；它只作用于 `node_modules`，不参与正式打包签名。若依赖安装中断，可手动执行根目录 `pnpm prepare:electron-dev`。
 - macOS 打包签名：`build-hooks/afterPack.cjs` 在 DMG 前对嵌套 framework/helper 与外层 ad-hoc 签名，**不重签 java-runtime**（会破坏 Temurin hardened-runtime 签名导致 SIGKILL）。

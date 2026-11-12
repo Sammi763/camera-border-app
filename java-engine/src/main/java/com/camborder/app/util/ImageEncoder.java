@@ -193,20 +193,59 @@ public final class ImageEncoder {
     private ExportResult writeProfessional(final BufferedImage image, final String outputPath,
                                            final ExportSettings export, final String sourcePath,
                                            final SourceImageInfo suppliedSourceInfo) {
+        return writeProfessionalPrepared(image, outputPath, export, sourcePath, suppliedSourceInfo, null, null);
+    }
+
+    public ExportResult writeProcessedFilm(final BufferedImage image, final ExportSettings export,
+            final String sourcePath, final SourceImageInfo sourceInfo, final byte[] icc,
+            final String signature, final String sourceVersion, final String algorithmVersion) {
+        final ExportResult result = writeProfessionalPrepared(image, export.getOutputPath(), export, sourcePath, sourceInfo, icc, sourceVersion);
+        final FidelityReport report = result.getFidelityReport();
+        report.setFidelityScope("processed");
+        report.getSource().setSensorBitDepth("sensor-raw".equals(sourceInfo.getPixelSource()) ? sourceInfo.getBitDepth() : null);
+        report.getOutput().setWorkingDataType("float32");
+        report.getOutput().setProcessingWidth(image.getWidth());
+        report.getOutput().setProcessingHeight(image.getHeight());
+        report.getOutput().setColorSpace("tiff16-rec2020".equals(export.getFilmOutput()) ? "linear-rec2020" : "sRGB");
+        report.getFeatures().put("colorProfile", new FeatureResult(FeatureStatus.APPLIED,
+                "已转换并核验目标 ICC：" + report.getOutput().getColorSpace()));
+        report.getFeatures().put("bitDepth", new FeatureResult(FeatureStatus.APPLIED,
+                "输出容器 " + PixelBufferFactory.bitDepth(image) + "-bit；源有效位深 " + sourceInfo.getBitDepth() + "-bit"));
+        report.getOutput().setAlgorithmVersion(algorithmVersion);
+        report.getOutput().setRecipeSignature(signature);
+        report.getOutput().setSourceVersion(sourceVersion);
+        report.getTransformations().setColorConverted(true);
+        return new ExportResult(result.getOutputPath(), result.getActualFormat(),
+                report.getFeatures().get("metadata"), report.getFeatures().get("colorProfile"),
+                report.getFeatures().get("bitDepth"), report);
+    }
+
+    private ExportResult writeProfessionalPrepared(final BufferedImage image, final String outputPath,
+            final ExportSettings export, final String sourcePath, final SourceImageInfo suppliedSourceInfo,
+            final byte[] processedIcc, final String expectedSourceVersion) {
         if (exifToolService == null || !exifToolService.isAvailable()) {
             throw new RenderExportException("ExifTool 不可用，专业导出失败");
         }
         if (sourcePath == null || sourcePath.isBlank()) {
             throw new RenderExportException("专业导出必须提供源图路径");
         }
-        final SourceImageInfo sourceInfo = suppliedSourceInfo == null
+        SourceImageInfo sourceInfo = suppliedSourceInfo == null
                 ? new ImageReader(new RawDecoder(), exifToolService)
                 .readWithSource(sourcePath).getSourceInfo()
                 : suppliedSourceInfo;
+        if (processedIcc != null) {
+            FilmSourceVersion.require(Path.of(sourcePath), expectedSourceVersion);
+            final ExifToolService.Inspection actualSource = exifToolService.inspect(Path.of(sourcePath));
+            if (!actualSource.isValid()) throw new RenderExportException("源元数据独立读取失败");
+            sourceInfo = new SourceImageInfo(sourceInfo.getPixelSource(), sourcePath, sourceInfo.getWidth(), sourceInfo.getHeight(),
+                    sourceInfo.getDecodedWidth(), sourceInfo.getDecodedHeight(), sourceInfo.getOrientedWidth(), sourceInfo.getOrientedHeight(),
+                    sourceInfo.getBitDepth(), sourceInfo.getColorSpace(), sourceInfo.getOrientation(), sourceInfo.getIcc(), actualSource.getMetadata());
+        }
         final String format = resolveFormat(export.getFormat());
-        final int targetBitDepth = targetBitDepth(export, format, sourceInfo.getBitDepth());
-        final byte[] targetIcc = targetIcc(export, sourceInfo);
-        final BufferedImage prepared = prepareProfessionalImage(image, targetBitDepth, targetIcc);
+        final int targetBitDepth = processedIcc == null ? targetBitDepth(export, format, sourceInfo.getBitDepth())
+                : PixelBufferFactory.bitDepth(image);
+        final byte[] targetIcc = processedIcc == null ? targetIcc(export, sourceInfo) : processedIcc;
+        final BufferedImage prepared = processedIcc == null ? prepareProfessionalImage(image, targetBitDepth, targetIcc) : image;
         final File outputFile = OutputPathValidator.resolveAndPrepare(outputPath);
         final File parent = outputFile.getParentFile() == null
                 ? new File(".") : outputFile.getParentFile();
@@ -232,7 +271,8 @@ public final class ImageEncoder {
             final String metadataPolicy = export.effectiveMetadataPolicy();
             exifToolService.rewrite(Path.of(sourcePath), staging, metadataPolicy,
                     targetIcc, prepared.getWidth(), prepared.getHeight(), targetBitDepth,
-                    outputColorSpace(export, sourceInfo));
+                    processedIcc == null ? outputColorSpace(export, sourceInfo)
+                            : "tiff16-rec2020".equals(export.getFilmOutput()) ? "linear-rec2020" : "sRGB");
             final ExifToolService.Inspection outputInspection = exifToolService.inspect(staging);
             if (!outputInspection.isValid()
                     || outputInspection.getWidth() != prepared.getWidth()
@@ -242,9 +282,12 @@ public final class ImageEncoder {
                 throw new RenderExportException("输出文件独立事实校验失败");
             }
             validateProfessionalMetadata(export, sourceInfo, outputInspection, targetIcc);
+            if (processedIcc != null && !java.util.Arrays.equals(processedIcc, ImageMetadataPayload.read(staging.toString()).getIcc()))
+                throw new RenderExportException("底片输出 ICC 字节与实际目标不匹配");
             final FidelityReport report = buildProfessionalReport(
                     export, format, sourceInfo, outputInspection, targetBitDepth, targetIcc,
                     prepared.getWidth(), prepared.getHeight());
+            if (processedIcc != null) FilmSourceVersion.require(Path.of(sourcePath), expectedSourceVersion);
             try {
                 Files.move(staging, outputFile.toPath(), java.nio.file.StandardCopyOption.ATOMIC_MOVE);
             } catch (java.nio.file.AtomicMoveNotSupportedException exception) {
@@ -803,6 +846,41 @@ public final class ImageEncoder {
                                           final boolean preserveExif,
                                           final boolean preserveIcc) {
         return writeTiff(image, outputFile, metadata, preserveExif, preserveIcc, false);
+    }
+
+    /**
+     * 底片 TIFF 母版：写入指定 ICC 的 16-bit/8-bit TIFF，不依赖 ExifTool。
+     * 调用方必须先完成工作空间到目标 profile 的真实转换，本方法只负责编码与 ICC 写回。
+     */
+    public ExportResult writeFilmTiff(final BufferedImage image, final String outputPath,
+                                      final byte[] icc) {
+        final File outputFile = OutputPathValidator.resolveAndPrepare(outputPath);
+        final MetadataWriteResult metadataWrite = writeTiff(image, outputFile,
+                ImageMetadataPayload.iccOnly(icc), false, true, true);
+        final FeatureResult color = new FeatureResult(
+                icc == null || icc.length == 0 ? FeatureStatus.SOURCE_ABSENT : FeatureStatus.APPLIED,
+                icc == null || icc.length == 0 ? "未提供输出 ICC" : "已写入目标 ICC");
+        final FeatureResult depth = new FeatureResult(
+                PixelBufferFactory.bitDepth(image) >= 16 ? FeatureStatus.APPLIED : FeatureStatus.DOWNGRADED,
+                PixelBufferFactory.bitDepth(image) >= 16 ? "16-bit TIFF 已写入" : "输出为 8-bit TIFF");
+        return new ExportResult(outputFile.getAbsolutePath(), "tiff",
+                new FeatureResult(FeatureStatus.NOT_REQUESTED, "底片母版不复制源 EXIF"),
+                color, depth);
+    }
+
+    /** 底片分享 JPEG：8-bit sRGB，写入目标 ICC。 */
+    public ExportResult writeFilmJpeg(final BufferedImage image, final String outputPath,
+                                      final byte[] icc, final int jpegQuality) {
+        final File outputFile = OutputPathValidator.resolveAndPrepare(outputPath);
+        writeJpeg(image, outputFile, jpegQuality);
+        final MetadataWriteResult metadataWrite = applyMetadata(outputFile, "jpeg",
+                ImageMetadataPayload.iccOnly(icc), false, true);
+        final FeatureResult color = new FeatureResult(
+                icc == null || icc.length == 0 ? FeatureStatus.SOURCE_ABSENT : FeatureStatus.APPLIED,
+                icc == null || icc.length == 0 ? "未提供输出 ICC" : "已写入目标 ICC");
+        return new ExportResult(outputFile.getAbsolutePath(), "jpeg",
+                new FeatureResult(FeatureStatus.NOT_REQUESTED, "底片分享成品不复制源 EXIF"),
+                color, new FeatureResult(FeatureStatus.NOT_REQUESTED, "JPEG 固定 8-bit"));
     }
 
     private MetadataWriteResult writeTiff(final BufferedImage image, final File outputFile,

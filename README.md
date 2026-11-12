@@ -49,15 +49,17 @@ cd .. && pnpm dev
 | 项目 | 冻结范围 |
 |---|---|
 | 平台 | 正式：macOS arm64；候选：macOS x64、Windows x64（Windows 状态为 `SIMULATED`） |
-| 输入 | JPEG、PNG、TIFF、HEIC/HEIF、RAW 内嵌 JPEG 预览 |
-| 输出 | JPEG 8-bit、PNG 8/16-bit、TIFF 8/16-bit |
+| 输入 | JPEG、PNG、TIFF、HEIC/HEIF；普通模式 RAW 内嵌 JPEG 预览；底片数字化模式（实施中）真实传感器 RAW |
+| 输出 | JPEG 8-bit、PNG 8/16-bit、TIFF 8/16-bit；底片模式另提供 16-bit TIFF 母版 |
 | 固定导出档位 | 快速分享（JPEG 92 / 长边 2048 / sRGB / 移除 GPS/位置）；标准交付（JPEG 95 / 原图尺寸 / 8-bit / 源 ICC + 全部元数据）；高保真归档（TIFF / 原图尺寸 / 源位深 / 源 ICC + 全部元数据） |
-| RAW 边界 | 只读取内嵌 JPEG，不做真实 RAW 显影 |
+| RAW 边界 | 普通模式只读取内嵌 JPEG，不做真实 RAW 显影；底片数字化模式显式开启后可读真实 RAW，当前实施中、未验收 |
 
 PNG 必须作为档位内的格式变体提供：快速分享和标准交付可选 PNG 8-bit，高保真归档可选
 按源位深的 PNG 8/16-bit；这不增加第四个导出档位。标准交付和高保真归档保留 GPS/位置；
-快速分享移除 GPS/位置。修图、云同步、登录、自动更新和真实 RAW 显影不属于产品范围。
-RAW 扩展名与样片范围、格式/位深/ICC/元数据预期见 [`docs/test-samples.md`](docs/test-samples.md)。
+快速分享移除 GPS/位置。普通模式不做修图、云同步、登录、自动更新和真实 RAW 显影；底片
+数字化是显式开启的独立模式，边界与状态见 [docs/prd.md §0.7](docs/prd.md) 和
+[ADR-0007](docs/adr/0007-explicit-film-digitization-mode.md)。RAW 扩展名与样片范围、
+格式/位深/ICC/元数据预期见 [`docs/test-samples.md`](docs/test-samples.md)。
 
 统一术语为：版式、拍摄信息预设、拍摄画幅、边框布局建议。拍摄画幅只产生边框布局建议，
 不自动裁剪或改变原图尺寸；版式负责排版，拍摄信息预设负责拍摄身份。
@@ -93,8 +95,9 @@ RAW 扩展名与样片范围、格式/位深/ICC/元数据预期见 [`docs/test-
 
 - EXIF Orientation 1–8 只在 Java 引擎的图片解码边界物理处理一次；这一步与用户在
   `RenderRecipe.imagePlacement.rotation` 中设置的手动旋转分开，避免重复旋转。
-- RAW 预览只使用文件内的 `JpgFromRaw` 内嵌 JPEG；内嵌 JPEG 的 Orientation 会先统一为实际
-  像素方向，再进入 Canvas、引擎预览和导出链路。
+- 普通模式的 RAW 预览只使用文件内的 `JpgFromRaw` 内嵌 JPEG；内嵌 JPEG 的 Orientation 会先
+  统一为实际像素方向，再进入 Canvas、引擎预览和导出链路。底片数字化模式使用独立入口读取
+  真实传感器 RAW，实施中，见 [ADR-0007](docs/adr/0007-explicit-film-digitization-mode.md)。
 - 「适应画布」保持图片比例并显示完整图片；只有 `fill` 图片区域明确允许裁切，并在界面显示
   裁切状态。
 - 预览缩放只有「适应画布」和「100% 像素查看」两态。100% 使用自然合成像素尺寸，内容溢出时
@@ -103,6 +106,20 @@ RAW 扩展名与样片范围、格式/位深/ICC/元数据预期见 [`docs/test-
   渲染链路继续共用同一份 `RenderRecipe`。
 - 图片区域单独设置方向、比例和完整显示/填满裁切；预览尺寸只影响 CSS 预览框，不改变导出像素。
   Polaroid 明确划分图片区、内边距、底部文字区和视觉分隔，编辑辅助线不会进入导出。
+
+### 底片调参与资源预算
+
+- 连续调参合并为稳定快照：控件/撤销立即更新，引擎请求每视图只有一份在途和一份最新待提交，
+  拖动最多每 250ms 提交一次，松手/失焦/确认输入立即提交；主预览、阶段对比和直方图共享
+  同一配方与代次。切图/关闭底片模式会取消旧请求；取消不显示为引擎故障。
+- 引擎统一管理底片交互和导出项，最多执行一个重型任务；每视图每类操作只保留最新待处理项，
+  等待上限 16；交互优先，但存在导出等待时连续执行最多两个交互后必须执行一个导出项。
+- 大数组分配前探测输入尺寸（TIFF 头 / RAW helper `--probe`），按阶段估算 Java 与原生 helper
+  峰值并加 25% 余量；超预算返回 `422 / FILM_MEMORY_BUDGET_EXCEEDED`，队列满返回 `429 / FILM_BUSY`，
+  不静默降低精度或输出尺寸。
+- `raw-linear` / `base-positive` / `current-positive` 浮点阶段缓存按字节有界，改曲线不重复
+  RAW 解码与基础转正，改边框只重做合成；源文件与参考帧使用 SHA-256 内容版本。缓存可关闭做
+  逐位回归；预算和调度保护始终生效。详见 [ADR-0008](docs/adr/0008-tuning-coalescing-memory-and-stage-cache.md)。
 
 ### 多选批量工作流
 
@@ -215,20 +232,24 @@ camera-border-app/
 最终产品支持范围冻结为：
 
 - 平台：正式发布为 macOS arm64；macOS x64 与 Windows x64 为候选包，Windows 的状态固定为 `SIMULATED`。
-- 输入：JPEG、PNG、TIFF、HEIC/HEIF、RAW 内嵌 JPEG 预览。
+- 输入：JPEG、PNG、TIFF、HEIC/HEIF、普通模式的 RAW 内嵌 JPEG 预览。
 - 输出：JPEG 8-bit、PNG 8/16-bit、TIFF 8/16-bit。
-- RAW：只读取内嵌 JPEG，不做真实 RAW 显影；没有内嵌 JPEG 时明确失败。
+- RAW：普通模式只读取内嵌 JPEG，不做真实 RAW 显影；没有内嵌 JPEG 时明确失败。底片数字化
+  模式是显式开启的独立入口，可读真实传感器 RAW，当前实施中、未验收。
 - 导出档位：快速分享（JPEG 92、长边 2048、sRGB、移除 GPS/位置）；标准交付（JPEG 95、原图尺寸、8-bit、保留源 ICC 和全部元数据）；高保真归档（TIFF、原图尺寸、源位深、源 ICC、全部元数据）。
 - 标准交付和高保真归档必须保留 GPS/位置。
 
-详细定义、统一术语和样片矩阵以 [docs/prd.md §0](docs/prd.md) 为准。最终产品不做修图、
-云同步、登录、自动更新或真实 RAW 显影；Linux、Windows arm64 和移动端也不在发行范围内。
+详细定义、统一术语和样片矩阵以 [docs/prd.md §0](docs/prd.md) 为准。普通模式不做修图、
+云同步、登录、自动更新或真实 RAW 显影；底片数字化模式见
+[ADR-0007](docs/adr/0007-explicit-film-digitization-mode.md)，验收前不得写成已支持。
+Linux、Windows arm64 和移动端也不在发行范围内。
 
 ## 当前限制
 
 当前版本仍需按平台样片矩阵继续验收输出位深与完整元数据覆盖；Java 导出会对 EXIF、ICC
 和高位深逐项返回 `APPLIED` 或 `DOWNGRADED`，不会把未应用能力标成成功。HEIC/HEIF 使用随包
-解码助手，RAW 当前只能按内嵌 JPEG 预览路径验收，不能以任何真实显影路径作为产品承诺。
+解码助手，普通模式的 RAW 当前只能按内嵌 JPEG 预览路径验收；底片数字化模式的真实 RAW、
+彩负转正与校色正在实施，完成前不得以任何真实显影路径作为产品承诺。
 
 打包脚本已支持 macOS `.dmg` 与 Windows x64 `.exe` 的构建链路（`pnpm fetch:runtime && pnpm package`，
 随包 Java Runtime，最终用户无需安装 Java、Node.js 或 Python）。正式发布只等待 macOS arm64 的

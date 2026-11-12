@@ -122,6 +122,20 @@ const makeBundle = async (root, platform, arch) => {
   await writeFile(path.join(root, "professional-tools", "licenses", "ExifTool-LICENSE.txt"), "ExifTool license")
   await writeFile(path.join(root, "professional-tools", "licenses", "TwelveMonkeys-LICENSE.txt"), "TwelveMonkeys license")
   await writeFile(path.join(legalPath, "LICENSE"), "JRE license")
+  if (platform === "darwin" && arch === "arm64") {
+    const helper = makeMachO(0x0100000c)
+    const helperDirectory = path.join(root, "professional-tools", "libraw", "macos-arm64")
+    await mkdir(helperDirectory, { recursive: true })
+    await writeFile(path.join(helperDirectory, "film-raw-helper"), helper)
+    await writeFile(path.join(helperDirectory, "helper.json"), JSON.stringify({
+      schemaVersion: 1,
+      component: "libraw",
+      helperVersion: "1.0.0",
+      librawVersion: "0.22.3",
+      architecture: "macos-arm64",
+      binarySha256: sha256(helper)
+    }))
+  }
 }
 
 test("macOS bundle 校验真实 arm64 Mach-O、字体、HEIC 清单和许可证", async () => {

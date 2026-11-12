@@ -17,6 +17,10 @@ public final class ExportSettings {
     private String colorProfilePolicy;
     private String metadataPolicy;
     private String bitDepthPolicy;
+    /** 底片模式输出组合；普通模式必须为 null。 */
+    private String filmOutput;
+    /** 是否输出不带框母版；true 时全部装饰必须显式禁用。 */
+    private boolean borderlessMaster;
 
     // 旧版本输入适配：由 getter 保留，待旧模板迁移完成后删除。
     private boolean preserveMetadata;
@@ -104,6 +108,22 @@ public final class ExportSettings {
         this.bitDepthPolicy = bitDepthPolicy;
     }
 
+    public String getFilmOutput() {
+        return filmOutput;
+    }
+
+    public void setFilmOutput(final String filmOutput) {
+        this.filmOutput = filmOutput;
+    }
+
+    public boolean isBorderlessMaster() {
+        return borderlessMaster;
+    }
+
+    public void setBorderlessMaster(final boolean borderlessMaster) {
+        this.borderlessMaster = borderlessMaster;
+    }
+
     public boolean isPreserveMetadata() {
         return preserveMetadata;
     }
@@ -131,6 +151,11 @@ public final class ExportSettings {
     /** 阶段五请求是否已经使用新策略契约。 */
     public boolean hasProfessionalPolicy() {
         return tier != null && !tier.isBlank();
+    }
+
+    /** 底片模式是否已选择显式输出组合。 */
+    public boolean hasFilmPolicy() {
+        return filmOutput != null && !filmOutput.isBlank();
     }
 
     /** 旧客户端映射到元数据策略；新客户端直接使用 metadataPolicy。 */

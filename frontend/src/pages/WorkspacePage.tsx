@@ -1,7 +1,7 @@
 /**
  * 工作台页面：统一渐进式工作台的状态装配。
  *
- * 空队列显示统一欢迎页；有照片时固定显示左队列 / 中预览 / 右三页签 / 底部导出 Dock。
+ * 空队列显示统一欢迎页；有照片时固定显示左队列 / 中预览 / 右四页签 / 底部导出 Dock。
  * 详细管理能力通过抽屉打开，避免把预览区和右栏变成重复入口。
  *
  * 所有工作流共享同一份 RenderRecipe、身份合并链与导出逻辑：
@@ -23,11 +23,14 @@ import { QueuePanel } from "../features/queue/components/QueuePanel"
 import { PreviewPanel } from "../features/preview/components/PreviewPanel"
 import type { PreviewBackground, PreviewViewportCommand } from "../features/preview/components/PreviewPanel"
 import { ExportDock } from "../features/preview/components/ExportDock"
+import { calculateOutputPixelDimensions } from "../features/settings/utils/imageArea"
+import { buildNamingPreview, effectiveExportFormat } from "../features/preview/hooks/useExportController"
 import { SettingsPanel } from "../features/settings/components/SettingsPanel"
+import { FilmEditingPanel } from "../features/editing/components/FilmEditingPanel"
 import { ShootingPresetPanel } from "../features/metadata/components/ShootingPresetPanel"
 import { AssetLibraryPanel } from "../features/metadata/components/AssetLibraryPanel"
 import { PhotoIdentityPanel } from "../features/metadata/components/PhotoIdentityPanel"
-import { PhotoInfoSummary } from "../features/metadata/components/PhotoInfoSummary"
+import { PhotoInfoSummary, type PhotoInfoExifState } from "../features/metadata/components/PhotoInfoSummary"
 import { PresetTextComposer } from "../features/metadata/components/PresetTextComposer"
 import { TemplatePanel } from "../features/template/components/TemplatePanel"
 import { TemplateGallery } from "../features/template/components/TemplateGallery"
@@ -38,6 +41,7 @@ import { usePreview } from "../features/preview/hooks/usePreview"
 import { useExportController } from "../features/preview/hooks/useExportController"
 import { useWorkspaceDropRouter } from "../features/workspace/hooks/useWorkspaceDropRouter"
 import { useSettings } from "../features/settings/hooks/useSettings"
+import { buildResolvedRenderSettings } from "../features/settings/utils/buildTexts"
 import { useTemplates } from "../features/template/hooks/useTemplates"
 import { TemplateDropOverlay } from "../features/template/components/TemplateDropOverlay"
 import { deduplicateTemplateName } from "../features/template/utils/templateJsonCodec"
@@ -68,13 +72,36 @@ type WorkspacePageProps = {
 
 // ---- 可调分栏常量 ---------------------------------------------------------
 const LEFT_DEFAULT = 260
-const LEFT_MIN = 220
+const LEFT_MIN = 240
 const LEFT_MAX = 400
-const RIGHT_DEFAULT = 400
+const RIGHT_DEFAULT = 360
 const RIGHT_MIN = 360
 const RIGHT_MAX = 560
 /** 右栏折叠后的竖条宽度。 */
 const RIGHT_COLLAPSED_WIDTH = 40
+
+/**
+ * 仅影响导出文件、不影响画布视觉的 RenderSettings 键。
+ * 输出/保真设置变化不应推翻“已应用模板”状态；只有视觉键变化才清除。
+ */
+const OUTPUT_SETTING_KEYS: ReadonlySet<keyof RenderSettings> = new Set([
+  "exportFormat",
+  "exportNaming",
+  "jpegQuality",
+  "outputSizePreset",
+  "customOutputLongEdge",
+  "preserveMetadata",
+  "preserveColorProfile",
+  "preferHighBitDepth",
+  "tier",
+  "colorProfilePolicy",
+  "metadataPolicy",
+  "bitDepthPolicy"
+])
+
+/** patch 是否包含任何视觉设置键（空 patch 或纯输出 patch 返回 false）。 */
+const patchContainsVisualSettings = (patch: Partial<RenderSettings>): boolean =>
+  Object.keys(patch).some((key) => !OUTPUT_SETTING_KEYS.has(key as keyof RenderSettings))
 
 const SESSION_KEY_LEFT = "workspace.colLeft"
 const SESSION_KEY_RIGHT = "workspace.colRight"
@@ -104,13 +131,13 @@ const writeColumnWidth = (key: string, value: number): void => {
   }
 }
 
-/** 读取界面主题；新工作台默认使用深色影棚主题。 */
+/** 读取界面主题；新用户默认跟随系统，已保存的 dark / warm / system 偏好原样保留。 */
 const readTheme = (): StudioTheme => {
   try {
     const value = localStorage.getItem(LOCAL_KEY_THEME)
-    return value === "warm" || value === "system" ? value : "dark"
+    return value === "dark" || value === "warm" || value === "system" ? value : "system"
   } catch {
-    return "dark"
+    return "system"
   }
 }
 
@@ -248,6 +275,33 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
     setResizing(side)
   }, [colLeft, colRight])
 
+  // U14：分栏手柄键盘调节（role=separator），方向键步进（Shift 加速），Home 回到默认宽度。
+  const resizeWithKeyboard = useCallback((side: "left" | "right") => (event: React.KeyboardEvent<HTMLDivElement>): void => {
+    const step = event.shiftKey ? 48 : 16
+    let handled = true
+    if (event.key === "ArrowLeft") {
+      if (side === "left") {
+        setColLeft((previous) => clampWidth(previous - step, LEFT_MIN, LEFT_MAX))
+      } else {
+        setColRight((previous) => clampWidth(previous + step, RIGHT_MIN, RIGHT_MAX))
+      }
+    } else if (event.key === "ArrowRight") {
+      if (side === "left") {
+        setColLeft((previous) => clampWidth(previous + step, LEFT_MIN, LEFT_MAX))
+      } else {
+        setColRight((previous) => clampWidth(previous - step, RIGHT_MIN, RIGHT_MAX))
+      }
+    } else if (event.key === "Home") {
+      if (side === "left") setColLeft(LEFT_DEFAULT)
+      else setColRight(RIGHT_DEFAULT)
+    } else {
+      handled = false
+    }
+    if (handled) {
+      event.preventDefault()
+    }
+  }, [])
+
   // 加载内置胶片库
   useEffect(() => {
     let active = true
@@ -287,7 +341,7 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
     settings.update(normalizeTemplatePatch(patch))
     const matched = BUILT_IN_TEMPLATES.find((t) => t.settingsPatch === patch)
     setActivePresetId(matched?.id ?? null)
-  }, [settings])
+  }, [settings.update])
 
   /** 应用摄影信息卡指定变体（统一版式画廊中的卡片变体切换）。 */
   const handleApplyInfoCardVariant = useCallback((variantId: string): void => {
@@ -298,15 +352,18 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
     userModifiedRef.current = true
     settings.update(normalizeTemplatePatch(template.settingsPatch))
     setActivePresetId(variantId)
-  }, [settings])
+  }, [settings.update])
 
   // 包装 update，标记用户已主动修改设置（阻止默认模板覆盖）。
   // options.historyTag 由连续手势（裁切构图拖动）传入，合并为一条撤销历史。
   const handleSettingsUpdate = useCallback((patch: Partial<RenderSettings>, options?: SettingsUpdateOptions): void => {
     userModifiedRef.current = true
     settings.update(patch, options)
-    setActivePresetId(null)
-  }, [settings])
+    // 输出/保真设置不影响画布视觉，不应让当前模板的“已应用”状态误消失。
+    if (patchContainsVisualSettings(patch)) {
+      setActivePresetId(null)
+    }
+  }, [settings.update])
 
   // 裁切构图拖动：与其它手动设置变更共用 userModified 语义。
   const handleUpdateImagePlacement = handleSettingsUpdate
@@ -316,8 +373,13 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
     (key: Parameters<typeof settings.updateNumber>[0], value: number, min: number, max: number): void => {
       userModifiedRef.current = true
       settings.updateNumber(key, value, min, max)
+      // 数值设置里除 JPEG 质量/自定义长边等输出参数外都是视觉参数；
+      // 视觉数值变化后不再代表已应用的内置模板。
+      if (!OUTPUT_SETTING_KEYS.has(key)) {
+        setActivePresetId(null)
+      }
     },
-    [settings]
+    [settings.updateNumber]
   )
 
   // 包装 updateTextLayer，同样标记用户已主动修改设置
@@ -415,10 +477,14 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
     exif.ensureExif(activeItem?.filePath ?? queue.activeFilePath)
   }, [activeItem?.filePath, exif.ensureExif, queue.activeFilePath])
 
-  // 计算当前图片的有效摄影身份（每图覆盖 > 摄影预设 > EXIF > 空）
-  const selectedIdentity = activeItem !== null
-    ? queue.getEffectiveIdentity(activeItem.id, presets.presets, assets.store, exif.getExifByPath())
-    : null
+  // 计算当前图片的有效摄影身份（每图覆盖 > 摄影预设 > EXIF > 空）。
+  // 缓存结果，避免每次渲染生成新对象导致模板画廊 memo 与下游解析重复执行。
+  const selectedIdentity = useMemo(() => {
+    if (activeItem === null) {
+      return null
+    }
+    return queue.getEffectiveIdentity(activeItem.id, presets.presets, assets.store, exif.exifByPath)
+  }, [activeItem, queue.getEffectiveIdentity, presets.presets, assets.store, exif.exifByPath])
 
   // 计算当前图片各展示字段的来源标识（EXIF / 摄影预设 / 每图覆盖）
   const identitySources = useMemo(() => {
@@ -427,6 +493,31 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
     }
     return queue.getIdentitySources(activeItem.id, presets.presets, assets.store, exif.getExifByPath())
   }, [queue, activeItem, presets.presets, assets.store, exif])
+
+  // 当前照片 EXIF 读取状态（U12 空态）：失败 / 在途 / 引擎确认无信息。
+  const activeExifState = useMemo((): PhotoInfoExifState | null => {
+    if (activeItem === null) {
+      return null
+    }
+    const failure = exif.exifFailures.get(activeItem.sourcePath) ?? exif.exifFailures.get(activeItem.filePath)
+    if (failure !== undefined) {
+      return { status: "failed", message: failure }
+    }
+    if (exif.exifInFlight.has(activeItem.sourcePath) || exif.exifInFlight.has(activeItem.filePath)) {
+      return { status: "loading" }
+    }
+    if (exif.exifByPath.has(activeItem.sourcePath) || exif.exifByPath.has(activeItem.filePath)) {
+      return { status: "empty" }
+    }
+    // 尚未发起读取（如浏览器模式）：不臆断原因，保持逐字段「未设置」。
+    return null
+  }, [activeItem, exif])
+
+  const retryActiveExif = useCallback((): void => {
+    if (activeItem !== null) {
+      exif.ensureExif(activeItem.filePath)
+    }
+  }, [activeItem, exif])
 
   // 快捷文字覆盖：当前图片的独立文字覆盖。
   const resolvedTextOverride = useMemo(() => {
@@ -455,20 +546,50 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
     return result.label
   }, [selectedIdentity])
 
+  // 版式画廊缩略图与主预览共用同一份「有效渲染设置」：变量解析、每图覆盖与
+  // 品牌结果在此解析一次，缩略图不再显示未解析的 {Camera} 占位符（U03）。
+  const resolvedGallerySettings = useMemo(
+    () => buildResolvedRenderSettings(settings.settings, resolvedTextOverride, resolvedTextLayers, resolvedBrand),
+    [settings.settings, resolvedTextOverride, resolvedTextLayers, resolvedBrand]
+  )
+
   const preview = usePreview(
     queue.activeFilePath,
     settings.settings,
     settings.settingsVersion,
     resolvedTextOverride,
     resolvedTextLayers,
-    resolvedBrand
+    resolvedBrand,
+    queue.activeImageProcessing
   )
+
+  // 缩略图几何的原图事实：与主预览同源（引擎解码/预检），缺省时退化为代理图语义。
+  const gallerySourceDimensions = useMemo(() => {
+    if (preview.kind !== "active") {
+      return null
+    }
+    const decode = preview.engineResponse?.sourceDecode
+    const width = decode?.fullWidth ?? preview.engineResponse?.fidelityReport?.source?.orientedWidth
+      ?? preview.engineResponse?.fidelityReport?.source?.width
+    const height = decode?.fullHeight ?? preview.engineResponse?.fidelityReport?.source?.orientedHeight
+      ?? preview.engineResponse?.fidelityReport?.source?.height
+    return typeof width === "number" && typeof height === "number" && width > 0 && height > 0
+      ? { width, height }
+      : null
+  }, [preview])
 
   // 引擎是否可用：仅在「健康端点连续 ready」时为 true。
   // loading/error 都视为不可用，UI 据此禁用导出按钮、提示用户当前为本地预览模式。
   const engineAvailable = health.kind === "ready"
-  const capabilitiesState = useEngineCapabilities(engineAvailable)
+  const { state: capabilitiesState, recheck: recheckCapabilities } = useEngineCapabilities(engineAvailable)
   const capabilities = capabilitiesState.kind === "ready" ? capabilitiesState.capabilities : null
+  // U07：档位不可用时在选择保存位置之前解释并禁用提交；后端预检仍是最终防线。
+  const exportTier = queue.activeImageProcessing != null ? "custom" : settings.settings.tier ?? "standard-delivery"
+  const tierUnavailableReason: string | null = capabilitiesState.kind === "ready" && exportTier !== "custom"
+    ? (capabilitiesState.capabilities.tiers[exportTier]?.available === true
+      ? null
+      : (capabilitiesState.capabilities.tiers[exportTier]?.reason ?? "当前引擎能力不足，所选导出档位不可用"))
+    : null
   // 当前失败原因（error 时为诊断消息，loading/ready 时为 null）；供 PreviewPanel 解释禁用原因
   const engineUnavailableReason: string | null = health.kind === "error" ? health.message : null
 
@@ -574,6 +695,15 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
     }
   }, [operationScope, queue.activeItem, queue.checkedItemIds, queue.items])
 
+  // U13：批量命名样例（实际输出文件名前 3 个）。
+  const namingPreview = useMemo(() => {
+    const naming = settings.settings.exportNaming ?? { mode: "original-suffix" as const, prefix: "" }
+    return buildNamingPreview(batchExportItems, naming, (_item, index) => {
+      const format = effectiveExportFormat(settings.settings, batchExportItems[index]?.imageProcessing)
+      return format === "jpeg" ? "jpg" : format === "tiff" ? "tif" : "png"
+    })
+  }, [batchExportItems, settings.settings])
+
   const batchExportLabel = useMemo(() => {
     if (batchExportItems.length === 0) {
       return ""
@@ -602,6 +732,78 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
     capabilities
   })
 
+  // 输出摘要（U04）：从实际档位/格式设置与已知源图事实生成，展示在 Dock。
+  // 源图尺寸未知时省略尺寸，不猜测；快速分享档位不使用「原图尺寸」等误导文案。
+  const exportSummary = useMemo(() => {
+    const currentSettings = settings.settings
+    const tierLabels: Record<string, string> = {
+      "quick-share": "快速分享",
+      "standard-delivery": "标准交付",
+      "high-fidelity-archive": "高保真归档",
+      custom: "自定义"
+    }
+    const filmMode = queue.activeImageProcessing != null
+    const tierLabel = filmMode ? (currentSettings.borderlessMaster ? "底片无框母版" : "底片带框输出") : tierLabels[currentSettings.tier ?? "standard-delivery"] ?? "标准交付"
+    const formatLabel = filmMode
+      ? ({ "srgb-jpeg": "sRGB JPEG · 8-bit", "tiff16-srgb": "sRGB TIFF · 16-bit", "tiff16-rec2020": "线性 Rec.2020 TIFF · 16-bit" }[currentSettings.filmOutput ?? (currentSettings.exportFormat === "tiff" ? "tiff16-srgb" : "srgb-jpeg")])
+      : currentSettings.exportFormat.toUpperCase()
+    const locationLabel = currentSettings.metadataPolicy === "strip"
+      ? "移除全部元数据"
+      : currentSettings.metadataPolicy === "remove-location"
+        ? "移除位置信息"
+        : "保留元数据"
+    const sourceItem = exportController.lastPreflight?.items[0]?.report?.source ?? null
+    const decode = preview.kind === "active" ? preview.engineResponse?.sourceDecode ?? null : null
+    const sourceWidth = sourceItem?.orientedWidth ?? sourceItem?.width ?? decode?.fullWidth ?? null
+    const sourceHeight = sourceItem?.orientedHeight ?? sourceItem?.height ?? decode?.fullHeight ?? null
+    const dimensions = !filmMode && sourceWidth !== null && sourceHeight !== null && sourceWidth > 0 && sourceHeight > 0
+      ? calculateOutputPixelDimensions(sourceWidth, sourceHeight, currentSettings)
+      : null
+    const sizeLabel = dimensions === null
+      ? null
+      : `${dimensions.width}×${dimensions.height} px`
+    return [
+      tierLabel,
+      formatLabel,
+      ...(sizeLabel === null ? [] : [sizeLabel]),
+      locationLabel
+    ].join(" · ")
+  }, [exportController.lastPreflight, preview, settings.settings, queue.activeImageProcessing])
+
+
+  // ---- 全局撤销协调（U05） ----------------------------------------------------
+  // 队列与设置各自维护撤销栈（既有结构），这里只按栈顶全局序号选择最近一次
+  // 可撤销操作，不引入全局状态框架。栈顶描述同时用于按钮提示。
+  const coordinatedUndo = useCallback((): void => {
+    const queueTop = queue.topUndo
+    const settingsTop = settings.topUndo
+    if (queueTop !== null && (settingsTop === null || queueTop.seq >= settingsTop.seq)) {
+      queue.undo()
+      return
+    }
+    if (settingsTop !== null) {
+      // 撤销设置会恢复到某个历史快照，无法可靠推断它对应哪个视觉模板；
+      // 清除“已应用”标记，避免显示虚假的模板状态。
+      setActivePresetId(null)
+      settings.undo()
+    }
+  }, [queue, settings])
+
+  const coordinatedRedo = useCallback((): void => {
+    const queueTop = queue.topRedo
+    const settingsTop = settings.topRedo
+    // 重做栈沿用原操作序号，应先恢复较早发生的操作，与撤销选最新操作相反。
+    if (queueTop !== null && (settingsTop === null || queueTop.seq <= settingsTop.seq)) {
+      queue.redo()
+      return
+    }
+    if (settingsTop !== null) {
+      // 与撤销一致：历史快照不携带模板标记，重做后不保留可能失真的“已应用”。
+      setActivePresetId(null)
+      settings.redo()
+    }
+  }, [queue, settings])
+
   /** 统一工作台快捷键；输入控件和管理抽屉内不拦截用户文本编辑。 */
   useEffect(() => {
     const isEditableTarget = (target: EventTarget | null): boolean => {
@@ -609,6 +811,26 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
         return false
       }
       return target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)
+    }
+    /** 原生可交互元素自行处理 Space/Delete/方向键；全局单键快捷键不得劫持。 */
+    const INTERACTIVE_TARGET_SELECTOR = [
+      "button",
+      "a",
+      "summary",
+      "[role='button']",
+      "[role='tab']",
+      "[role='menuitem']",
+      "[role='separator']"
+    ].join(", ")
+    const isInteractiveTarget = (target: EventTarget | null): boolean => {
+      if (!(target instanceof Element)) {
+        return false
+      }
+      if (target instanceof HTMLElement
+        && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))) {
+        return true
+      }
+      return target.closest(INTERACTIVE_TARGET_SELECTOR) !== null
     }
     const handleKeyDown = (event: KeyboardEvent): void => {
       if (isEditableTarget(event.target) || (event.target instanceof HTMLElement && event.target.closest('[role="dialog"]') !== null)) {
@@ -621,8 +843,9 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
       const key = event.key.toLowerCase()
       const withModifier = event.metaKey || event.ctrlKey
 
-      // `?` 打开快捷键速查面板；输入控件与对话框内已由上方守卫排除。
-      if (event.key === "?") {
+      // `?` 打开快捷键速查面板；输入控件内已由上方守卫排除。
+      // 帮助抽屉等模态对话框打开期间不叠加第二个面板（与 \ 守卫一致）。
+      if (event.key === "?" && document.querySelector('[role="dialog"]') === null) {
         event.preventDefault()
         setShortcutOverlayOpen(true)
         return
@@ -631,9 +854,9 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
       if (withModifier && key === "z") {
         event.preventDefault()
         if (event.shiftKey) {
-          queue.redo()
+          coordinatedRedo()
         } else {
-          queue.undo()
+          coordinatedUndo()
         }
         return
       }
@@ -642,6 +865,12 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
         void (operationScope === "active"
           ? exportController.startSingleExport()
           : exportController.startBatchExport())
+        return
+      }
+
+      // `?` 与带修饰键的全局命令之后，交互控件保留原生键盘行为：
+      // Space 激活按钮、Delete 由控件自行决定、方向键用于页签/分栏手柄。
+      if (isInteractiveTarget(event.target)) {
         return
       }
 
@@ -691,7 +920,7 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
     }
     window.addEventListener("keydown", handleKeyDown)
     return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [exportController, operationScope, queue, shortcutOverlayOpen])
+  }, [coordinatedRedo, coordinatedUndo, exportController, operationScope, queue, shortcutOverlayOpen])
 
   // 空队列统一显示欢迎页；有照片后固定进入渐进式三栏工作台。
   const handleWelcomePickFiles = useCallback((): void => {
@@ -719,7 +948,16 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
     updateNumber: handleSettingsUpdateNumber,
     updateTextLayer: handleUpdateTextLayer,
     resetTextLayers: handleResetTextLayers,
-    replaceTextLayers: handleReplaceTextLayers
+    replaceTextLayers: handleReplaceTextLayers,
+    // 设置面板内的撤销/重做同样会让模板标记失真，与全局协调撤销保持一致。
+    undo: (): void => {
+      setActivePresetId(null)
+      settings.undo()
+    },
+    redo: (): void => {
+      setActivePresetId(null)
+      settings.redo()
+    }
   }), [handleResetTextLayers, handleReplaceTextLayers, handleSettingsUpdate, handleSettingsUpdateNumber, handleUpdateTextLayer, settings])
 
   const identitySourceFallback = {
@@ -731,7 +969,7 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
     captureFormat: null
   } as const
 
-  // 右侧只保留样式 / 摄影信息 / 输出三个页签；资料库、预设和用户版式均在抽屉中管理。
+  // 右侧页签：样式 / 摄影信息 / 底片 / 输出；资料库、预设和用户版式均在抽屉中管理。
   const workspaceTabs = useMemo((): readonly WorkspaceTab[] => [
     {
       id: "style",
@@ -758,7 +996,8 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
             activePresetId={activePresetId}
             recommendedTemplateId={recommendedTemplateId}
             currentImage={preview.kind === "active" ? preview.currentImage : null}
-            currentSettings={settings.settings}
+            currentSettings={resolvedGallerySettings}
+            sourceDimensions={gallerySourceDimensions}
             onApply={handleApplyPreset}
             onApplyInfoCardVariant={handleApplyInfoCardVariant}
           />
@@ -783,7 +1022,12 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
       label: "摄影信息",
       content: activeItem !== null && selectedIdentity !== null ? (
         <div className="workspaceTabStack">
-          <PhotoInfoSummary effectiveIdentity={selectedIdentity} sources={identitySources ?? identitySourceFallback} />
+          <PhotoInfoSummary
+            effectiveIdentity={selectedIdentity}
+            sources={identitySources ?? identitySourceFallback}
+            exifState={activeExifState}
+            onRetryExif={retryActiveExif}
+          />
           <PhotoIdentityPanel
             effectiveIdentity={selectedIdentity}
             identityOverride={activeItem.identityOverride}
@@ -809,6 +1053,22 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
       )
     },
     {
+      id: "film",
+      label: "底片",
+      content: (
+        <FilmEditingPanel
+          config={queue.activeImageProcessing}
+          error={queue.activeImageProcessingError}
+          sourcePath={queue.activeItem?.sourcePath ?? null}
+          capabilities={capabilities}
+          onChange={queue.setActiveImageProcessing}
+          operationScope={operationScope}
+          onOperationScopeChange={setOperationScope}
+          onSync={queue.syncImageProcessing}
+        />
+      )
+    },
+    {
       id: "output",
       label: "输出",
       content: (
@@ -820,6 +1080,39 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
             <div><dt>尺寸</dt><dd>{settings.settings.outputSizePreset === "original" ? "原图尺寸" : settings.settings.outputSizePreset}</dd></div>
             <div><dt>范围</dt><dd>{operationScope === "active" ? "当前图片" : operationScope === "checked" ? `已选 ${queue.checkedCount} 张` : `全部 ${queue.items.length} 张`}</dd></div>
           </dl>
+          {queue.activeImageProcessing !== null && (
+            <fieldset className="filmSection">
+              <legend>底片输出</legend>
+              <label className="filmField">
+                <span>输出组合</span>
+                <select
+                  value={settings.settings.filmOutput ?? (settings.settings.exportFormat === "tiff" ? "tiff16-srgb" : "srgb-jpeg")}
+                  onChange={(event) => {
+                    const value = event.target.value as "srgb-jpeg" | "tiff16-srgb" | "tiff16-rec2020"
+                    settingsController.update({
+                      filmOutput: value,
+                      exportFormat: value === "srgb-jpeg" ? "jpeg" : "tiff"
+                    })
+                  }}
+                >
+                  <option value="srgb-jpeg" disabled={capabilities?.filmDigitization?.outputs["srgb-jpeg"] !== true}>sRGB JPEG 分享成品（8-bit）</option>
+                  <option value="tiff16-srgb" disabled={capabilities?.filmDigitization?.outputs["tiff16-srgb"] !== true}>16-bit sRGB TIFF 母版</option>
+                  <option value="tiff16-rec2020" disabled={capabilities?.filmDigitization?.outputs["tiff16-rec2020"] !== true}>16-bit 线性 Rec.2020 TIFF 母版</option>
+                </select>
+              </label>
+              <label className="filmField filmCheckboxField">
+                <input
+                  type="checkbox"
+                  checked={settings.settings.borderlessMaster ?? false}
+                  onChange={(event) => settingsController.update({ borderlessMaster: event.target.checked })}
+                />
+                <span>不带框母版（禁用边框、文字、Logo）</span>
+              </label>
+              <p className="settingsCapabilityHint">
+                照片与装饰使用浮点合成，支持带框及不带框母版。输出 ICC 与像素编码匹配，元数据按当前导出策略写回。
+              </p>
+            </fieldset>
+          )}
           <SettingsPanel
             controller={settingsController}
             hasSelectedImage={queue.activeFilePath !== null}
@@ -828,6 +1121,10 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
             setTextOverride={queue.setActiveTextOverride}
             detectedBrandLabel={detectedBrand?.label ?? null}
             capabilities={capabilities}
+            capabilitiesState={capabilitiesState}
+            onRecheckCapabilities={recheckCapabilities}
+            namingPreview={namingPreview}
+            filmMode={queue.activeImageProcessing != null}
             showStyleSettings={false}
           />
           <p className="settingsCapabilityHint">快捷键：⌘/Ctrl + Enter 导出当前范围。</p>
@@ -872,7 +1169,7 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
         <>
           <main className={`workspace ${resizing !== null ? "workspaceResizing" : ""}`} style={workspaceStyle}>
           <div className="workspaceLeft">
-            <QueuePanel queue={queue} />
+            <QueuePanel queue={queue} showImportActions={false} />
           </div>
           <div className="workspaceCenter">
             <PreviewPanel
@@ -889,6 +1186,9 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
               viewportCommand={viewportCommand}
               previewBackground={previewBackground}
               activeTemplateId={activePresetId}
+              imageProcessing={queue.activeImageProcessing}
+              onUpdateImageProcessing={queue.setActiveImageProcessing}
+              onSourceVersion={(version) => { if (queue.activeItemId !== null) queue.recordSourceVersion(queue.activeItemId, version) }}
               showExportControls={false}
               onUpdateImagePlacement={handleUpdateImagePlacement}
             />
@@ -934,7 +1234,12 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
             role="separator"
             aria-orientation="vertical"
             aria-label="调整源图片栏宽度"
+            aria-valuenow={Math.round(colLeft)}
+            aria-valuemin={LEFT_MIN}
+            aria-valuemax={LEFT_MAX}
+            tabIndex={0}
             onPointerDown={startResize("left")}
+            onKeyDown={resizeWithKeyboard("left")}
           />
           {/* 右栏拖拽手柄（折叠时隐藏） */}
           {!rightCollapsed && (
@@ -943,7 +1248,12 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
               role="separator"
               aria-orientation="vertical"
               aria-label="调整检查器栏宽度"
+              aria-valuenow={Math.round(colRight)}
+              aria-valuemin={RIGHT_MIN}
+              aria-valuemax={RIGHT_MAX}
+              tabIndex={0}
               onPointerDown={startResize("right")}
+              onKeyDown={resizeWithKeyboard("right")}
             />
           )}
           </main>
@@ -959,6 +1269,8 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
               onOperationScopeChange={setOperationScope}
               checkedCount={queue.checkedCount}
               queueCount={queue.items.length}
+              exportSummary={exportSummary}
+              tierUnavailableReason={tierUnavailableReason}
             />
           </div>
         </>

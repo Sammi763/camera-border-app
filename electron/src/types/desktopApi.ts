@@ -112,6 +112,12 @@ export type DesktopApi = {
   /** 打开 PNG 文件选择器，返回自定义 Logo/签名的绝对路径；取消返回 null。 */
   readonly selectLogoFile: () => Promise<string | null>
   /**
+   * 重新定位丢失源文件：打开单选对话框（默认定位到原文件所在目录），
+   * 返回用户选择的图片绝对路径；取消返回 null。
+   * 仅返回路径，不读取文件内容；渲染进程仍不获得文件系统权限。
+   */
+  readonly pickReplacementFile: (missingFilePath: string) => Promise<string | null>
+  /**
    * 将 HEIC/HEIF 文件转换为应用临时目录中的 PNG 文件供引擎处理，并保留可读取元数据。
    * 返回转换后的临时文件路径数组（与输入路径一一对应）。
    * 转换失败的文件返回 null（保持原位）。
@@ -247,6 +253,7 @@ export const IPC_CHANNELS = {
   EXPORT_TEMPLATE_JSON: "desktop:export-template-json",
   IMPORT_TEMPLATE_JSON: "desktop:import-template-json",
   SELECT_LOGO_FILE: "desktop:select-logo-file",
+  PICK_REPLACEMENT_FILE: "desktop:pick-replacement-file",
   CONVERT_HEIC_FILES: "desktop:convert-heic-files",
   PROBE_HEIC_DECODER: "desktop:probe-heic-decoder",
   LIST_SYSTEM_FONTS: "desktop:list-system-fonts",

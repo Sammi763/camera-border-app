@@ -102,6 +102,14 @@ if [ ! -f "$EXIFTOOL_CHECK" ] || [ ! -f "$PROFESSIONAL_TOOLS/components.json" ];
   TARGETS="$PROFESSIONAL_TARGET" bash "$ROOT/scripts/fetch-professional-tools.sh"
 fi
 
+if [ "$OS_TAG" = "macos" ] && [ "$ARCH" = "arm64" ]; then
+  if [ ! -f "$PROFESSIONAL_TOOLS/libraw/macos-arm64/film-raw-helper" ] \
+      || [ ! -f "$PROFESSIONAL_TOOLS/libraw/macos-arm64/helper.json" ]; then
+    echo "[package] 构建随包 LibRaw helper（macOS arm64）..."
+    bash "$ROOT/scripts/build-libraw-helper.sh"
+  fi
+fi
+
 echo "[package] 准备随包字体、HEIC 许可证和组件清单..."
 bash "$ROOT/scripts/fetch-fonts.sh"
 node "$ROOT/scripts/prepare-package-resources.mjs"

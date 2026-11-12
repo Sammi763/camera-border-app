@@ -4,8 +4,11 @@ import com.camborder.app.dto.PreviewRequest;
 import com.camborder.app.dto.PreviewResponse;
 import com.camborder.app.exception.ApiException;
 import com.camborder.app.model.RenderRecipe;
+import com.camborder.app.service.FilmTaskKind;
+import com.camborder.app.service.FilmTaskScheduler;
 import com.camborder.app.service.PreviewService;
 import com.camborder.app.util.RenderRecipeValidator;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -23,9 +26,14 @@ import org.springframework.web.bind.annotation.RestController;
 public final class PreviewController {
 
     private final PreviewService previewService;
+    private final FilmTaskScheduler scheduler;
+    private final ObjectMapper objectMapper;
 
-    public PreviewController(final PreviewService previewService) {
+    public PreviewController(final PreviewService previewService, final FilmTaskScheduler scheduler,
+                             final ObjectMapper objectMapper) {
         this.previewService = previewService;
+        this.scheduler = scheduler;
+        this.objectMapper = objectMapper;
     }
 
     @PostMapping("/preview")
@@ -40,7 +48,14 @@ public final class PreviewController {
             throw new ApiException("imagePath is required", HttpStatus.BAD_REQUEST);
         }
 
-        RenderRecipeValidator.validateImagePlacement(recipe, "");
+        RenderRecipeValidator.validateRecipe(recipe, "");
+        if (request.getStage() != null && !java.util.Set.of("raw-linear", "base-positive", "current-positive").contains(request.getStage()))
+            throw new ApiException("底片预览阶段非法", HttpStatus.BAD_REQUEST);
+        if (recipe.getImageProcessing() == null && (request.getStage() != null || request.isSourceCoordinates()))
+            throw new ApiException("底片对比选项需要 imageProcessing", HttpStatus.BAD_REQUEST);
+
+        if (request.isActualPixels() && (request.getMaxWidth() != 0 || request.getMaxHeight() != 0))
+            throw new ApiException("真实像素检查不能同时指定缩放尺寸", HttpStatus.BAD_REQUEST);
 
         if (request.getMaxWidth() < 0) {
             throw new ApiException("maxWidth must be non-negative", HttpStatus.BAD_REQUEST);
@@ -52,6 +67,24 @@ public final class PreviewController {
 
         // 预览生成失败（文件不存在、不可读、非图片、颜色非法、placement 不支持）抛 PreviewGenerationException，
         // 由全局异常处理器统一映射为 4xx
-        return ResponseEntity.ok(previewService.generatePreview(request));
+        if (recipe.getImageProcessing() == null) return ResponseEntity.ok(previewService.generatePreview(request));
+        final String clientId = request.getClientId() == null || request.getClientId().isBlank()
+                ? "legacy_" + java.util.UUID.randomUUID() : request.getClientId();
+        final long generation = request.getGeneration();
+        try (com.camborder.app.util.FilmRequestGuard.Scope ignored = com.camborder.app.util.FilmRequestGuard.open(clientId, generation)) {
+            final String dedupe = request.getClientId() == null ? null : dedupe(request);
+            final FilmTaskKind kind = request.getStage() == null
+                    ? FilmTaskKind.PREVIEW : FilmTaskKind.STAGE_PREVIEW;
+            return ResponseEntity.ok(scheduler.run(kind, clientId, generation,
+                    dedupe, () -> previewService.generatePreview(request)));
+        }
+    }
+
+    private String dedupe(final PreviewRequest request) {
+        try {
+            return objectMapper.writeValueAsString(request);
+        } catch (Exception exception) {
+            throw new ApiException("预览请求无法规范化", HttpStatus.BAD_REQUEST);
+        }
     }
 }
