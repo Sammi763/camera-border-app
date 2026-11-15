@@ -32,6 +32,27 @@ public final class FilmColorSpace {
     private static final double[][] SRGB_TO_REC2020 = multiply(XYZ_TO_REC2020, SRGB_TO_XYZ);
     private static final double[][] REC2020_TO_SRGB_DIRECT = invert3(SRGB_TO_REC2020);
 
+    /** Adobe RGB (1998) 线性 RGB -> CIE XYZ（D65）。 */
+    private static final double[][] ADOBE_RGB_TO_XYZ = {
+            {0.5767309, 0.1855540, 0.1881852},
+            {0.2973769, 0.6273491, 0.0752741},
+            {0.0270343, 0.0706872, 0.9911085}
+    };
+
+    /** ProPhoto RGB 线性 RGB -> CIE XYZ（D50）。 */
+    private static final double[][] PROPHOTO_TO_XYZ_D50 = {
+            {0.7976749, 0.1351917, 0.0313534},
+            {0.2880402, 0.7118741, 0.0000857},
+            {0.0, 0.0, 0.8252100}
+    };
+
+    /** Bradford D50 -> D65 色适应矩阵（ICC PCS 到工作白点）。 */
+    private static final double[][] D50_TO_D65 = {
+            {0.9555766, -0.0230393, 0.0631636},
+            {-0.0282895, 1.0099416, 0.0210077},
+            {0.0122982, -0.0204830, 1.3299098}
+    };
+
     private FilmColorSpace() { }
 
     /** 每张图只融合一次相机矩阵，避免每像素创建临时数组。 */
@@ -55,6 +76,28 @@ public final class FilmColorSpace {
 
     public static void xyzToLinearRec2020(final float[] xyz, final float[] out) {
         multiply(XYZ_TO_REC2020, xyz, out);
+    }
+
+    /** Adobe RGB (1998) 线性 RGB -> XYZ D65。 */
+    public static void adobeRgbToXyzD65(final float[] rgb, final float[] out) {
+        multiply(ADOBE_RGB_TO_XYZ, rgb, out);
+    }
+
+    /** ProPhoto 线性 RGB -> XYZ D50。 */
+    public static void proPhotoToXyzD50(final float[] rgb, final float[] out) {
+        multiply(PROPHOTO_TO_XYZ_D50, rgb, out);
+    }
+
+    /** XYZ D65 -> 线性 Rec.2020。 */
+    public static void xyzD65ToLinearRec2020(final float[] xyz, final float[] out) {
+        multiply(XYZ_TO_REC2020, xyz, out);
+    }
+
+    /** ICC PCS（D50 XYZ）-> 线性 Rec.2020（D65 工作空间）。 */
+    public static void d50XyzToLinearRec2020(final float[] xyz, final float[] out) {
+        final float[] d65 = new float[3];
+        multiply(D50_TO_D65, xyz, d65);
+        multiply(XYZ_TO_REC2020, d65, out);
     }
 
     /**

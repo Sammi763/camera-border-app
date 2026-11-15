@@ -9,9 +9,9 @@
 
 | 目标 | 角色 / 发行形式 | 必须随包提供 | 系统不需要预装 | 当前证据边界 |
 |---|---|---|---|---|
-| macOS arm64 | `FORMAL`；DMG / 已安装 `.app` | arm64 JRE、Java Engine、ExifTool、HEIC 助手、字体、ExifTool 许可证、**LibRaw 0.22.3 helper（底片模式）** | Java、ExifTool、HEIC 扩展、Node.js、pnpm、Python、LibRaw | 原生证据是正式发布阻塞项；底片真实负片/平台证据仍未验收 |
-| macOS x64 | `CANDIDATE`；DMG / 已安装 `.app` | x64 JRE、Java Engine、ExifTool、HEIC 助手、字体、许可证 | 同上 | 可选候选证据，不阻塞正式发布；未构建 LibRaw x64 helper |
-| Windows x64 | `CANDIDATE`；NSIS `.exe` / 已安装目录 | x64 JRE、Java Engine、ExifTool、HEIC 助手、字体、许可证 | 同上 | `SIMULATED`；未构建 LibRaw Windows helper |
+| macOS arm64 | `FORMAL`；DMG / 已安装 `.app` | arm64 JRE、Java Engine、ExifTool、HEIC 助手、字体、ExifTool 许可证、**LibRaw 0.22.3 helper（底片模式）**、LittleCMS 2.19 | Java、ExifTool、HEIC 扩展、Node.js、pnpm、Python、LibRaw | 原生证据是正式发布阻塞项；底片真实负片/平台证据仍未验收 |
+| macOS x64 | `CANDIDATE`；DMG / 已安装 `.app` | x64 JRE、Java Engine、ExifTool、HEIC 助手、字体、LittleCMS x64、LibRaw x64 helper、许可证 | 同上 | 可选候选证据；产物已生成；本机 Rosetta 启动健康冒烟失败，Intel 实机 `NOT_RUN`；helper/JRE 单独可执行不代表整包通过 |
+| Windows x64 | `CANDIDATE`；NSIS `.exe` / 已安装目录 | x64 JRE、Java Engine、ExifTool、HEIC 助手、字体、LittleCMS x64、LibRaw x64 helper、许可证 | 同上 | 产物已生成（含 lcms2.dll 和 LibRaw helper）；未在 Windows 实机启动/断网验收，不能宣称 v2 ICC/FFF 正式支持 |
 
 签名、公证和自动更新不属于本阶段发布清单。Linux、Windows ARM64 和移动端不属于发行目标。
 
@@ -25,6 +25,9 @@
 | HEIC/HEIF | 支持 | 随包解码助手产生的像素 | 不依赖系统扩展；助手缺失时能力为 false |
 | RAW（NEF、CR2、CR3、ARW、RAF、DNG、ORF、RW2、PEF） | 仅内嵌 JPEG | 抽取出的内嵌 JPEG | 不读取传感器 RAW，不去马赛克，不做真实显影 |
 | 底片模式真实传感器 RAW | 显式开启后由 LibRaw helper 解码 | 线性 camera RGB → float Rec.2020 | 独立的显式模式；真实负片/片基/光源/安装包验收仍为 `NOT_RUN`，见 [ADR-0007](adr/0007-explicit-film-digitization-mode.md) |
+| 胶片校色 v2 扫描正片 | 显式 `inputSource=encoded-raster`，8/16-bit JPEG/PNG/TIFF | 显式/嵌入 ICC 经随包 LittleCMS 2 转 float 线性 Rec.2020，正片跳过反相 | 无 ICC 必须显式选色空间；透明输入显式背景；见 [ADR-0009](adr/0009-film-color-grading-v2-and-filmarchive.md) |
+| Flextight FFF | TIFF 容器 image 0 RGB16 主图，256 行分块 | 显式 `linear-srgb`/`linear-rec2020` 输入域 | 真实 Flextight 主图读取/独立写出已通过；完整包大图链路见实施复核。原始输入域未标定，输出 profile/历史 gamma 不作输入 |
+| FilmArchive 文献 | 本机只读目录 + `catalog.json`/`Docs` | SHA-256 合并来源、修订保留、资料卡与受控打开 | 不打包 PDF、不使用上游 WPF/文档 ID 作为胶片 ID |
 
 无可读取内嵌 JPEG 的 RAW 必须明确失败。应用、报告和帮助不能把该路径描述为完整 RAW 显影。
 底片模式不得回退到内嵌 JPEG，也不得把普通模式的能力写成真实 RAW 已正式支持。
@@ -48,6 +51,8 @@ PNG 是档位内的格式变体，不是第四个档位：快速分享和标准�
 - 前端只显示 `available=true` 的格式、档位和组件；能力探测失败时专业导出保持阻断。
 - 不搜索系统 PATH，不下载替代组件，也不把“当前不支持”能力渲染成可勾选项。
 - 外部 ExifTool 超时、非零退出或输出无法独立读取时，导出失败并清理临时文件。
+- LittleCMS 2 只从随包路径注入；`lcms2.json` 的二进制 SHA-256、版本与 Mach-O 架构必须匹配，
+  缺失/损坏时 `components.lcms2.available=false`，ICC 使用受控 Java 回退，不能声称随包 CMM。
 - LibRaw helper 只从随包路径注入；`helper.json` 的二进制 SHA-256、LibRaw/helper 版本、架构和
   `--version` 必须匹配，缺失/损坏/错误架构时 `components.libraw.available=false`。底片模式的
   `filmDigitization.available` 只表示预览/分析/显式输出链路可用，不替代真实负片样本验收。

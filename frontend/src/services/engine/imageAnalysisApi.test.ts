@@ -83,6 +83,15 @@ describe("analyzeImage 图像分析客户端", () => {
         init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "TimeoutError")))
       }))
 
-    await expect(analyzeImage(request, 30)).rejects.toThrow("引擎不可达")
+    await expect(analyzeImage(request, 30)).rejects.toThrow("图像分析超时")
+  })
+
+  it("保留调用方取消原因，连接故障单独报告", async () => {
+    const controller = new AbortController()
+    controller.abort(new DOMException("切换照片", "AbortError"))
+    vi.stubGlobal("fetch", async () => { throw controller.signal.reason })
+    await expect(analyzeImage(request, undefined, controller.signal)).rejects.toMatchObject({ name: "AbortError" })
+    vi.stubGlobal("fetch", async () => { throw new TypeError("connection refused") })
+    await expect(analyzeImage(request)).rejects.toThrow("引擎不可达")
   })
 })

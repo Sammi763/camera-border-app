@@ -32,6 +32,17 @@ export type ImageSourceResult = {
   readonly paths: readonly string[]
 }
 
+/** 本机 FilmArchive 目录选择结果；与 Electron preload 字段保持一致。 */
+export type FilmArchiveSelection = {
+  readonly libraryPath: string
+  readonly catalogPath: string
+}
+
+export type FilmArchiveStatus = {
+  readonly libraryPath: string | null
+  readonly available: boolean
+}
+
 /**
  * 引擎托管诊断信息（引擎启动失败页面使用）。
  * 字段与 Electron 主进程 engineDiagnostics 一致，前端独立维护副本。
@@ -114,6 +125,9 @@ export type DesktopBridge = {
    * 读取 userData 中的摄影预设 JSON 字符串。
    * 文件不存在时返回 "[]"。
    */
+  /** 独立校色观感预设；不包含片基、源文件或裁切。 */
+  readonly readFilmColorPresets?: () => Promise<string>
+  readonly writeFilmColorPresets?: (json: string) => Promise<void>
   readonly readPresets: () => Promise<string>
   /**
    * 将摄影预设 JSON 字符串写入 userData 中的预设文件。
@@ -131,6 +145,14 @@ export type DesktopBridge = {
   readonly importTemplateJson: () => Promise<string | null>
   /** 打开 PNG 文件选择器，返回自定义 Logo/签名的绝对路径；取消返回 null。 */
   readonly selectLogoFile?: () => Promise<string | null>
+  /** 选择本机 FilmArchive 目录；主进程只记住白名单根，资料由 Java 只读解析。 */
+  readonly selectFilmArchiveFolder?: () => Promise<FilmArchiveSelection | null>
+  /** 上次选择的 FilmArchive 根是否仍可用。 */
+  readonly getFilmArchiveStatus?: () => Promise<FilmArchiveStatus>
+  /** 在系统默认应用中打开白名单根内的文献文件。 */
+  readonly openFilmReferenceDocument?: (documentPath: string) => Promise<boolean>
+  /** 用系统浏览器打开 http(s) 来源链接。 */
+  readonly openFilmReferenceSource?: (sourceUrl: string) => Promise<boolean>
   /**
    * 将 HEIC/HEIF 文件转换为临时 PNG 文件供引擎处理。
    * 返回转换后的临时文件路径数组（与输入路径一一对应）。

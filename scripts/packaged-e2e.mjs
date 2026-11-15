@@ -658,7 +658,7 @@ const waitFor = async (description, action, predicate, timeoutMs = DEFAULT_TIMEO
   throw new Error(`等待${description}超时${suffix}${valueSuffix}`)
 }
 
-class CdpClient {
+export class CdpClient {
   #socket
   #nextId = 0
   #pending = new Map()

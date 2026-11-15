@@ -8,7 +8,8 @@ import {
   resolveBundledExifToolExecutable,
   resolveBundledJavaExecutable,
   resolveBundledFontsDirectory,
-  resolveBundledLibRawHelperExecutable
+  resolveBundledLibRawHelperExecutable,
+  resolveBundledLcms2Library
 } from "../engine/engineRuntime.js"
 import { isBundledHeicDecoderAvailable } from "../ipc/imageConvert.js"
 import { ENGINE_READY_TIMEOUT_MS } from "../engine/engineConfig.js"
@@ -45,18 +46,23 @@ const buildBridge = (): JavaBridge => {
   const bundledManifest = resolveBundledComponentManifest()
   const bundledFonts = resolveBundledFontsDirectory()
   const bundledLibRaw = resolveBundledLibRawHelperExecutable()
+  const bundledLcms2 = resolveBundledLcms2Library()
   const engineEnv: Record<string, string> = {
     CAMBORDER_HEIC_DECODER_AVAILABLE: String(isBundledHeicDecoderAvailable()),
     CAMBORDER_BUNDLED_FONTS_DIR: bundledFonts ?? "",
     ...(bundledExifTool === null ? {} : { CAMBORDER_EXIFTOOL_PATH: bundledExifTool }),
     ...(bundledManifest === null ? {} : { CAMBORDER_COMPONENT_MANIFEST: bundledManifest }),
-    ...(bundledLibRaw === null ? {} : { CAMBORDER_LIBRAW_HELPER_PATH: bundledLibRaw })
+    ...(bundledLibRaw === null ? {} : { CAMBORDER_LIBRAW_HELPER_PATH: bundledLibRaw }),
+    ...(bundledLcms2 === null ? {} : { CAMBORDER_LCMS2_PATH: bundledLcms2 })
   }
   if (bundledExifTool === null) {
     console.warn("[app] 未找到随包 ExifTool，专业元数据能力将保持不可用。")
   }
   if (bundledLibRaw === null) {
     console.warn("[app] 未找到随包 LibRaw helper，真实 RAW 解码能力将保持不可用。")
+  }
+  if (bundledLcms2 === null) {
+    console.warn("[app] 未找到随包 LittleCMS 2，ICC 将使用受控 Java 回退；能力探测会标记不可用。")
   }
 
   const base = {

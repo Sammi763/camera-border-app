@@ -95,3 +95,36 @@ describe("底片数字化契约（T02）", () => {
     expect(request.recipe.imageProcessing).toBe(filmProcessing)
   })
 })
+
+describe("胶片校色 v2 共享契约", () => {
+  const v2: ImageProcessingConfig = {
+    schemaVersion: 2,
+    algorithmVersion: "film-color-v2",
+    inputSource: "encoded-raster",
+    filmPolarity: "positive",
+    encodedInput: { colorSpace: "embedded", bitDepth: 8, iccSha256: "a".repeat(64), alphaBackground: "white" },
+    positive: { exposureEv: 0, rgbBalanceEv: [0, 0, 0], blackPoint: 0, whitePoint: 1, saturation: 1 },
+    sourceGeometry: { crop: { x: 0, y: 0, width: 1, height: 1 }, rotationDegrees: 0 }
+  }
+
+  it("正片来源与正负性质原样进入预览/导出共用配方", () => {
+    const recipe = buildRecipeFromSettings("/photos/scan.jpg", DEFAULT_SETTINGS,
+      undefined, undefined, undefined, v2)
+    expect(recipe.imageProcessing).toBe(v2)
+    expect(recipe.imageProcessing?.inputSource).toBe("encoded-raster")
+    expect(recipe.imageProcessing?.filmPolarity).toBe("positive")
+    expect(recipe.imageProcessing?.negative ?? null).toBeNull()
+  })
+
+  it("中性分析请求只带 purpose，不伪造 stage", () => {
+    const request: ImageAnalysisRequest = {
+      recipe: buildRecipeFromSettings("/photos/scan.jpg", DEFAULT_SETTINGS,
+        undefined, undefined, undefined, v2),
+      purpose: "neutral-balance",
+      roi: { x: 0.2, y: 0.2, width: 0.1, height: 0.1 }
+    }
+    expect(request.purpose).toBe("neutral-balance")
+    expect(request.stage).toBeUndefined()
+    expect(request.recipe.imageProcessing).toBe(v2)
+  })
+})

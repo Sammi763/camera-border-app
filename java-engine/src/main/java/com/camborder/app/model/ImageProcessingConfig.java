@@ -14,18 +14,36 @@ import java.util.List;
  */
 public final class ImageProcessingConfig {
 
-    /** 当前唯一支持的 schema 版本。 */
-    public static final int SCHEMA_VERSION = 1;
+    /** v1 旧的数字化契约，保留请求兼容。 */
+    public static final int SCHEMA_VERSION_V1 = 1;
+    public static final String ALGORITHM_VERSION_V1 = "film-digitization-v1";
 
-    /** 当前唯一支持的算法版本。 */
-    public static final String ALGORITHM_VERSION = "film-digitization-v1";
+    /** v2 胶片校色契约：输入来源与正片/彩负分开表达。 */
+    public static final int SCHEMA_VERSION_V2 = 2;
+    public static final String ALGORITHM_VERSION_V2 = "film-color-v2";
 
-    private int schemaVersion = SCHEMA_VERSION;
-    private String algorithmVersion = ALGORITHM_VERSION;
-    /** 输入模式：sensor-raw（真实传感器 RAW）或 linear-tiff（显式线性测试输入）。 */
+    /** 兼容旧代码/旧测试的别名；新请求请使用 SCHEMA_VERSION_V2。 */
+    public static final int SCHEMA_VERSION = SCHEMA_VERSION_V1;
+    public static final String ALGORITHM_VERSION = ALGORITHM_VERSION_V1;
+
+    private int schemaVersion = SCHEMA_VERSION_V1;
+    private String algorithmVersion = ALGORITHM_VERSION_V1;
+    /** v1 输入模式：sensor-raw 或 linear-tiff。v2 请求只使用 inputSource。 */
     private String inputMode;
+    /**
+     * v2 输入来源：camera-raw（真实传感器 RAW）、encoded-raster（已编码扫描/数码栅格）、
+     * linear-tiff（显式线性 TIFF）、flextight-fff（Flextight TIFF 容器扫描）。
+     * 胶片正负性质由 filmPolarity 单独表达，不能用一个“负片模式”同时表示来源和处理。
+     */
+    private String inputSource;
+    /** v2 胶片性质：positive（已转正/数码正片，跳过反相）或 color-negative（彩负转正）。 */
+    private String filmPolarity;
     private RawOptions raw;
     private LinearInput linearInput;
+    /** v2 已编码栅格（JPEG/PNG/8-16-bit TIFF）的输入解释。 */
+    private EncodedInput encodedInput;
+    /** v2 Flextight FFF 的扫描输入解释。 */
+    private FlextightInput flextightInput;
     private NegativeConfig negative;
     private PositiveAdjustments positive = new PositiveAdjustments();
     private SourceGeometry sourceGeometry = new SourceGeometry();
@@ -36,6 +54,14 @@ public final class ImageProcessingConfig {
     public void setAlgorithmVersion(final String algorithmVersion) { this.algorithmVersion = algorithmVersion; }
     public String getInputMode() { return inputMode; }
     public void setInputMode(final String inputMode) { this.inputMode = inputMode; }
+    public String getInputSource() { return inputSource; }
+    public void setInputSource(final String inputSource) { this.inputSource = inputSource; }
+    public String getFilmPolarity() { return filmPolarity; }
+    public void setFilmPolarity(final String filmPolarity) { this.filmPolarity = filmPolarity; }
+    public EncodedInput getEncodedInput() { return encodedInput; }
+    public void setEncodedInput(final EncodedInput encodedInput) { this.encodedInput = encodedInput; }
+    public FlextightInput getFlextightInput() { return flextightInput; }
+    public void setFlextightInput(final FlextightInput flextightInput) { this.flextightInput = flextightInput; }
     public RawOptions getRaw() { return raw; }
     public void setRaw(final RawOptions raw) { this.raw = raw; }
     public LinearInput getLinearInput() { return linearInput; }
@@ -85,6 +111,63 @@ public final class ImageProcessingConfig {
         public void setTransferFunction(final String transferFunction) { this.transferFunction = transferFunction; }
         public String getColorSpace() { return colorSpace; }
         public void setColorSpace(final String colorSpace) { this.colorSpace = colorSpace; }
+        public int getBitDepth() { return bitDepth; }
+        public void setBitDepth(final int bitDepth) { this.bitDepth = bitDepth; }
+        public String getIccSha256() { return iccSha256; }
+        public void setIccSha256(final String iccSha256) { this.iccSha256 = iccSha256; }
+    }
+
+    /**
+     * 已编码栅格输入解释（v2）。
+     *
+     * colorSpace=embedded 时必须提供 iccSha256，并在读取时核对实际嵌入 profile；
+     * 无 ICC 或用户不接受嵌入 profile 时必须显式选择 srgb/adobe-rgb/linear-*，
+     * 不允许把“没有色彩定义”猜成 sRGB 后静默处理。
+     */
+    public static final class EncodedInput {
+        private String colorSpace;
+        /** 源文件实际样本位深；8 或 16。 */
+        private int bitDepth = 8;
+        /** embedded 色彩空间对应 ICC 内容的 SHA-256。 */
+        private String iccSha256;
+        /** 透明输入的显式合成背景，默认白色。 */
+        private String alphaBackground = "white";
+
+        public String getColorSpace() { return colorSpace; }
+        public void setColorSpace(final String colorSpace) { this.colorSpace = colorSpace; }
+        public int getBitDepth() { return bitDepth; }
+        public void setBitDepth(final int bitDepth) { this.bitDepth = bitDepth; }
+        public String getIccSha256() { return iccSha256; }
+        public void setIccSha256(final String iccSha256) { this.iccSha256 = iccSha256; }
+        public String getAlphaBackground() { return alphaBackground; }
+        public void setAlphaBackground(final String alphaBackground) { this.alphaBackground = alphaBackground; }
+    }
+
+    /**
+     * Flextight FFF 扫描输入模型（v2）。
+     *
+     * FFF 是扫描仪 TIFF 容器，可能同时保存预览/附属图与输出用 Adobe RGB/历史 gamma。
+     * mainImage=rgb16 明确只读取完整 RGB16 主图；colorSpace 必须显式声明原始输入域，
+     * 不允许把文件里的输出 profile 或历史 gamma 直接当作扫描输入定义。
+     */
+    public static final class FlextightInput {
+        private String device = "flextight";
+        private String mainImage = "rgb16";
+        /** 原始扫描输入域：linear-srgb / linear-rec2020。 */
+        private String colorSpace;
+        private String transferFunction = "linear";
+        private int bitDepth = 16;
+        /** 可选输入 ICC 指纹；有值时按显式 input profile 解释。 */
+        private String iccSha256;
+
+        public String getDevice() { return device; }
+        public void setDevice(final String device) { this.device = device; }
+        public String getMainImage() { return mainImage; }
+        public void setMainImage(final String mainImage) { this.mainImage = mainImage; }
+        public String getColorSpace() { return colorSpace; }
+        public void setColorSpace(final String colorSpace) { this.colorSpace = colorSpace; }
+        public String getTransferFunction() { return transferFunction; }
+        public void setTransferFunction(final String transferFunction) { this.transferFunction = transferFunction; }
         public int getBitDepth() { return bitDepth; }
         public void setBitDepth(final int bitDepth) { this.bitDepth = bitDepth; }
         public String getIccSha256() { return iccSha256; }

@@ -125,6 +125,8 @@ public final class ControlledExifToolService implements ExifToolService {
                 arguments.add(source.toAbsolutePath().normalize().toString());
                 arguments.add("-all:all");
                 arguments.add("-unsafe");
+                // 位深数组由编码器生成，不能被源文件或单值写回破坏通道数量。
+                arguments.add("--IFD0:BitsPerSample");
                 if ("remove-location".equals(metadataPolicy)) {
                     arguments.add("-GPS:all=");
                     arguments.add("-XMP-exif:GPS*=");
@@ -146,7 +148,6 @@ public final class ControlledExifToolService implements ExifToolService {
                     || "tiff".equalsIgnoreCase(extension(normalizedOutput))) {
                 arguments.add("-IFD0:ImageWidth=" + width);
                 arguments.add("-IFD0:ImageHeight=" + height);
-                arguments.add("-IFD0:BitsPerSample=" + bitDepth);
             } else {
                 // JPEG/PNG 的实际尺寸和位深来自编码后的文件结构；移除源 IFD0
                 // 中可能指向旧像素尺寸的字段，避免保留过期的嵌入事实。
@@ -343,25 +344,29 @@ public final class ControlledExifToolService implements ExifToolService {
         @Override
         public ProcessResult run(final List<String> command, final long timeoutMs,
                                  final int maxOutputBytes) {
-            ExecutorService readerExecutor = Executors.newSingleThreadExecutor(runnable -> {
+            ExecutorService readerExecutor = Executors.newFixedThreadPool(2, runnable -> {
                 Thread thread = new Thread(runnable, "camborder-exiftool-output");
                 thread.setDaemon(true);
                 return thread;
             });
             Process process = null;
             Future<String> outputFuture = null;
+            Future<String> errorFuture = null;
             try {
-                process = new ProcessBuilder(command).redirectErrorStream(true).start();
+                process = new ProcessBuilder(command).start();
                 final Process runningProcess = process;
                 outputFuture = readerExecutor.submit(() -> readLimited(
                         runningProcess.getInputStream(), maxOutputBytes));
+                // FFF 私有标签可能产生 stderr 提示，不能混入机器可读 JSON；两路同时有界读取。
+                errorFuture = readerExecutor.submit(() -> readLimited(
+                        runningProcess.getErrorStream(), Math.min(maxOutputBytes, 64 * 1024)));
                 boolean finished = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS);
                 if (!finished) {
                     process.destroyForcibly();
                     throw new RenderExportException("ExifTool 执行超时");
                 }
                 String stdout = outputFuture.get();
-                return new ProcessResult(process.exitValue(), stdout, "");
+                return new ProcessResult(process.exitValue(), stdout, errorFuture.get());
             } catch (InterruptedException exception) {
                 if (process != null) process.destroyForcibly();
                 Thread.currentThread().interrupt();
@@ -375,6 +380,7 @@ public final class ControlledExifToolService implements ExifToolService {
                 throw new RenderExportException("ExifTool 启动失败");
             } finally {
                 if (outputFuture != null && !outputFuture.isDone()) outputFuture.cancel(true);
+                if (errorFuture != null && !errorFuture.isDone()) errorFuture.cancel(true);
                 readerExecutor.shutdownNow();
             }
         }

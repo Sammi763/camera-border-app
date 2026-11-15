@@ -17,6 +17,10 @@ public final class SourceDecode {
     public static final String MODE_EMBEDDED_JPEG = "embedded-jpeg";
     public static final String MODE_SENSOR_RAW = "sensor-raw";
     public static final String MODE_LINEAR_TIFF = "linear-tiff";
+    /** v2 已编码扫描成片/数码栅格，按显式或嵌入色彩定义解码。 */
+    public static final String MODE_ENCODED_RASTER = "encoded-raster";
+    /** v2 Flextight FFF 主图（TIFF 容器，RGB16）。 */
+    public static final String MODE_FLEXTIGHT_FFF = "flextight-fff";
 
     private String mode;
     private String calibrationSpaceKey;
@@ -68,6 +72,16 @@ public final class SourceDecode {
     /** 显式底片模式的线性测试栅格。 */
     public static SourceDecode linearTiff(final String format) {
         return new SourceDecode(MODE_LINEAR_TIFF, format, null);
+    }
+
+    /** v2 扫描成片/数码栅格；像素已按显式或嵌入色彩定义进入线性工作空间。 */
+    public static SourceDecode encodedRaster(final String format, final String warning) {
+        return new SourceDecode(MODE_ENCODED_RASTER, format, warning);
+    }
+
+    /** v2 Flextight FFF 主图；附属图不参与主图处理。 */
+    public static SourceDecode flextightFff(final String format, final String warning) {
+        return new SourceDecode(MODE_FLEXTIGHT_FFF, format, warning);
     }
 
     public String getMode() {

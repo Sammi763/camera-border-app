@@ -236,7 +236,7 @@ public final class ImageEncoder {
         if (processedIcc != null) {
             FilmSourceVersion.require(Path.of(sourcePath), expectedSourceVersion);
             final ExifToolService.Inspection actualSource = exifToolService.inspect(Path.of(sourcePath));
-            if (!actualSource.isValid()) throw new RenderExportException("源元数据独立读取失败");
+            if (!actualSource.isValid()) throw new RenderExportException("源元数据独立读取失败：" + actualSource.getError());
             sourceInfo = new SourceImageInfo(sourceInfo.getPixelSource(), sourcePath, sourceInfo.getWidth(), sourceInfo.getHeight(),
                     sourceInfo.getDecodedWidth(), sourceInfo.getDecodedHeight(), sourceInfo.getOrientedWidth(), sourceInfo.getOrientedHeight(),
                     sourceInfo.getBitDepth(), sourceInfo.getColorSpace(), sourceInfo.getOrientation(), sourceInfo.getIcc(), actualSource.getMetadata());

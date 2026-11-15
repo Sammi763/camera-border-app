@@ -23,6 +23,20 @@
         "macos": "https://sourceforge.net/projects/exiftool/files/ExifTool-13.59.pkg/download",
         "win-x64": "https://sourceforge.net/projects/exiftool/files/exiftool-13.59_64.zip/download"
       }
+    },
+    "lcms2": {
+      "version": "2.19",
+      "license": "MIT",
+      "sha256": {
+        "macos-arm64": "499c1212073dbdaa6ad4dedd0d3f5301f044749aef24444d51be2e4c178a8696",
+        "macos-x64": "8e6b65bde7dab28a7711db8350229761b374e3eaa2448d606bda32e086d78e23",
+        "win-x64": "11705561ea0196265fbfcbecdcb2608eff5cccb7eed0920645811518588f7748"
+      },
+      "sources": {
+        "macos-arm64": "https://github.com/mm2/Little-CMS/releases/download/lcms2.19/lcms2-2.19.tar.gz",
+        "macos-x64": "https://github.com/mm2/Little-CMS/releases/download/lcms2.19/lcms2-2.19.tar.gz",
+        "win-x64": "https://github.com/mm2/Little-CMS/releases/download/lcms2.19/lcms2-2.19.tar.gz"
+      }
     }
   }
 }

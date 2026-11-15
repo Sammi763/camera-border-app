@@ -135,3 +135,16 @@ frontend/src/
 底片模式通过同一逐图配方提供三阶段切换、片基框选、RGB 直方图、实际像素检查、单调曲线与校准参考复用；照片及几何使用 float32 线性 Rec.2020，装饰独立合成。支持带框/无框 sRGB JPEG、16-bit sRGB TIFF 与 16-bit 线性 Rec.2020 TIFF，嵌入匹配 ICC，按元数据策略写回并独立回读核验。输入 TIFF 必须由用户确认是真实线性数据，带 ICC 时核验 TRC 与基色。来源指纹、相机/白平衡/空间绑定和单槽调度详见 [底片实施复核](../docs/film-digitization-review.md)。
 
 本轮不打包。真实 Gold 200/Portra 160 校色、无内嵌 JPEG 机型、其他平台及干净机器离线安装保持未验收。当前仅提供通用彩负转换，不宣称胶卷专属还原或正式发布支持。
+
+## 胶片校色 v2 与资料卡
+
+- `features/editing/defaults.ts` 新增 `createDefaultFilmColorProcessing`：扫描/数码输入走 `inputSource=encoded-raster` 或 `camera-raw`，Flextight FFF 走显式线性扫描输入模型；`filmPolarity=positive` 不生成 negative。
+- `FilmEditingPanel` 支持 v2 正片/彩负切换、输入色彩定义/FFF 输入域和旧 v1 真实 RAW 路径；能力缺失时保持禁用。
+- `FilmWorkspacePreview` 增加中性取样：调用 `purpose=neutral-balance`，显示建议与样本过滤结果，只在人工点击后写入 `positive.rgbBalanceEv`；配方签名变化会丢弃旧建议。
+- `FilmReferencePanel` 只读关联本机 FilmArchive，显示目录/差异/缺口/文献卡，并通过 `window.desktop` 白名单能力打开原文/来源；文献不会自动改色。
+
+### 校色观感与离线研究资料
+
+底片页签可保存、应用及删除个人观感，保存范围仅为正片基础调整；不会把片基、设备校准或源文件路径带到其他照片。桌面端持久化到固定 userData 文件，浏览器开发模式使用 localStorage，读取或保存失败明确显示。内置资料支持型号、品牌和玩家别称检索；首批特性曲线只读显示提取方法、文档版本和误差，不应用为校色模型。大图处理预览有独立等待时限，超时与引擎失联分别提示。
+
+0.1.1 试用收尾：预览请求按取消生命周期释放忙状态；完整源坐标取样和源版本校验；数字控件在失焦/回车提交合法草稿。v2 同卷同步逐图探测输入域/位深/ICC，最多两项检查并支持取消，完成一次提交；期间被编辑的目标不会覆盖。结果按文件列出原因。操作说明见 [本机试用](../docs/local-trial-0.1.1.md)。

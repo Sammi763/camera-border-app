@@ -19,7 +19,7 @@ export const isDevMode: boolean = typeof rendererUrlEnv === "string"
  * - 开发模式：Vite dev server（由 ELECTRON_RENDERER_URL 指定）
  * - 生产模式：app:// 协议加载 frontend/dist
  */
-export const rendererUrl: string = rendererUrlEnv ?? "app://app/index.html"
+export const rendererUrl: string = isDevMode ? rendererUrlEnv! : "app://app/index.html"
 
 /**
  * 引擎端口：默认 8099；可用环境变量 CAMBORDER_ENGINE_PORT 覆盖。

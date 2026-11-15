@@ -28,6 +28,31 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 final class DefaultExportPreflightServiceTest {
 
     @Test
+    void v2PreflightUsesInputSourceInsteadOfNullLegacyMode(@TempDir final Path temp) throws Exception {
+        final Path source = writeImage(temp.resolve("scan.png"), 32, 24);
+        final com.camborder.app.model.ImageProcessingConfig processing = new com.camborder.app.model.ImageProcessingConfig();
+        processing.setSchemaVersion(2); processing.setAlgorithmVersion("film-color-v2");
+        processing.setInputSource("encoded-raster"); processing.setFilmPolarity("positive");
+        final com.camborder.app.model.ImageProcessingConfig.EncodedInput input = new com.camborder.app.model.ImageProcessingConfig.EncodedInput();
+        input.setColorSpace("srgb"); input.setBitDepth(8); processing.setEncodedInput(input);
+        final RenderRecipe recipe = new RenderRecipe(source.toString(), null, null, null, false);
+        recipe.setImageProcessing(processing);
+        final ExportSettings settings = standard(temp.resolve("result.jpg"));
+        settings.setTier("custom"); settings.setFilmOutput("srgb-jpeg");
+        final CapabilitiesResponse caps = capabilities(true).snapshot();
+        final CapabilitiesResponse.FilmDigitizationCapability film = new CapabilitiesResponse.FilmDigitizationCapability();
+        film.setAvailable(true); film.setInputModes(List.of("sensor-raw", "linear-tiff"));
+        film.setInputSources(List.of("encoded-raster")); film.setOutputs(Map.of("srgb-jpeg", true));
+        caps.setFilmDigitization(film);
+        final DefaultExportPreflightService service = new DefaultExportPreflightService(new ImageReader(new RawDecoder()), () -> caps);
+        final ExportPreflightResponse result = service.preflight(new RenderJobRequest(recipe, settings));
+        assertThat(result.getStatus()).isEqualTo("ready");
+        assertThat(result.getItems().get(0).getReport().getPixelSource()).isEqualTo("encoded-raster");
+        film.setInputSources(List.of("camera-raw"));
+        assertThat(service.preflight(new RenderJobRequest(recipe, settings)).getStatus()).isEqualTo("blocked");
+    }
+
+    @Test
     void returnsReadyWithActualSourceFacts(@TempDir final Path tempDir) throws IOException {
         Path source = writeImage(tempDir.resolve("source.png"), 32, 24);
         Path output = tempDir.resolve("output.jpg");

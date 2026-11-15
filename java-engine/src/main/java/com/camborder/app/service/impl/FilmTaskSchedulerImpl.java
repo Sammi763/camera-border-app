@@ -145,6 +145,10 @@ public final class FilmTaskSchedulerImpl implements FilmTaskScheduler {
         } catch (RuntimeException exception) {
             task.future.completeExceptionally(exception);
             throw exception;
+        } catch (Error error) {
+            // 共享等待者也必须收到终态，不能因执行者的 Error 永久阻塞。
+            task.future.completeExceptionally(error);
+            throw error;
         } catch (Exception exception) {
             final FilmProcessingException wrapped = new FilmProcessingException(
                     "底片任务执行失败", HttpStatus.INTERNAL_SERVER_ERROR, "FILM_TASK_FAILED");

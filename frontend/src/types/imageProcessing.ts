@@ -7,8 +7,33 @@
  */
 
 export type ImageProcessingInputMode = "sensor-raw" | "linear-tiff"
+export type ImageProcessingInputSource =
+  | "camera-raw"
+  | "encoded-raster"
+  | "linear-tiff"
+  | "flextight-fff"
+export type FilmPolarity = "positive" | "color-negative"
 export type ImageAnalysisStage = "raw-linear" | "base-positive" | "current-positive"
+export type ImageAnalysisPurpose = "histogram" | "neutral-balance"
 export type FilmOutput = "srgb-jpeg" | "tiff16-srgb" | "tiff16-rec2020"
+
+/** v2 已编码栅格输入解释；缺 ICC 时必须显式选色空间。 */
+export type EncodedInput = {
+  readonly colorSpace: "embedded" | "srgb" | "adobe-rgb" | "prophoto-rgb" | "linear-srgb" | "linear-rec2020"
+  readonly bitDepth: 8 | 16
+  readonly iccSha256?: string | null
+  readonly alphaBackground?: "white" | "black"
+}
+
+/** v2 Flextight FFF 扫描输入模型；输出 Adobe RGB / 历史 gamma 不自动成为输入定义。 */
+export type FlextightInput = {
+  readonly device?: "flextight"
+  readonly mainImage?: "rgb16"
+  readonly colorSpace: "linear-srgb" | "linear-rec2020"
+  readonly transferFunction?: "linear"
+  readonly bitDepth?: 16
+  readonly iccSha256?: string | null
+}
 
 export type RawOptions = {
   readonly whiteBalance?: "camera" | "daylight"
@@ -96,9 +121,16 @@ export type SourceGeometry = {
 export type ImageProcessingConfig = {
   readonly schemaVersion: number
   readonly algorithmVersion: string
-  readonly inputMode: ImageProcessingInputMode
+  /** v1 字段；v2 请求必须省略。 */
+  readonly inputMode?: ImageProcessingInputMode | null
+  /** v2 输入来源；与 filmPolarity 分开表达。 */
+  readonly inputSource?: ImageProcessingInputSource | null
+  /** v2 胶片性质：正片跳过反相，color-negative 才进入片基/密度转正。 */
+  readonly filmPolarity?: FilmPolarity | null
   readonly raw?: RawOptions | null
   readonly linearInput?: LinearInput | null
+  readonly encodedInput?: EncodedInput | null
+  readonly flextightInput?: FlextightInput | null
   readonly negative?: NegativeConfig | null
   readonly positive?: PositiveAdjustments | null
   readonly sourceGeometry?: SourceGeometry | null
@@ -110,7 +142,8 @@ export type ImageAnalysisRequest = {
   readonly clientId?: string
   readonly generation?: number
   readonly recipe: import("./preview").RenderRecipe
-  readonly stage: ImageAnalysisStage
+  readonly stage?: ImageAnalysisStage
+  readonly purpose?: ImageAnalysisPurpose
   /** 已应用 EXIF 方向、未应用编辑几何的完整源图归一化 ROI；缺省为全图。 */
   readonly roi?: NormalizedCrop | null
 }
@@ -144,11 +177,29 @@ export type ImageAnalysisClipping = {
   readonly stages: Readonly<Record<string, ImageAnalysisClippingStage>>
 }
 
+export type NeutralBalanceSuggestion = {
+  readonly available: boolean
+  readonly stage: string
+  readonly sampleCount: number
+  readonly rejectedTooDark: number
+  readonly rejectedClipped: number
+  readonly rejectedNonFinite: number
+  readonly sampleMean?: readonly [number, number, number] | null
+  readonly suggestedRgbGain?: readonly [number, number, number] | null
+  readonly suggestedRgbBalanceEv?: readonly [number, number, number] | null
+  readonly confidence: "high" | "medium" | "low" | string
+  readonly binding: string | null
+  readonly note?: string | null
+  readonly roi?: NormalizedCrop | null
+}
+
 export type ImageAnalysisResponse = {
   readonly resolvedFilmBase?: readonly [number, number, number] | null
   readonly resolvedLightGain?: readonly [number, number, number] | null
   readonly calibrationSpaceKey?: string | null
   readonly status: "ok" | "error" | string
+  readonly purpose?: ImageAnalysisPurpose | string
+  readonly neutralBalance?: NeutralBalanceSuggestion | null
   readonly message?: string | null
   readonly recipeSignature: string
   readonly sourceVersion: string

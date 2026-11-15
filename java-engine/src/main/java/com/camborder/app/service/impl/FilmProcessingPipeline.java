@@ -6,6 +6,8 @@ import com.camborder.app.model.ImageProcessingConfig;
 import com.camborder.app.model.RenderRecipe;
 import com.camborder.app.repository.FilmStageCache;
 import com.camborder.app.service.FilmMemoryBudgetService;
+import com.camborder.app.util.FilmEncodedRasterReader;
+import com.camborder.app.util.FilmFlextightReader;
 import com.camborder.app.util.FilmInputProbe;
 import com.camborder.app.util.FilmLinearTiffReader;
 import com.camborder.app.util.FilmMemoryEstimator;
@@ -106,9 +108,13 @@ public final class FilmProcessingPipeline {
     private String descriptionKey(final RenderRecipe recipe, final String version) {
         try {
             return Path.of(recipe.getImagePath()).toAbsolutePath().normalize() + "|" + version + "|"
+                    + recipe.getImageProcessing().getSchemaVersion() + "|"
                     + recipe.getImageProcessing().getInputMode() + "|"
+                    + recipe.getImageProcessing().getInputSource() + "|"
                     + objectMapper.writeValueAsString(recipe.getImageProcessing().getRaw()) + "|"
-                    + objectMapper.writeValueAsString(recipe.getImageProcessing().getLinearInput());
+                    + objectMapper.writeValueAsString(recipe.getImageProcessing().getLinearInput()) + "|"
+                    + objectMapper.writeValueAsString(recipe.getImageProcessing().getEncodedInput()) + "|"
+                    + objectMapper.writeValueAsString(recipe.getImageProcessing().getFlextightInput());
         } catch (IOException e) {
             throw new IllegalArgumentException("解码配置不能序列化", e);
         }
@@ -330,9 +336,34 @@ public final class FilmProcessingPipeline {
                             loaded.sourceInfo, budgetLease, leases);
                     return result;
                 }
-                if (config.getNegative() == null || !config.getNegative().isEnabled()) {
-                    throw new FilmProcessingException("底片转正阶段需要启用的 negative 配置",
-                            HttpStatus.BAD_REQUEST, CODE_NEGATIVE_REQUIRED);
+                final boolean negativeEnabled = negativeEnabled(config);
+                if (!negativeEnabled) {
+                    // 只有 v2 正片/扫描成片可以跳过反相；v1 缺 negative 仍必须明确失败。
+                    if (!(config.getSchemaVersion() == ImageProcessingConfig.SCHEMA_VERSION_V2
+                            && "positive".equals(config.getFilmPolarity()))) {
+                        throw new FilmProcessingException("底片转正阶段需要启用的 negative 配置",
+                                HttpStatus.BAD_REQUEST, CODE_NEGATIVE_REQUIRED);
+                    }
+                    final FloatRgbImage baseImage = loaded.image;
+                    final ClipCounts baseWorking = workingClipping(baseImage);
+                    store(baseKey, "base-positive", baseImage, loaded.sourceVersion,
+                            loaded.sourceDecode, loaded.sourceInfo, loaded.sensorClipping,
+                            baseWorking, null, null);
+                    if ("base-positive".equals(stage)) {
+                        return new Processed(baseImage, stage, signature(config, stage),
+                                loaded.sourceVersion, loaded.sensorClipping, baseWorking,
+                                loaded.sourceDecode, loaded.sourceInfo, budgetLease, leases);
+                    }
+                    synchronized (this) { positiveComputeCount++; }
+                    final FloatRgbImage positive = new FilmPositiveProcessor()
+                            .process(baseImage, config.getPositive());
+                    final ClipCounts positiveWorking = workingClipping(positive);
+                    store(currentKey, "current-positive", positive, loaded.sourceVersion,
+                            loaded.sourceDecode, loaded.sourceInfo, loaded.sensorClipping,
+                            positiveWorking, null, null);
+                    return new Processed(positive, stage, signature(config, stage),
+                            loaded.sourceVersion, loaded.sensorClipping, positiveWorking,
+                            loaded.sourceDecode, loaded.sourceInfo, budgetLease, leases);
                 }
                 final FloatRgbImage baseImage;
                 final ClipCounts baseSensor;
@@ -410,6 +441,16 @@ public final class FilmProcessingPipeline {
         }
     }
 
+    /** v1 由 negative.enabled 决定；v2 由 filmPolarity 决定，正片不进入反相阶段。 */
+    static boolean negativeEnabled(final ImageProcessingConfig config) {
+        if (config == null) return false;
+        if (config.getSchemaVersion() == ImageProcessingConfig.SCHEMA_VERSION_V2) {
+            return "color-negative".equals(config.getFilmPolarity())
+                    && config.getNegative() != null && config.getNegative().isEnabled();
+        }
+        return config.getNegative() != null && config.getNegative().isEnabled();
+    }
+
     private static long totalReferencePixels(final Map<String, FilmInputProbe.Probed> references) {
         long total = 0;
         try {
@@ -461,10 +502,12 @@ public final class FilmProcessingPipeline {
                 || geometry.getCrop().getWidth() < 1 || geometry.getCrop().getHeight() < 1
                 || geometry.getRotationDegrees() != 0);
         return new FilmMemoryEstimator.Workload()
+                .encodedRaster("encoded-raster".equals(recipe.getImageProcessing().getInputSource()))
                 .source(sourceWidth, sourceHeight)
                 .output(compose ? outputWidth : sourceWidth,
                         compose ? outputHeight : sourceHeight)
-                .sensorRaw("sensor-raw".equals(recipe.getImageProcessing().getInputMode()))
+                .sensorRaw("sensor-raw".equals(recipe.getImageProcessing().getInputMode())
+                        || "camera-raw".equals(recipe.getImageProcessing().getInputSource()))
                 .referencePixels(totalReferencePixels(references))
                 .sourceGeometry(compose && hasGeometry)
                 .placementTransform(compose && placementTransform)
@@ -546,6 +589,9 @@ public final class FilmProcessingPipeline {
     private Loaded load(final RenderRecipe recipe, final ImageProcessingConfig config,
                         final String expectedSourceVersion) {
         final String path = recipe.getImagePath();
+        if (config.getSchemaVersion() == ImageProcessingConfig.SCHEMA_VERSION_V2) {
+            return loadV2(recipe, config, expectedSourceVersion);
+        }
         if ("sensor-raw".equals(config.getInputMode())) {
             final FilmRawDecoder.DecodeOptions options = new FilmRawDecoder.DecodeOptions();
             if (config.getRaw() != null) {
@@ -622,6 +668,146 @@ public final class FilmProcessingPipeline {
         }
         throw new FilmProcessingException("输入模式不支持",
                 HttpStatus.BAD_REQUEST, "IMAGE_ANALYSIS_INVALID_INPUT_MODE");
+    }
+
+    /** v2 输入来源分支：相机 RAW / 已编码栅格 / 线性 TIFF / Flextight FFF。 */
+    private Loaded loadV2(final RenderRecipe recipe, final ImageProcessingConfig config,
+                          final String expectedSourceVersion) {
+        final String path = recipe.getImagePath();
+        final String source = config.getInputSource();
+        if ("camera-raw".equals(source)) {
+            final FilmRawDecoder.DecodeOptions options = new FilmRawDecoder.DecodeOptions();
+            if (config.getRaw() != null) {
+                options.setCrop(config.getRaw().getCrop());
+                options.setWhiteBalance(config.getRaw().getWhiteBalance());
+                options.setHighlight(config.getRaw().getHighlight());
+            }
+            synchronized (this) { rawDecodeCount++; }
+            final FilmRawDecoder.DecodedRaw raw = rawDecoder.decode(path, options);
+            if (expectedSourceVersion != null
+                    && !expectedSourceVersion.equals(raw.getFacts().getSourceVersion())) {
+                throw new FilmProcessingException("RAW 源文件在探测与解码之间发生变化",
+                        HttpStatus.CONFLICT, "FILM_SOURCE_CHANGED");
+            }
+            final FloatRgbImage image = FloatImageOps.orient(FloatImageOps.fromCameraRgb(
+                    raw.getRgb(), raw.getWidth(), raw.getHeight(), raw.getFacts().getRgbCam()),
+                    raw.getFacts().getExifOrientation());
+            final int exifOrientation = raw.getFacts().getExifOrientation();
+            final boolean swaps = exifOrientation >= 5;
+            final int orientedWidth = swaps ? raw.getHeight() : raw.getWidth();
+            final int orientedHeight = swaps ? raw.getWidth() : raw.getHeight();
+            final SourceDecode decode = SourceDecode.sensorRaw(extensionOf(path));
+            decode.setCalibrationSpaceKey(raw.getFacts().getMake() + "|" + raw.getFacts().getModel() + "|"
+                    + options.getWhiteBalance() + "|" + java.util.Arrays.toString("camera".equals(options.getWhiteBalance())
+                    ? raw.getFacts().getCamMul() : raw.getFacts().getPreMul()) + "|"
+                    + java.util.Arrays.deepToString(raw.getFacts().getRgbCam()));
+            decode.setOrientation(exifOrientation);
+            decode.setDecodedWidth(raw.getWidth());
+            decode.setDecodedHeight(raw.getHeight());
+            decode.setOrientedWidth(orientedWidth);
+            decode.setOrientedHeight(orientedHeight);
+            decode.setFullWidth(orientedWidth);
+            decode.setFullHeight(orientedHeight);
+            decode.setOrientationApplied(true);
+            decode.setSensorBitDepth(raw.getFacts().getSensorBitDepth());
+            final SourceImageInfo sourceInfo = new SourceImageInfo(
+                    "sensor-raw", path, raw.getWidth(), raw.getHeight(),
+                    raw.getWidth(), raw.getHeight(), orientedWidth, orientedHeight,
+                    raw.getFacts().getSensorBitDepth(), "linear-camera-rgb", exifOrientation,
+                    null, new com.camborder.app.dto.FidelityReport.MetadataFacts());
+            return new Loaded(image, raw.getFacts().getSourceVersion(),
+                    sensorClipping(raw), workingClipping(image), decode, sourceInfo);
+        }
+        if ("encoded-raster".equals(source)) {
+            synchronized (this) { rawDecodeCount++; }
+            final FilmEncodedRasterReader.ReadResult read = new FilmEncodedRasterReader()
+                    .read(path, config.getEncodedInput());
+            final String actualVersion = com.camborder.app.util.FilmSourceVersion.read(Path.of(path));
+            if (expectedSourceVersion != null && !expectedSourceVersion.equals(actualVersion)) {
+                throw new FilmProcessingException("源文件在探测与读取之间发生变化",
+                        HttpStatus.CONFLICT, "FILM_SOURCE_CHANGED");
+            }
+            final FloatRgbImage image = read.getImage();
+            final SourceDecode decode = SourceDecode.encodedRaster(extensionOf(path), read.getWarning());
+            decode.setCalibrationSpaceKey("encoded-raster|" + read.getSourceColorSpace()
+                    + "|" + String.valueOf(read.getProbe().getIccSha256()));
+            decode.setOrientation(read.getProbe().getOrientation());
+            decode.setDecodedWidth(read.getProbe().getWidth());
+            decode.setDecodedHeight(read.getProbe().getHeight());
+            decode.setOrientedWidth(image.getWidth());
+            decode.setOrientedHeight(image.getHeight());
+            decode.setFullWidth(image.getWidth());
+            decode.setFullHeight(image.getHeight());
+            decode.setOrientationApplied(true);
+            final SourceImageInfo sourceInfo = new SourceImageInfo(
+                    "encoded-raster", path, read.getProbe().getWidth(), read.getProbe().getHeight(),
+                    read.getProbe().getWidth(), read.getProbe().getHeight(),
+                    image.getWidth(), image.getHeight(), read.getProbe().getBitDepth(),
+                    read.getSourceColorSpace(), read.getProbe().getOrientation(), null,
+                    new com.camborder.app.dto.FidelityReport.MetadataFacts());
+            return new Loaded(image, actualVersion, ClipCounts.unavailable(
+                    "已编码栅格没有传感器剪裁事实"), workingClipping(image), decode, sourceInfo);
+        }
+        if ("flextight-fff".equals(source)) {
+            synchronized (this) { rawDecodeCount++; }
+            final FilmFlextightReader.ReadResult read = new FilmFlextightReader()
+                    .read(path, config.getFlextightInput());
+            final String actualVersion = com.camborder.app.util.FilmSourceVersion.read(Path.of(path));
+            if (expectedSourceVersion != null && !expectedSourceVersion.equals(actualVersion)) {
+                throw new FilmProcessingException("FFF 文件在探测与读取之间发生变化",
+                        HttpStatus.CONFLICT, "FILM_SOURCE_CHANGED");
+            }
+            final FloatRgbImage image = read.getImage();
+            final SourceDecode decode = SourceDecode.flextightFff(extensionOf(path), read.getWarning());
+            decode.setCalibrationSpaceKey("flextight-fff|" + config.getFlextightInput().getColorSpace()
+                    + "|main:rgb16|" + String.valueOf(config.getFlextightInput().getIccSha256()));
+            decode.setOrientation(read.getProbe().getOrientation());
+            decode.setDecodedWidth(read.getProbe().getWidth());
+            decode.setDecodedHeight(read.getProbe().getHeight());
+            decode.setOrientedWidth(image.getWidth());
+            decode.setOrientedHeight(image.getHeight());
+            decode.setFullWidth(image.getWidth());
+            decode.setFullHeight(image.getHeight());
+            decode.setOrientationApplied(true);
+            final SourceImageInfo sourceInfo = new SourceImageInfo(
+                    "flextight-fff", path, read.getProbe().getWidth(), read.getProbe().getHeight(),
+                    read.getProbe().getWidth(), read.getProbe().getHeight(),
+                    image.getWidth(), image.getHeight(), 16,
+                    config.getFlextightInput().getColorSpace(), read.getProbe().getOrientation(),
+                    null, new com.camborder.app.dto.FidelityReport.MetadataFacts());
+            return new Loaded(image, actualVersion, ClipCounts.unavailable(
+                    "FFF 主图没有独立传感器剪裁统计"), workingClipping(image), decode, sourceInfo);
+        }
+        if ("linear-tiff".equals(source)) {
+            synchronized (this) { rawDecodeCount++; }
+            final FilmLinearTiffReader.ReadResult read = new FilmLinearTiffReader()
+                    .read(path, config.getLinearInput());
+            if (expectedSourceVersion != null) {
+                com.camborder.app.util.FilmSourceVersion.require(Path.of(path), expectedSourceVersion);
+            }
+            final int orientation = com.camborder.app.util.ImageOrientation.read(Path.of(path));
+            final FloatRgbImage image = FloatImageOps.orient(read.getImage(), orientation);
+            final SourceDecode decode = SourceDecode.linearTiff(extensionOf(path));
+            decode.setCalibrationSpaceKey("linear-tiff|" + config.getLinearInput().getColorSpace());
+            decode.setOrientation(orientation);
+            decode.setDecodedWidth(read.getSourceWidth());
+            decode.setDecodedHeight(read.getSourceHeight());
+            decode.setOrientedWidth(image.getWidth());
+            decode.setOrientedHeight(image.getHeight());
+            decode.setFullWidth(image.getWidth());
+            decode.setFullHeight(image.getHeight());
+            decode.setOrientationApplied(true);
+            final SourceImageInfo sourceInfo = new SourceImageInfo(
+                    "linear-tiff", path, read.getSourceWidth(), read.getSourceHeight(),
+                    read.getSourceWidth(), read.getSourceHeight(),
+                    image.getWidth(), image.getHeight(), 16,
+                    read.getSourceColorSpace(), orientation, null,
+                    new com.camborder.app.dto.FidelityReport.MetadataFacts());
+            return new Loaded(image, expectedSourceVersion, ClipCounts.unavailable(
+                    "线性测试输入没有传感器剪裁事实"), workingClipping(image), decode, sourceInfo);
+        }
+        throw new FilmProcessingException("v2 输入来源不支持",
+                HttpStatus.BAD_REQUEST, "IMAGE_PROCESSING_INVALID_INPUT_SOURCE");
     }
 
     private ImageProcessingConfig.NegativeConfig resolveReferences(

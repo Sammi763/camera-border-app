@@ -519,3 +519,61 @@ CAMBORDER_SMOKE_PORT=8091 bash scripts/smoke-test.sh <app 可执行文件>
 5. 输出页选择 sRGB JPEG、16-bit sRGB TIFF 或 16-bit **线性** Rec.2020 TIFF，再设置带框/无框、尺寸、命名及元数据。目标 ICC 随实际编码嵌入；预检失败先修正原因，完成后查看回读报告。
 
 当前为通用彩负转换；Gold 200/Portra 160 的真实还原需片基、光源及参考样片验收。源码验证与未验收边界见 [底片复核记录](film-digitization-review.md)。本轮按用户要求不打包。
+
+扫描成片用作校色视觉参考时，先按 ICC、胶卷、场景与光源分组，不能作为片基/光源参考帧，
+也不能默认作为线性 TIFF。现有本机图库的抽样观察与使用步骤见
+[扫描成片校色参考](film-color-reference-20261112.md)。
+
+按胶片型号查厂家特性曲线、光谱资料、历史技术表与论坛经验时，使用
+[胶片校色资料目录](film-color-catalog.md)。该目录保留来源与版本，不是应用已验证的
+校色预设；具体扫描仪建议、显影条件与一般产品说明分别标记。
+
+将厂家文献、Film Archive和本机扫描图转成可实施功能时，按
+[胶片校色实施方案](film-color-capability-plan.md)推进：先对齐资料与参考集，再冻结显式正片输入
+契约；普通扫描TIFF/JPEG不能冒充线性底片输入。
+
+## 胶片校色 v2（扫描正片、FFF 与中性取样）
+
+1. 输入探测：`POST /api/image-probe`，只读返回 `inputSources`、`container.bitDepth`、
+   `icc.sha256`、`orientation`、内嵌预览和 RAW/FFF 事实。导入、恢复、重新定位、
+   预检和来源报告共用；不要用缩略图成功代替真实解码成功。
+2. 新建 v2 正片配方：`schemaVersion=2`、`algorithmVersion=film-color-v2`、
+   `inputSource=encoded-raster`（或 `flextight-fff`/`camera-raw`）、
+   `filmPolarity=positive`，并显式提供 `encodedInput`（无 ICC 时选 `srgb` 等并保存）。
+   v2 正片会跳过 `negative`；不要为它伪造片基/密度字段。
+3. 彩负：同一来源把 `filmPolarity` 改为 `color-negative`，并补全 `negative`（光源/片基/密度）。
+   切换只改变处理分支，不自动套用 Gold/Portra 专属模型。
+4. 中性建议：`POST /api/image-analysis`，`purpose=neutral-balance` 且可带 ROI；响应
+   `neutralBalance.binding` 绑定源指纹与基础正片签名。前端只在人工确认后把
+   `suggestedRgbBalanceEv` 写入 `positive.rgbBalanceEv`。
+5. 资料库：Electron 选择 FilmArchive 目录后，`POST /api/film-reference-libraries` 注册；
+   `GET /api/film-references` 检索。文献 `id` 不是胶片 ID；资料卡不会修改图片配方。
+6. FFF：只读取 TIFF 容器 image 0 的 RGB16 主图，`colorSpace` 必须显式选择
+   `linear-srgb`/`linear-rec2020`；文件内输出 Adobe RGB/历史 gamma 不会被自动采用。
+   合成 TIFF 改名 `.fff` 只能验证容器路径，不能写成真实 Flextight 验收。
+
+验证：`cd java-engine && mvn test`；`pnpm --filter frontend typecheck && pnpm --filter frontend test`；
+`pnpm --filter electron typecheck && pnpm --filter electron test`；提交前跑 `pnpm test:scripts`。
+
+## 构建随包 LittleCMS 2
+
+```bash
+# macOS arm64 / x64；Windows x64 需在装有 mingw-w64 的环境执行
+bash scripts/build-lcms2.sh
+TARGET_OS=win ARCH=x64 bash scripts/build-lcms2.sh
+```
+
+产物写入 `professional-tools/lcms/<platform-arch>/`，`lcms2.json` 记录版本、CMM 版本、源码/二进制 SHA-256。
+Electron 只在文件存在时注入 `CAMBORDER_LCMS2_PATH`；缺失时 `components.lcms2.available=false`，
+Java 使用受控回退，不得写成随包 LittleCMS 已验证。
+
+胶片校色 v2 复核与真实 FFF 本机探针入口见[实施复核](film-color-review-20261112.md)，包含执行命令与验收边界。
+
+## 复核胶片校色补充能力
+
+- 个人观感在底片页签保存、应用和删除，桌面端重启后读取固定 userData 文件；只迁移正片调整数值。
+- `python3 scripts/extract-film-characteristic-curves.py --source-dir <本机厂家PDF缓存目录>` 更新研究点集和内置索引；当前源文件名及版本在脚本中固定。运行需 PyMuPDF、NumPy，最终应用不需要 Python。原文不随包分发。
+- `python3 scripts/validate-fff-pairs.py --root <本机样片根目录> --output <私有证据.json>` 读取真实 RGB16 FFF/TIFF 配准候选，按扫描源拆分留出并记录文件 SHA；失败实验不能注册为已标定模型。
+- `node scripts/film-color-packaged-smoke.mjs --app <绝对.app路径> --sample <绝对FFF路径> --output <绝对输出目录>` 在独立应用数据目录通过工作台验证大图预览、分析、预设及原尺寸批量 TIFF 导出；显式假设输入域，只验收处理链路。阻断 renderer HTTP(S) 不等同于操作系统断网。
+- `node scripts/film-presets-restart-smoke.mjs <绝对.app路径> <绝对证据.json路径>` 验证两次独立主进程读取同一预设文件。
+- Java 回归除开发 JDK 外，涉及 ICC 时须用实际随包 Java 执行测试（Surefire `-Djvm=<随包java绝对路径>`）；仅按 target=11 编译不能发现所有运行时 CMM 差异。

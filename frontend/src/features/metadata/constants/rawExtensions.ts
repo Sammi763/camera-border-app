@@ -12,7 +12,7 @@
 
 /** 支持的 RAW 文件扩展名（小写，含前导点）。 */
 export const RAW_EXTENSIONS = new Set([
-  ".nef", ".cr2", ".cr3", ".arw", ".raf", ".dng", ".orf", ".rw2", ".pef"
+  ".nef", ".cr2", ".cr3", ".arw", ".raf", ".dng", ".orf", ".rw2", ".pef", ".crw", ".nrw", ".sr2", ".srf", ".raw", ".rwl", ".iiq", ".mos", ".mrw", ".srw", ".x3f", ".dcr", ".kdc", ".mef", ".erf", ".3fr", ".fff"
 ])
 
 /** RAW 格式中文名称映射（用于 UI 提示）。 */
@@ -25,7 +25,9 @@ export const RAW_FORMAT_NAMES: Readonly<Record<string, string>> = {
   ".dng": "Adobe DNG",
   ".orf": "Olympus ORF",
   ".rw2": "Panasonic RW2",
-  ".pef": "Pentax PEF"
+  ".pef": "Pentax PEF",
+  ".3fr": "Hasselblad 3FR",
+  ".fff": "Flextight FFF（TIFF 容器）"
 }
 
 /** RAW 支持能力分级。 */
@@ -41,7 +43,9 @@ const RAW_TIERS: Readonly<Record<string, RawTier>> = {
   ".raf": "preview-only",
   ".orf": "preview-only",
   ".rw2": "preview-only",
-  ".pef": "preview-only"
+  ".pef": "preview-only",
+  ".3fr": "preview-only",
+  ".fff": "unsupported"
 }
 
 /** RAW 能力分级的中文说明。 */

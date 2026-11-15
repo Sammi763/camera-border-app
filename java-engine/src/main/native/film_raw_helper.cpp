@@ -22,6 +22,9 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace {
 
@@ -32,7 +35,27 @@ constexpr int EXIT_PROCESS = 5;
 constexpr int EXIT_OUTPUT = 6;
 constexpr int EXIT_LIMIT = 7;
 constexpr int EXIT_METADATA = 8;
-constexpr const char *HELPER_VERSION = "1.1.0";
+constexpr const char *HELPER_VERSION = "1.1.1";
+
+// Windows 使用 UTF-16 文件 API，保持中文源路径与临时目录可用。
+#ifdef _WIN32
+std::wstring widePath(const std::string &text) {
+    const int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.c_str(), -1, nullptr, 0);
+    if (size <= 0) return {};
+    std::vector<wchar_t> out(size);
+    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.c_str(), -1, out.data(), size);
+    return std::wstring(out.data());
+}
+#endif
+FILE *openUtf8File(const std::string &path, const char *mode) {
+#ifdef _WIN32
+    const auto wide = widePath(path);
+    const auto wideMode = widePath(mode);
+    return _wfopen(wide.c_str(), wideMode.c_str());
+#else
+    return std::fopen(path.c_str(), mode);
+#endif
+}
 
 struct Options {
     std::string input;
@@ -219,7 +242,7 @@ bool writeFactsJson(FILE *file, const Options &options, const RawFacts &facts,
 }
 
 bool writeMetadata(const Options &options, const RawFacts &facts, int width, int height) {
-    FILE *file = std::fopen(options.metadata.c_str(), "wb");
+    FILE *file = openUtf8File(options.metadata, "wb");
     if (!file) return false;
     const bool ok = writeFactsJson(file, options, facts, width, height);
     std::fclose(file);
@@ -247,11 +270,13 @@ void captureFacts(const libraw_data_t &data, RawFacts *facts) {
     for (int row = 0; row < 3; row++) {
         for (int column = 0; column < 4; column++) {
             facts->rgbCam[row][column] = data.color.rgb_cam[row][column];
-            facts->camXyz[row][column] = data.color.cam_xyz[row][column];
         }
     }
-    for (int column = 0; column < 3; column++) {
-        facts->camXyz[3][column] = data.color.cam_xyz[3][column];
+    // rgb_cam 是 3×4，cam_xyz 是 4×3，不能共用索引循环。
+    for (int row = 0; row < 4; row++) {
+        for (int column = 0; column < 3; column++) {
+            facts->camXyz[row][column] = data.color.cam_xyz[row][column];
+        }
     }
     facts->thumbnailCount = data.thumbs_list.thumbcount;
     facts->thumbWidth = data.thumbnail.twidth;
@@ -260,7 +285,7 @@ void captureFacts(const libraw_data_t &data, RawFacts *facts) {
 
 } // namespace
 
-int main(int argc, char **argv) {
+int runHelper(int argc, char **argv) {
     Options options;
     if (!parseOptions(argc, argv, &options)) {
         usage();
@@ -292,7 +317,11 @@ int main(int argc, char **argv) {
     }
 
     LibRaw decoder;
+#ifdef _WIN32
+    int rc = decoder.open_file(widePath(options.input).c_str());
+#else
     int rc = decoder.open_file(options.input.c_str());
+#endif
     if (rc != LIBRAW_SUCCESS) {
         std::fprintf(stderr, "open_file failed: %s\n", libraw_strerror(rc));
         return EXIT_OPEN;
@@ -360,7 +389,7 @@ int main(int argc, char **argv) {
     int width = 0;
     int height = 0;
     libraw_processed_image_t *processed = decoder.dcraw_make_mem_image(&rc);
-    if (!processed || rc != LIBRAW_SUCCESS || processed->bits != 16 || processed->colors < 3) {
+    if (!processed || rc != LIBRAW_SUCCESS || processed->bits != 16 || processed->colors != 3) {
         std::fprintf(stderr, "make_mem_image failed or returned unsupported format\n");
         if (processed) LibRaw::dcraw_clear_mem(processed);
         return EXIT_PROCESS;
@@ -370,7 +399,7 @@ int main(int argc, char **argv) {
     const uint32_t dataBytes = static_cast<uint32_t>(
             static_cast<uint64_t>(width) * height * 3 * 2);
 
-    FILE *output = std::fopen(options.output.c_str(), "wb");
+    FILE *output = openUtf8File(options.output, "wb");
     if (!output) {
         std::fprintf(stderr, "cannot open output\n");
         LibRaw::dcraw_clear_mem(processed);
@@ -415,3 +444,22 @@ int main(int argc, char **argv) {
     }
     return 0;
 }
+
+#ifdef _WIN32
+int wmain(int argc, wchar_t **argv) {
+    std::vector<std::string> values;
+    values.reserve(argc);
+    for (int i = 0; i < argc; i++) {
+        const int size = WideCharToMultiByte(CP_UTF8, 0, argv[i], -1, nullptr, 0, nullptr, nullptr);
+        if (size <= 0) return EXIT_USAGE;
+        std::vector<char> value(size);
+        WideCharToMultiByte(CP_UTF8, 0, argv[i], -1, value.data(), size, nullptr, nullptr);
+        values.emplace_back(value.data());
+    }
+    std::vector<char *> args;
+    for (auto &value : values) args.push_back(value.data());
+    return runHelper(argc, args.data());
+}
+#else
+int main(int argc, char **argv) { return runHelper(argc, argv); }
+#endif

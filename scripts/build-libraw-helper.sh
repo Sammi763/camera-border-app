@@ -80,7 +80,7 @@ MACOSX_DEPLOYMENT_TARGET=11.0 clang++ -std=c++17 -O2 \
 chmod 755 "$HELPER"
 
 VERSION_OUTPUT="$("$HELPER" --version)"
-if [[ "$VERSION_OUTPUT" != film-raw-helper\ 1.1.0\ libraw\ ${VERSION}* ]]; then
+if [[ "$VERSION_OUTPUT" != film-raw-helper\ 1.1.1\ libraw\ ${VERSION}* ]]; then
   echo "[libraw] helper 版本输出不符合预期：$VERSION_OUTPUT" >&2
   exit 1
 fi
@@ -96,7 +96,7 @@ cat > "$DESTINATION/helper.json" <<JSON
 {
   "schemaVersion": 1,
   "component": "libraw",
-  "helperVersion": "1.1.0",
+  "helperVersion": "1.1.1",
   "librawVersion": "${VERSION}",
   "architecture": "macos-${ARCH}",
   "source": "${URL}",

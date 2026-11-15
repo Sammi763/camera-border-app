@@ -45,6 +45,42 @@ public final class FilmInputProbe {
         if (!Files.isRegularFile(path) || !Files.isReadable(path)) {
             throw unknown("输入文件不存在或不可读");
         }
+        if (config.getSchemaVersion() == ImageProcessingConfig.SCHEMA_VERSION_V2) {
+            final String source = config.getInputSource();
+            if ("camera-raw".equals(source)) {
+                final FilmRawDecoder.ProbeResult result = rawDecoder.probe(path.toString());
+                validate(result.getWidth(), result.getHeight());
+                return new Probed(result.getWidth(), result.getHeight(), "camera-raw",
+                        result.getSourceVersion(), result.getFacts().getHelperVersion() + "|"
+                        + result.getFacts().getLibrawVersion());
+            }
+            if ("encoded-raster".equals(source)) {
+                final FilmEncodedRasterReader.ProbeResult probe =
+                        new FilmEncodedRasterReader().probe(path);
+                validate(probe.getWidth(), probe.getHeight());
+                return new Probed(probe.getWidth(), probe.getHeight(), "encoded-raster",
+                        FilmSourceVersion.read(path),
+                        "encoded-raster-v2|bits:" + probe.getBitDepth()
+                                + "|icc:" + String.valueOf(probe.getIccSha256())
+                                + "|cmm:" + (Lcms2ColorTransform.isAvailable()
+                                ? Lcms2ColorTransform.version() : "matrix-fallback"));
+            }
+            if ("flextight-fff".equals(source)) {
+                final FilmFlextightReader.ProbeResult probe =
+                        new FilmFlextightReader().probe(path);
+                validate(probe.getWidth(), probe.getHeight());
+                return new Probed(probe.getWidth(), probe.getHeight(), "flextight-fff",
+                        FilmSourceVersion.read(path),
+                        "flextight-fff-v2|main:rgb16|images:" + probe.getImageCount());
+            }
+            if ("linear-tiff".equals(source)) {
+                final int[] size = readTiffSize(path);
+                validate(size[0], size[1]);
+                return new Probed(size[0], size[1], "linear-tiff", FilmSourceVersion.read(path),
+                        "linear-tiff-v2");
+            }
+            throw unknown("v2 输入来源不支持尺寸探测");
+        }
         if ("sensor-raw".equals(config.getInputMode())) {
             final FilmRawDecoder.ProbeResult result = rawDecoder.probe(path.toString());
             validate(result.getWidth(), result.getHeight());

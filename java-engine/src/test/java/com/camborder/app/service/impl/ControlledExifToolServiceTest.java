@@ -19,6 +19,23 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 final class ControlledExifToolServiceTest {
 
     @Test
+    void keepsRealStderrWarningsOutOfJson(@TempDir final Path temp) throws IOException {
+        org.junit.jupiter.api.Assumptions.assumeFalse(System.getProperty("os.name").startsWith("Windows"));
+        final Path script = temp.resolve("tool");
+        Files.writeString(script, "#!/bin/sh\nif [ \"$1\" = \"-ver\" ]; then echo 13.59; else\n"
+                + "echo 'No tag name' >&2\n"
+                + "echo '[{\"IFD0:ImageWidth\":4795,\"IFD0:ImageHeight\":16857,\"IFD0:BitsPerSample\":\"16 16 16\"}]'\nfi\n");
+        assertThat(script.toFile().setExecutable(true)).isTrue();
+        final ControlledExifToolService service = new ControlledExifToolService(script.toString(), 1000, new ObjectMapper());
+        final ExifToolService.Inspection result = service.inspect(temp.resolve("scanner.fff"));
+        assertThat(result.isValid()).isTrue();
+        assertThat(result.getWidth()).isEqualTo(4795);
+        assertThat(result.getBitDepth()).isEqualTo(16);
+        Files.writeString(script, "#!/bin/sh\nif [ \"$1\" = \"-ver\" ]; then echo 13.59; else echo broken >&2; exit 1; fi\n");
+        assertThat(service.inspect(temp.resolve("scanner.fff")).isValid()).isFalse();
+    }
+
+    @Test
     void parsesGroupedExifToolFactsAndTreatsWarningsAsNonFatal(@TempDir final Path tempDir) throws IOException {
         Path executable = executable(tempDir.resolve("exiftool"));
         List<List<String>> commands = new ArrayList<>();

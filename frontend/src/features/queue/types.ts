@@ -50,6 +50,8 @@ export type OperationScope = "active" | "checked" | "all"
 export type BatchScope = OperationScope
 
 /** 整卷同步时可独立选择的底片配置字段组。 */
+export type FilmSyncResult = { applied: string[]; unchanged: string[]; skipped: { id: string; reason: string }[]; failed: { id: string; reason: string }[]; cancelled: boolean }
+export type FilmSyncOptions = { signal?: AbortSignal; onProgress?: (checked: number, total: number) => void }
 export type FilmSyncField = "lightSource" | "filmBase" | "density" | "positive" | "curves" | "sourceGeometry"
 
 /** 导入结果（HEIC 转换反馈等）。 */
@@ -145,8 +147,8 @@ export type QueueController = {
   readonly syncImageProcessing: (
     scope: OperationScope,
     source: ImageProcessingConfig,
-    fields: readonly FilmSyncField[]
-  ) => void
+    fields: readonly FilmSyncField[], options?: FilmSyncOptions
+  ) => Promise<FilmSyncResult>
   readonly getEffectiveText: (id: string, globalText: string) => string
   /** 应用摄影预设到指定作用范围。 */
   readonly assignPresetToScope: (presetId: string | null, scope: OperationScope) => void

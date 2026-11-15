@@ -25,7 +25,7 @@ const SUPPORTED_EXTENSIONS = new Set([
 
 /** RAW 扩展名集合（系统缩略图无法解码）。 */
 const RAW_EXTENSIONS = new Set([
-  ".nef", ".cr2", ".cr3", ".arw", ".raf", ".dng", ".orf", ".rw2", ".pef"
+  ".nef", ".cr2", ".cr3", ".arw", ".raf", ".dng", ".orf", ".rw2", ".pef", ".crw", ".nrw", ".sr2", ".srf", ".raw", ".rwl", ".iiq", ".mos", ".mrw", ".srw", ".x3f", ".dcr", ".kdc", ".mef", ".erf", ".3fr", ".fff"
 ])
 
 /** 是否为本地预览支持的栅格格式（不含 HEIC/RAW）。 */

@@ -29,7 +29,7 @@
 
 项目已过“先搭稳定框架”阶段：工作台骨架、Java 引擎生命周期、预览/渲染接口、模板系统、摄影资产库均已落地。
 当前处于可安装摄影师 MVP 的稳定化阶段：数码走 EXIF，胶片走可分类摄影预设，具体任务与优先级见 [docs/prd.md](docs/prd.md) 第 8、9 节和 [docs/tasks.md](docs/tasks.md)。
-另有显式底片数字化模式在实施中（真实 RAW、彩负转正与校色），边界见 [ADR-0007](docs/adr/0007-explicit-film-digitization-mode.md)；验收完成前不得宣称支持。
+另有显式底片数字化/胶片校色 v2（真实 RAW、扫描正片、彩负转正、FFF 与中性辅助），边界见 [ADR-0007](docs/adr/0007-explicit-film-digitization-mode.md) 与 [ADR-0009](docs/adr/0009-film-color-grading-v2-and-filmarchive.md)；未执行的真机/真实胶片验收保持 `NOT_RUN`，不得宣称正式支持。
 
 架构上仍遵守本文件约束；是否新增抽象/分层按第 7 节规则判断。
 
@@ -120,6 +120,11 @@ java-engine/src/main/java/com/camborder/app/
   普通模式）；预览、分析、单图导出和批量导出读取同一份有效配方，不得各存一套。
   字段、枚举和版本以 T02 冻结的契约为准，见
   [ADR-0007](docs/adr/0007-explicit-film-digitization-mode.md)。
+- v2 胶片校色（`schemaVersion=2`、`algorithmVersion=film-color-v2`）必须把
+  `inputSource`（`camera-raw` / `encoded-raster` / `linear-tiff` / `flextight-fff`）与
+  `filmPolarity`（`positive` / `color-negative`）分开表达；正片跳过反相，彩负才进入
+  `negative`。v1 请求继续兼容。见
+  [ADR-0009](docs/adr/0009-film-color-grading-v2-and-filmarchive.md)。
 
 ### 4.2 本地语义优先
 

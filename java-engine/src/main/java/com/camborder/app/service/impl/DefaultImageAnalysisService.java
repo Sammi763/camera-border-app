@@ -5,6 +5,7 @@ import com.camborder.app.dto.ImageAnalysisResponse;
 import com.camborder.app.exception.FilmProcessingException;
 import com.camborder.app.model.ImageProcessingConfig;
 import com.camborder.app.service.ImageAnalysisService;
+import com.camborder.app.util.FilmRequestGuard;
 import com.camborder.app.util.FloatRgbImage;
 import com.camborder.app.util.ImageProcessingValidator;
 import org.springframework.http.HttpStatus;
@@ -40,7 +41,15 @@ public final class DefaultImageAnalysisService implements ImageAnalysisService {
         final String outputSpace = request.getOutputSpace();
         if (outputSpace != null && !java.util.Set.of("srgb", "linear-rec2020").contains(outputSpace))
             throw new FilmProcessingException("输出统计空间非法", HttpStatus.BAD_REQUEST, "IMAGE_ANALYSIS_OUTPUT_SPACE_INVALID");
-        final String stage = request.getStage();
+        final String purpose = request.getPurpose() == null || request.getPurpose().isBlank()
+                ? "histogram" : request.getPurpose();
+        if (!ImageProcessingValidator.ANALYSIS_PURPOSES.contains(purpose)) {
+            throw new FilmProcessingException("分析用途非法",
+                    HttpStatus.BAD_REQUEST, "IMAGE_ANALYSIS_INVALID_PURPOSE");
+        }
+        // 中性建议必须从基础正片取样，不能从已叠加当前调整的结果反推片基/光源。
+        final String stage = "neutral-balance".equals(purpose)
+                ? "base-positive" : request.getStage();
         if (stage == null || !ImageProcessingValidator.ANALYSIS_STAGES.contains(stage)) {
             throw new FilmProcessingException("分析阶段非法",
                     HttpStatus.BAD_REQUEST, CODE_INVALID_STAGE);
@@ -121,6 +130,7 @@ public final class DefaultImageAnalysisService implements ImageAnalysisService {
 
         final ImageAnalysisResponse response = new ImageAnalysisResponse();
         response.setStatus("ok");
+        response.setPurpose(purpose);
         response.setRecipeSignature(processed.getRecipeSignature());
         response.setSourceVersion(processed.getSourceVersion());
         response.setStage(stage);
@@ -150,7 +160,138 @@ public final class DefaultImageAnalysisService implements ImageAnalysisService {
         stats.setClippedHigh(high);
         response.setStats(stats);
         response.setClipping(clipping(processed, low, high, outputLow, outputHigh, outputSpace));
+        if ("neutral-balance".equals(purpose)) {
+            response.setNeutralBalance(neutralBalance(processed, roi, request.getRecipe().getImageProcessing().getPositive()));
+        }
         return response;
+        }
+    }
+
+    /**
+     * 中性区域建议：过滤过暗、近剪裁和非有限样本，再取逐通道中位数。
+     * 返回值只是建议，不修改配方；binding 绑定源指纹与基础正片配方签名，
+     * 源文件或配方变化后前端必须丢弃旧建议。
+     */
+    private static ImageAnalysisResponse.NeutralBalance neutralBalance(
+            final FilmProcessingPipeline.Processed processed,
+            final ImageProcessingConfig.NormalizedCrop roi,
+            final ImageProcessingConfig.PositiveAdjustments positive) {
+        final FloatRgbImage image = processed.getImage();
+        final int left = Math.max(0, (int) Math.floor(roi.getX() * image.getWidth()));
+        final int top = Math.max(0, (int) Math.floor(roi.getY() * image.getHeight()));
+        final int right = Math.min(image.getWidth(),
+                (int) Math.ceil((roi.getX() + roi.getWidth()) * image.getWidth()));
+        final int bottom = Math.min(image.getHeight(),
+                (int) Math.ceil((roi.getY() + roi.getHeight()) * image.getHeight()));
+        final ImageAnalysisResponse.NeutralBalance result = new ImageAnalysisResponse.NeutralBalance();
+        result.setStage("base-positive");
+        result.setRoi(copy(roi));
+        if (right <= left || bottom <= top) {
+            result.setAvailable(false);
+            result.setNote("取样区域面积为 0");
+            return result;
+        }
+        final long roiPixels = (long) (right - left) * (bottom - top);
+        final int stride = Math.max(1, (int) Math.ceil(Math.sqrt((double) roiPixels / 2_000_000d)));
+        final int maximum = ((right - left + stride - 1) / stride)
+                * ((bottom - top + stride - 1) / stride);
+        final double[] red = new double[Math.max(1, maximum)];
+        final double[] green = new double[Math.max(1, maximum)];
+        final double[] blue = new double[Math.max(1, maximum)];
+        long tooDark = 0;
+        long clipped = 0;
+        long nonFinite = 0;
+        int count = 0;
+        for (int y = top; y < bottom; y += stride) {
+            FilmRequestGuard.check();
+            for (int x = left; x < right; x += stride) {
+                final double r = image.get(x, y, 0);
+                final double g = image.get(x, y, 1);
+                final double b = image.get(x, y, 2);
+                if (!Double.isFinite(r) || !Double.isFinite(g) || !Double.isFinite(b)) {
+                    nonFinite++;
+                    continue;
+                }
+                final double luma = 0.2627 * r + 0.6780 * g + 0.0593 * b;
+                if (luma < 0.05) {
+                    tooDark++;
+                    continue;
+                }
+                if (r >= 0.98 || g >= 0.98 || b >= 0.98
+                        || r <= 0.0 || g <= 0.0 || b <= 0.0) {
+                    clipped++;
+                    continue;
+                }
+                red[count] = r;
+                green[count] = g;
+                blue[count] = b;
+                count++;
+            }
+        }
+        result.setRejectedTooDark(tooDark);
+        result.setRejectedClipped(clipped);
+        result.setRejectedNonFinite(nonFinite);
+        result.setSampleCount(count);
+        if (count < 16 || count * 2L < count + tooDark + clipped + nonFinite) {
+            result.setAvailable(false);
+            result.setNote("有效样本不足 16 个或不到取样的一半；请扩大取样框或避开过暗/剪裁区域");
+            return result;
+        }
+        final double[] reds = java.util.Arrays.copyOf(red, count);
+        final double[] greens = java.util.Arrays.copyOf(green, count);
+        final double[] blues = java.util.Arrays.copyOf(blue, count);
+        java.util.Arrays.sort(reds);
+        java.util.Arrays.sort(greens);
+        java.util.Arrays.sort(blues);
+        final double medianR = median(reds);
+        final double medianG = median(greens);
+        final double medianB = median(blues);
+        if (medianR <= 1e-9 || medianG <= 1e-9 || medianB <= 1e-9) {
+            result.setAvailable(false);
+            result.setNote("中性样本中位数接近零，无法计算稳定增益");
+            return result;
+        }
+        final double[] previous = positive == null ? new double[]{0, 0, 0} : positive.getRgbBalanceEv();
+        final double luminance = 0.2627 * medianR * Math.pow(2, previous[0])
+                + 0.6780 * medianG * Math.pow(2, previous[1])
+                + 0.0593 * medianB * Math.pow(2, previous[2]);
+        final double[] gain = {luminance / medianR, luminance / medianG, luminance / medianB};
+        final double[] ev = new double[3];
+        for (int channel = 0; channel < 3; channel++) {
+            ev[channel] = Math.log(gain[channel]) / Math.log(2);
+            if (!Double.isFinite(ev[channel]) || Math.abs(ev[channel]) > 4) {
+                result.setAvailable(false);
+                result.setNote("所需 RGB 平衡超出 ±4 EV，请重新选择可信的中性区域");
+                return result;
+            }
+        }
+        result.setAvailable(true);
+        result.setSampleMean(new double[]{medianR, medianG, medianB});
+        result.setSuggestedRgbGain(gain);
+        result.setSuggestedRgbBalanceEv(ev);
+        result.setConfidence(count >= 1000 ? "high" : count >= 100 ? "medium" : "low");
+        result.setBinding(binding(processed.getSourceVersion(), processed.getRecipeSignature(), ev));
+        result.setNote("已过滤 luma<0.05、任一通道<=0 或 >=0.98 的样本；建议需人工确认后应用");
+        return result;
+    }
+
+    private static double median(final double[] sorted) {
+        final int middle = sorted.length / 2;
+        return sorted.length % 2 == 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle];
+    }
+
+    private static String binding(final String sourceVersion, final String recipeSignature,
+                                  final double[] ev) {
+        try {
+            final java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+            final String value = sourceVersion + "|" + recipeSignature + "|"
+                    + ev[0] + "," + ev[1] + "," + ev[2];
+            final byte[] hash = digest.digest(value.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            final StringBuilder result = new StringBuilder(64);
+            for (byte datum : hash) result.append(String.format(java.util.Locale.ROOT, "%02x", datum));
+            return result.toString();
+        } catch (Exception exception) {
+            return null;
         }
     }
 

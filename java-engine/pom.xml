@@ -53,6 +53,12 @@
       <artifactId>imageio-tiff</artifactId>
       <version>${twelvemonkeys.version}</version>
     </dependency>
+    <!-- 随包 LittleCMS 2 的 JNA 绑定；只在 Electron 注入固定路径时加载，不回退 PATH。 -->
+    <dependency>
+      <groupId>net.java.dev.jna</groupId>
+      <artifactId>jna</artifactId>
+      <version>5.14.0</version>
+    </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-test</artifactId>

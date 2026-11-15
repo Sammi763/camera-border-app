@@ -32,10 +32,22 @@ public final class ImageProcessingValidator {
     public static final String CODE_NOT_AVAILABLE = "IMAGE_PROCESSING_NOT_AVAILABLE";
     public static final String CODE_FILM_OUTPUT_REQUIRED = "IMAGE_PROCESSING_FILM_OUTPUT_REQUIRED";
     public static final String CODE_FILM_OUTPUT_INVALID = "IMAGE_PROCESSING_FILM_OUTPUT_INVALID";
+    public static final String CODE_INVALID_INPUT_SOURCE = "IMAGE_PROCESSING_INVALID_INPUT_SOURCE";
+    public static final String CODE_INVALID_POLARITY = "IMAGE_PROCESSING_INVALID_POLARITY";
+    public static final String CODE_INVALID_ENCODED_INPUT = "IMAGE_PROCESSING_INVALID_ENCODED_INPUT";
+    public static final String CODE_INVALID_FLEXTIGHT_INPUT = "IMAGE_PROCESSING_INVALID_FLEXTIGHT_INPUT";
 
     public static final Set<String> INPUT_MODES = Set.of("sensor-raw", "linear-tiff");
+    public static final Set<String> INPUT_SOURCES = Set.of(
+            "camera-raw", "encoded-raster", "linear-tiff", "flextight-fff");
+    public static final Set<String> FILM_POLARITIES = Set.of("positive", "color-negative");
     public static final Set<String> ANALYSIS_STAGES = Set.of("raw-linear", "base-positive", "current-positive");
+    public static final Set<String> ANALYSIS_PURPOSES = Set.of("histogram", "neutral-balance");
     public static final Set<String> FILM_OUTPUTS = Set.of("srgb-jpeg", "tiff16-srgb", "tiff16-rec2020");
+    public static final Set<String> ENCODED_COLOR_SPACES = Set.of(
+            "embedded", "srgb", "adobe-rgb", "prophoto-rgb", "linear-srgb", "linear-rec2020");
+    public static final Set<String> ALPHA_BACKGROUNDS = Set.of("white", "black");
+    public static final Set<String> FLEXTIGHT_COLOR_SPACES = Set.of("linear-srgb", "linear-rec2020");
     public static final Set<String> LIGHT_SOURCE_KINDS = Set.of("camera-white-balance", "calibration");
     public static final Set<String> FILM_BASE_KINDS = Set.of("roi", "reference-frame", "manual");
     public static final Set<String> FILM_BASE_STAGES = Set.of("linear-camera-rgb", "linear-working");
@@ -55,9 +67,16 @@ public final class ImageProcessingValidator {
     /** 结构校验；null 表示普通模式，直接通过。 */
     public static void validate(final ImageProcessingConfig config, final String prefix) {
         if (config == null) return;
-        require(config.getSchemaVersion() == ImageProcessingConfig.SCHEMA_VERSION,
+        final boolean v2 = config.getSchemaVersion() == ImageProcessingConfig.SCHEMA_VERSION_V2;
+        if (v2) {
+            require(ImageProcessingConfig.ALGORITHM_VERSION_V2.equals(config.getAlgorithmVersion()),
+                    prefix + "imageProcessing.algorithmVersion is unsupported", CODE_UNSUPPORTED_ALGORITHM);
+            validateV2(config, prefix);
+            return;
+        }
+        require(config.getSchemaVersion() == ImageProcessingConfig.SCHEMA_VERSION_V1,
                 prefix + "imageProcessing.schemaVersion is unsupported", CODE_UNSUPPORTED_SCHEMA);
-        require(ImageProcessingConfig.ALGORITHM_VERSION.equals(config.getAlgorithmVersion()),
+        require(ImageProcessingConfig.ALGORITHM_VERSION_V1.equals(config.getAlgorithmVersion()),
                 prefix + "imageProcessing.algorithmVersion is unsupported", CODE_UNSUPPORTED_ALGORITHM);
         final String inputMode = config.getInputMode();
         require(inputMode != null && INPUT_MODES.contains(inputMode),
@@ -84,6 +103,124 @@ public final class ImageProcessingValidator {
         if (config.getNegative() != null) validateNegative(config.getNegative(), prefix);
         if (config.getPositive() != null) validatePositive(config.getPositive(), prefix);
         if (config.getSourceGeometry() != null) validateGeometry(config.getSourceGeometry(), prefix);
+    }
+
+    /** v2：输入来源与正负性质分离；正片跳过反相，彩负必须完整配置。 */
+    private static void validateV2(final ImageProcessingConfig config, final String prefix) {
+        final String source = config.getInputSource();
+        require(source != null && INPUT_SOURCES.contains(source),
+                prefix + "imageProcessing.inputSource is unsupported", CODE_INVALID_INPUT_SOURCE);
+        final String polarity = config.getFilmPolarity();
+        require(polarity != null && FILM_POLARITIES.contains(polarity),
+                prefix + "imageProcessing.filmPolarity must be positive or color-negative",
+                CODE_INVALID_POLARITY);
+        require(config.getInputMode() == null,
+                prefix + "imageProcessing.inputMode must be omitted in schemaVersion 2",
+                CODE_INVALID_INPUT_MODE);
+
+        if ("camera-raw".equals(source)) {
+            require(config.getRaw() != null,
+                    prefix + "imageProcessing.raw is required for camera-raw", CODE_MISSING_RAW_OPTIONS);
+            requireNullInputs(config, prefix, "encodedInput", "linearInput", "flextightInput");
+            validateRaw(config.getRaw(), prefix);
+        } else if ("encoded-raster".equals(source)) {
+            require(config.getEncodedInput() != null,
+                    prefix + "imageProcessing.encodedInput is required for encoded-raster",
+                    CODE_INVALID_ENCODED_INPUT);
+            requireNullInputs(config, prefix, "raw", "linearInput", "flextightInput");
+            validateEncodedInput(config.getEncodedInput(), prefix);
+        } else if ("linear-tiff".equals(source)) {
+            require(config.getLinearInput() != null,
+                    prefix + "imageProcessing.linearInput is required for linear-tiff",
+                    CODE_INVALID_LINEAR_INPUT);
+            requireNullInputs(config, prefix, "raw", "encodedInput", "flextightInput");
+            validateLinearInput(config.getLinearInput(), prefix);
+        } else {
+            require(config.getFlextightInput() != null,
+                    prefix + "imageProcessing.flextightInput is required for flextight-fff",
+                    CODE_INVALID_FLEXTIGHT_INPUT);
+            requireNullInputs(config, prefix, "raw", "linearInput", "encodedInput");
+            validateFlextightInput(config.getFlextightInput(), prefix);
+        }
+
+        if ("positive".equals(polarity)) {
+            require(config.getNegative() == null || !config.getNegative().isEnabled(),
+                    prefix + "imageProcessing.negative must be disabled for positive polarity",
+                    CODE_INVALID_NEGATIVE);
+        } else {
+            require(config.getNegative() != null && config.getNegative().isEnabled(),
+                    prefix + "imageProcessing.negative is required for color-negative",
+                    CODE_INVALID_NEGATIVE);
+            validateNegative(config.getNegative(), prefix);
+        }
+        if (config.getPositive() != null) validatePositive(config.getPositive(), prefix);
+        if (config.getSourceGeometry() != null) validateGeometry(config.getSourceGeometry(), prefix);
+    }
+
+    private static void requireNullInputs(final ImageProcessingConfig config, final String prefix,
+                                          final String... fields) {
+        for (String field : fields) {
+            final boolean present;
+            switch (field) {
+                case "raw": present = config.getRaw() != null; break;
+                case "encodedInput": present = config.getEncodedInput() != null; break;
+                case "linearInput": present = config.getLinearInput() != null; break;
+                case "flextightInput": present = config.getFlextightInput() != null; break;
+                default: present = false;
+            }
+            require(!present, prefix + "imageProcessing." + field
+                    + " is not allowed for inputSource=" + config.getInputSource(),
+                    "raw".equals(field) || "encodedInput".equals(field) || "flextightInput".equals(field)
+                            ? CODE_INVALID_INPUT_SOURCE : CODE_INVALID_LINEAR_INPUT);
+        }
+    }
+
+    private static void validateEncodedInput(final ImageProcessingConfig.EncodedInput input,
+                                             final String prefix) {
+        require(input.getColorSpace() != null && ENCODED_COLOR_SPACES.contains(input.getColorSpace()),
+                prefix + "imageProcessing.encodedInput.colorSpace is unsupported",
+                CODE_INVALID_ENCODED_INPUT);
+        require(input.getBitDepth() == 8 || input.getBitDepth() == 16,
+                prefix + "imageProcessing.encodedInput.bitDepth must be 8 or 16",
+                CODE_INVALID_ENCODED_INPUT);
+        require(input.getAlphaBackground() != null
+                        && ALPHA_BACKGROUNDS.contains(input.getAlphaBackground()),
+                prefix + "imageProcessing.encodedInput.alphaBackground must be white or black",
+                CODE_INVALID_ENCODED_INPUT);
+        if ("embedded".equals(input.getColorSpace())) {
+            require(input.getIccSha256() != null && SHA256.matcher(input.getIccSha256()).matches(),
+                    prefix + "imageProcessing.encodedInput.iccSha256 is required for embedded colorSpace",
+                    CODE_INVALID_ENCODED_INPUT);
+        } else if (input.getIccSha256() != null && !input.getIccSha256().isBlank()) {
+            require(SHA256.matcher(input.getIccSha256()).matches(),
+                    prefix + "imageProcessing.encodedInput.iccSha256 must be a SHA-256 hex string",
+                    CODE_INVALID_ENCODED_INPUT);
+        }
+    }
+
+    private static void validateFlextightInput(final ImageProcessingConfig.FlextightInput input,
+                                               final String prefix) {
+        require("flextight".equals(input.getDevice()),
+                prefix + "imageProcessing.flextightInput.device must be flextight",
+                CODE_INVALID_FLEXTIGHT_INPUT);
+        require("rgb16".equals(input.getMainImage()),
+                prefix + "imageProcessing.flextightInput.mainImage must be rgb16",
+                CODE_INVALID_FLEXTIGHT_INPUT);
+        require("linear".equals(input.getTransferFunction()),
+                prefix + "imageProcessing.flextightInput.transferFunction must be linear",
+                CODE_INVALID_FLEXTIGHT_INPUT);
+        require(input.getColorSpace() != null
+                        && FLEXTIGHT_COLOR_SPACES.contains(input.getColorSpace()),
+                prefix + "imageProcessing.flextightInput.colorSpace must be linear-srgb or linear-rec2020",
+                CODE_INVALID_FLEXTIGHT_INPUT);
+        require(input.getBitDepth() == 16,
+                prefix + "imageProcessing.flextightInput.bitDepth must be 16",
+                CODE_INVALID_FLEXTIGHT_INPUT);
+        if (input.getIccSha256() != null && !input.getIccSha256().isBlank()) {
+            require(SHA256.matcher(input.getIccSha256()).matches(),
+                    prefix + "imageProcessing.flextightInput.iccSha256 must be a SHA-256 hex string",
+                    CODE_INVALID_FLEXTIGHT_INPUT);
+        }
     }
 
     private static void validateRaw(final ImageProcessingConfig.RawOptions raw, final String prefix) {
@@ -336,8 +473,11 @@ public final class ImageProcessingValidator {
      */
     public static void ensureFilmProcessingAvailable(final ImageProcessingConfig config) {
         if (config == null) return;
+        // v2 校色管线已实现；v1 的 501 闸门保留给旧生产入口/旧测试，
+        // 避免旧代码把“结构合法”误当成“处理已完成”。
+        if (config.getSchemaVersion() == ImageProcessingConfig.SCHEMA_VERSION_V2) return;
         throw new ApiException(
-                "底片数字化处理尚未可用；当前版本只接受普通模式请求",
+                "v1 底片数字化入口仍保留兼容闸门；请使用 v2 胶片校色配方",
                 HttpStatus.NOT_IMPLEMENTED, CODE_NOT_AVAILABLE);
     }
 

@@ -62,7 +62,7 @@ public final class RawDecoder {
 
     /** 支持的 RAW 文件扩展名（小写，含前导点）。 */
     private static final Set<String> RAW_EXTENSIONS = new HashSet<>(Arrays.asList(
-            ".nef", ".cr2", ".cr3", ".arw", ".raf", ".dng", ".orf", ".rw2", ".pef"
+            ".nef", ".cr2", ".cr3", ".arw", ".raf", ".dng", ".orf", ".rw2", ".pef", ".crw", ".nrw", ".sr2", ".srf", ".raw", ".rwl", ".iiq", ".mos", ".mrw", ".srw", ".x3f", ".dcr", ".kdc", ".mef", ".erf", ".3fr"
     ));
 
     /** JPEG SOI（Start of Image）标记：0xFF 0xD8。 */

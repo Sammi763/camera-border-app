@@ -69,7 +69,7 @@ final class ImageAnalysisControllerTest extends AbstractControllerTest {
     @Test
     void rejectsUnknownSchemaBeforePipeline() throws Exception {
         final ImageProcessingConfig processing = FilmTestFixtures.linearProcessing();
-        processing.setSchemaVersion(2);
+        processing.setSchemaVersion(3);
         final RenderRecipe recipe = FilmTestFixtures.recipe(java.nio.file.Path.of("/tmp/x.tif"), processing);
 
         mockMvc.perform(post("/api/image-analysis")

@@ -48,7 +48,7 @@ describe("requestPreview 超时兜底", () => {
   it("引擎无响应时在有限时间失败（不永久挂起）", async () => {
     hangingFetch()
     const startedAt = Date.now()
-    await expect(requestPreview(previewRequest, 30)).rejects.toThrow("引擎不可达")
+    await expect(requestPreview(previewRequest, 30)).rejects.toThrow("预览处理超时")
     // 远小于默认 8s，说明超时生效
     expect(Date.now() - startedAt).toBeLessThan(2000)
   })
@@ -76,7 +76,7 @@ describe("requestPreview 超时兜底", () => {
 
     controller.abort()
 
-    await expect(pending).rejects.toThrow("引擎不可达")
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" })
   })
 })
 

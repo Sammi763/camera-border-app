@@ -56,6 +56,22 @@ final class FilmExportNativeTest {
             assertThat(actual.getBitDepth()).isEqualTo(combination.equals("srgb-jpeg")?8:16);
             assertThat(actual.getMetadata().isXmp()).isTrue(); assertThat(actual.getMetadata().isExif()).isTrue();
             assertThat(result.getExportResult().getFidelityReport().isVerified()).isTrue();
+            if (!combination.equals("srgb-jpeg")) {
+                // 独立读取 TIFF 标签表，防止元数据写回把 RGB 三通道位深变成单值。
+                final byte[] bytes = Files.readAllBytes(output);
+                final java.nio.ByteBuffer tiff = java.nio.ByteBuffer.wrap(bytes).order(
+                        bytes[0] == 'I' ? java.nio.ByteOrder.LITTLE_ENDIAN : java.nio.ByteOrder.BIG_ENDIAN);
+                final int ifd = tiff.getInt(4), entries = Short.toUnsignedInt(tiff.getShort(ifd));
+                boolean found = false;
+                for (int i = 0; i < entries; i++) {
+                    final int entry = ifd + 2 + i * 12;
+                    if (Short.toUnsignedInt(tiff.getShort(entry)) == 258) {
+                        assertThat(tiff.getInt(entry + 4)).isEqualTo(3);
+                        found = true;
+                    }
+                }
+                assertThat(found).isTrue();
+            }
             if(combination.equals("tiff16-rec2020")) {
                 final java.awt.color.ICC_ProfileRGB profile=(java.awt.color.ICC_ProfileRGB)java.awt.color.ICC_Profile.getInstance(ImageMetadataPayload.read(output.toString()).getIcc());
                 assertThat(profile.getGamma(0)).isEqualTo(1);

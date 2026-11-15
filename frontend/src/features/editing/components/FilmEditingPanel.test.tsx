@@ -83,6 +83,7 @@ describe("FilmEditingPanel（T09 底片编辑面板）", () => {
     )
 
     fireEvent.change(screen.getByLabelText("曝光 EV"), { target: { value: "1.5" } })
+    fireEvent.blur(screen.getByLabelText("曝光 EV"))
 
     const config = onChange.mock.calls[0]![0] as ImageProcessingConfig
     expect(config.positive?.exposureEv).toBe(1.5)
@@ -102,10 +103,12 @@ describe("FilmEditingPanel（T09 底片编辑面板）", () => {
     )
 
     fireEvent.change(screen.getByLabelText("来源"), { target: { value: "manual" } })
+    fireEvent.blur(screen.getByLabelText("来源"))
     const manual = onChange.mock.calls[0]![0] as ImageProcessingConfig
     expect(manual.negative?.filmBase?.kind).toBe("manual")
 
     fireEvent.change(screen.getByLabelText("校平角度"), { target: { value: "2.5" } })
+    fireEvent.blur(screen.getByLabelText("校平角度"))
     const rotated = onChange.mock.calls[1]![0] as ImageProcessingConfig
     expect(rotated.sourceGeometry?.rotationDegrees).toBe(2.5)
     expect(onChange.mock.calls[1]![1]).toMatchObject({ historyTag: "geometry:rotation" })
@@ -156,4 +159,79 @@ describe("FilmEditingPanel（T09 底片编辑面板）", () => {
     fireEvent.click(screen.getByRole("button", { name: "关闭底片处理" }))
     expect(onChange).toHaveBeenCalledWith(null, { description: "关闭底片处理" })
   })
+})
+
+describe("FilmEditingPanel v2 胶片校色", () => {
+  const v2Positive = (): ImageProcessingConfig => ({
+    schemaVersion: 2,
+    algorithmVersion: "film-color-v2",
+    inputSource: "encoded-raster",
+    filmPolarity: "positive",
+    encodedInput: { colorSpace: "srgb", bitDepth: 8 },
+    positive: { exposureEv: 0 }
+  })
+
+  it("扫描成片可开启 v2 正片校色并跳过 negative", async () => {
+    const onChange = vi.fn()
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      status: "ok",
+      imagePath: "/photos/scan.jpg",
+      format: "jpg",
+      sourceVersion: "sha256:test",
+      orientation: 1,
+      width: 100,
+      height: 80,
+      container: { width: 100, height: 80, bitDepth: 8, bands: 3, alpha: false, colorModel: "rgb", imageCount: 1, tiffContainer: false },
+      icc: { present: true, sha256: "a".repeat(64), source: "embedded" },
+      preview: { available: false, width: 0, height: 0 },
+      inputSources: ["encoded-raster"],
+      recommendedInputSource: "encoded-raster",
+      warnings: []
+    }), { status: 200, headers: { "Content-Type": "application/json" } })))
+    render(<FilmEditingPanel config={null} error={null} sourcePath="/photos/scan.jpg" capabilities={capabilities(true)} onChange={onChange} />)
+
+    fireEvent.click(screen.getByRole("button", { name: "开启胶片校色（正片）" }))
+
+    await vi.waitFor(() => expect(onChange).toHaveBeenCalled())
+    const config = onChange.mock.calls.at(-1)![0] as ImageProcessingConfig
+    expect(config.schemaVersion).toBe(2)
+    expect(config.inputSource).toBe("encoded-raster")
+    expect(config.filmPolarity).toBe("positive")
+    expect(config.negative ?? null).toBeNull()
+    expect(config.encodedInput).toMatchObject({ colorSpace: "embedded", bitDepth: 8, iccSha256: "a".repeat(64) })
+    vi.unstubAllGlobals()
+  })
+
+  it("输入探测失败不会启用猜测的校色配方", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("文件不可读") }))
+    const onChange = vi.fn()
+    render(<FilmEditingPanel config={null} error={null} sourcePath="/photos/scan.jpg" capabilities={capabilities(true)} onChange={onChange} />)
+    fireEvent.click(screen.getByRole("button", { name: "开启胶片校色（正片）" }))
+    await vi.waitFor(() => expect(screen.getByText(/图像探测失败/)).toBeTruthy())
+    expect(onChange).not.toHaveBeenCalled()
+    vi.unstubAllGlobals()
+  })
+
+  it("v2 正片隐藏片基/密度分支，彩负切换后才显示", () => {
+    const onChange = vi.fn()
+    render(<FilmEditingPanel config={v2Positive()} error={null} sourcePath="/photos/scan.jpg" capabilities={capabilities(true)} onChange={onChange} />)
+
+    expect(screen.queryByLabelText("来源")).toBeNull()
+    fireEvent.change(screen.getByLabelText("处理分支"), { target: { value: "color-negative" } })
+    fireEvent.blur(screen.getByLabelText("处理分支"))
+    const config = onChange.mock.calls[0]![0] as ImageProcessingConfig
+    expect(config.filmPolarity).toBe("color-negative")
+    expect(config.negative?.filmBase?.kind).toBe("roi")
+  })
+})
+
+it("非法数字草稿不修改配方，回车提交合法值", () => {
+  const onChange = vi.fn()
+  render(<FilmEditingPanel config={enabledConfig()} error={null} sourcePath="/scan.ARW" capabilities={capabilities(true)} onChange={onChange} />)
+  const field = screen.getByLabelText("曝光 EV")
+  fireEvent.change(field, { target: { value: "" } }); fireEvent.blur(field)
+  expect(onChange).not.toHaveBeenCalled()
+  expect(screen.getByRole("alert").textContent).toContain("原配方保持不变")
+  fireEvent.change(field, { target: { value: "1.25" } }); fireEvent.keyDown(field, { key: "Enter" })
+  expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ positive: expect.objectContaining({ exposureEv: 1.25 }) }), expect.anything())
 })

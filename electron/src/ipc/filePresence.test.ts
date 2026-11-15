@@ -33,6 +33,16 @@ afterEach(() => {
 })
 
 describe("工作会话文件存在性 IPC", () => {
+  it("FFF 与 3FR 会话恢复及版本检查保留真实文件", async () => {
+    const paths = [join(workDir, "扫描.FFF"), join(workDir, "camera.3fr")]
+    paths.forEach((path) => writeFileSync(path, "sample"))
+    registerFilePresenceIpc()
+    registerImageFileVersionIpc()
+    await expect(handlers.get(IPC_FILE_PRESENCE_CHANNEL)!({}, paths)).resolves.toEqual([true, true])
+    const versions = await handlers.get(IPC_FILE_VERSION_CHANNEL)!({}, paths) as unknown[]
+    expect(versions).toEqual([expect.objectContaining({ sizeBytes: 6 }), expect.objectContaining({ sizeBytes: 6 })])
+  })
+
   it("只返回受支持绝对图片路径的常规文件存在性", async () => {
     const imagePath = join(workDir, "known.jpg")
     writeFileSync(imagePath, "sample")

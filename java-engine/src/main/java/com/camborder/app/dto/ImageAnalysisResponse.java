@@ -20,6 +20,8 @@ public final class ImageAnalysisResponse {
     public double[] getResolvedLightGain() { return resolvedLightGain; }
     public void setResolvedLightGain(final double[] value) { resolvedLightGain = value; }
     private String status;
+    private String purpose;
+    private NeutralBalance neutralBalance;
     private String calibrationSpaceKey;
     public String getCalibrationSpaceKey() { return calibrationSpaceKey; }
     public void setCalibrationSpaceKey(final String value) { calibrationSpaceKey = value; }
@@ -39,6 +41,10 @@ public final class ImageAnalysisResponse {
 
     public String getStatus() { return status; }
     public void setStatus(final String status) { this.status = status; }
+    public String getPurpose() { return purpose; }
+    public void setPurpose(final String purpose) { this.purpose = purpose; }
+    public NeutralBalance getNeutralBalance() { return neutralBalance; }
+    public void setNeutralBalance(final NeutralBalance neutralBalance) { this.neutralBalance = neutralBalance; }
     public String getMessage() { return message; }
     public void setMessage(final String message) { this.message = message; }
     public String getRecipeSignature() { return recipeSignature; }
@@ -63,6 +69,53 @@ public final class ImageAnalysisResponse {
     public void setStats(final RegionStats stats) { this.stats = stats; }
     public ClippingFacts getClipping() { return clipping; }
     public void setClipping(final ClippingFacts clipping) { this.clipping = clipping; }
+
+    /**
+     * 中性区域建议：从基础正片取样、过滤过暗/剪裁样本后给出的增益与 EV 建议。
+     * 建议绑定 sourceVersion + recipeSignature；任一项变化后前端不得继续使用。
+     */
+    public static final class NeutralBalance {
+        private boolean available;
+        private String stage;
+        private long sampleCount;
+        private long rejectedTooDark;
+        private long rejectedClipped;
+        private long rejectedNonFinite;
+        private double[] sampleMean;
+        private double[] suggestedRgbGain;
+        private double[] suggestedRgbBalanceEv;
+        private String confidence;
+        private String binding;
+        private String note;
+        private ImageProcessingConfig.NormalizedCrop roi;
+
+        public boolean isAvailable() { return available; }
+        public void setAvailable(final boolean available) { this.available = available; }
+        public String getStage() { return stage; }
+        public void setStage(final String stage) { this.stage = stage; }
+        public long getSampleCount() { return sampleCount; }
+        public void setSampleCount(final long sampleCount) { this.sampleCount = sampleCount; }
+        public long getRejectedTooDark() { return rejectedTooDark; }
+        public void setRejectedTooDark(final long rejectedTooDark) { this.rejectedTooDark = rejectedTooDark; }
+        public long getRejectedClipped() { return rejectedClipped; }
+        public void setRejectedClipped(final long rejectedClipped) { this.rejectedClipped = rejectedClipped; }
+        public long getRejectedNonFinite() { return rejectedNonFinite; }
+        public void setRejectedNonFinite(final long rejectedNonFinite) { this.rejectedNonFinite = rejectedNonFinite; }
+        public double[] getSampleMean() { return sampleMean; }
+        public void setSampleMean(final double[] sampleMean) { this.sampleMean = sampleMean; }
+        public double[] getSuggestedRgbGain() { return suggestedRgbGain; }
+        public void setSuggestedRgbGain(final double[] suggestedRgbGain) { this.suggestedRgbGain = suggestedRgbGain; }
+        public double[] getSuggestedRgbBalanceEv() { return suggestedRgbBalanceEv; }
+        public void setSuggestedRgbBalanceEv(final double[] suggestedRgbBalanceEv) { this.suggestedRgbBalanceEv = suggestedRgbBalanceEv; }
+        public String getConfidence() { return confidence; }
+        public void setConfidence(final String confidence) { this.confidence = confidence; }
+        public String getBinding() { return binding; }
+        public void setBinding(final String binding) { this.binding = binding; }
+        public String getNote() { return note; }
+        public void setNote(final String note) { this.note = note; }
+        public ImageProcessingConfig.NormalizedCrop getRoi() { return roi; }
+        public void setRoi(final ImageProcessingConfig.NormalizedCrop roi) { this.roi = roi; }
+    }
 
     /** 每通道直方图；长数组按 bucketCount 输出。 */
     public static final class Histogram {

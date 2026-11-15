@@ -30,6 +30,7 @@ public final class FilmMemoryEstimator {
         private int outputWidth;
         private int outputHeight;
         private boolean sensorRaw;
+        private boolean encodedRaster;
         private boolean referenceFrame;
         private long referencePixelCount;
         private boolean sourceGeometry;
@@ -50,6 +51,11 @@ public final class FilmMemoryEstimator {
         public Workload output(final int width, final int height) {
             this.outputWidth = width;
             this.outputHeight = height;
+            return this;
+        }
+
+        public Workload encodedRaster(final boolean value) {
+            this.encodedRaster = value;
             return this;
         }
 
@@ -159,7 +165,9 @@ public final class FilmMemoryEstimator {
                 ? multiply(add(sourcePixels, referencePixels), 16L) : 0L;
 
         // RAW：helper 输出 RGB16 + 两份 float（解码图与方向重排临时图）。
-        final long rawJava = add(sourceRgb16, multiply(sourceFloat, 2L));
+        final long rawJava = workload.encodedRaster
+                ? add(sourceRgb16, multiply(sourceFloat, 4L))
+                : add(sourceRgb16, multiply(sourceFloat, 2L));
 
         // 基础转正：下游需要 RAW 工作图 + 光源增益副本 + 转正输出；参考帧独立解码。
         final long baseJava = add(add(sourceFloat, multiply(sourceFloat, 2L)),

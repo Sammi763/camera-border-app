@@ -12,6 +12,7 @@ CAMBORDER_LIBRAW_HELPER_PATH=../professional-tools/libraw/macos-arm64/film-raw-h
 CAMBORDER_EXIFTOOL_PATH=../professional-tools/exiftool/macos/exiftool \
 CAMBORDER_COMPONENT_MANIFEST=../professional-tools/components.json \
 CAMBORDER_BUNDLED_FONTS_DIR=../professional-tools/fonts \
+CAMBORDER_LCMS2_PATH=../professional-tools/lcms/macos-arm64/liblcms2.2.dylib \
 mvn spring-boot:run
 
 cd ..
@@ -114,3 +115,12 @@ node scripts/performance-smoke.mjs --count 2 \
 
 **仍未完成：16GB 实机安装包验收、24–45MP 多份真实 RAW/负片样片覆盖、默认两轮百图引擎内存验收。**
 独立进程采样可在当前 32GB 机器执行，已补测，不属于 16GB 硬件阻塞项。
+
+## v2 / LittleCMS 回归（2026-11-12）
+
+- 随包 LittleCMS 2.19 `liblcms2.2.dylib` 在 macOS arm64 安装包内由能力探测报告 `available=true`，SHA-256 与 `lcms2.json` 一致；32/16-bit profile 转换使用 `TYPE_RGB_FLT`，不先量化到 8-bit。
+- FFF 合成 TIFF 的 300×600 分块读取与全尺寸 16-bit 导出在 `FilmFlextightReaderTest` 通过；真实 Flextight、约 8080 万像素长条扫描、Windows/macOS x64 安装后性能和内存仍未执行，状态 `NOT_RUN`。
+
+### 真实 FFF 安装包补充
+
+修复后 macOS arm64 包完成 4795×16857 真实 FFF 的预览、分析与连续两图原尺寸 TIFF16 导出；250ms 采样的进程树观测峰值约 6.69 GiB。独立标签表、ICC、像素条带 SHA 与源未变化核验通过。该结果显式假设输入域，不是 FFF 物理校准，也不代替 16GB/Windows/Intel 实机验收。完整证据与限制见 [校色实施复核](film-color-review-20261112.md)。

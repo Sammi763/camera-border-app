@@ -106,8 +106,10 @@ public final class DefaultExportPreflightService implements ExportPreflightServi
 
         final ImageProcessingConfig imageProcessing = snapshot.getRecipe().getImageProcessing();
         if (imageProcessing != null) {
-            report.setPixelSource("sensor-raw".equals(imageProcessing.getInputMode())
-                    ? "sensor-raw" : "linear-tiff");
+            final boolean v2 = imageProcessing.getSchemaVersion() == ImageProcessingConfig.SCHEMA_VERSION_V2;
+            report.setPixelSource(v2 ? ("camera-raw".equals(imageProcessing.getInputSource())
+                    ? "sensor-raw" : imageProcessing.getInputSource())
+                    : "sensor-raw".equals(imageProcessing.getInputMode()) ? "sensor-raw" : "linear-tiff");
             final CapabilitiesResponse filmCapabilities = capabilitiesService.snapshot();
             final CapabilitiesResponse.FilmDigitizationCapability film =
                     filmCapabilities.getFilmDigitization();
@@ -117,9 +119,10 @@ public final class DefaultExportPreflightService implements ExportPreflightServi
                     || !Boolean.TRUE.equals(film.getOutputs().get(export.getFilmOutput()))) {
                 reasons.add("当前运行时不支持输出组合 " + export.getFilmOutput());
             }
-            if (film != null && (film.getInputModes() == null
-                    || !film.getInputModes().contains(imageProcessing.getInputMode()))) {
-                reasons.add("当前运行时不支持输入模式 " + imageProcessing.getInputMode());
+            if (film != null && (v2 ? film.getInputSources() == null
+                    || !film.getInputSources().contains(imageProcessing.getInputSource())
+                    : film.getInputModes() == null || !film.getInputModes().contains(imageProcessing.getInputMode()))) {
+                reasons.add("当前运行时不支持输入模式 " + (v2 ? imageProcessing.getInputSource() : imageProcessing.getInputMode()));
             }
             if ("sensor-raw".equals(imageProcessing.getInputMode()) && !isRawExtension(imagePathValue)) {
                 reasons.add("sensor-raw 需要真实 RAW 源文件");

@@ -89,10 +89,12 @@ archive-label-box）。几何规格的唯一权威定义在 `util/BorderStyleRen
 ### 真实 RAW helper（T03）
 
 `java-engine/src/main/native/film_raw_helper.cpp` 是 LibRaw 0.22.3 的受控子进程适配器，
-不是第四个业务服务。构建命令（仅 macOS arm64 正式目标）：
+不是第四个业务服务。构建命令（运行验收与产物构建分别记录）：
 
 ```bash
 bash scripts/build-libraw-helper.sh
+TARGET_OS=macos ARCH=x64 bash scripts/build-libraw-helper-cross.sh
+TARGET_OS=win ARCH=x64 bash scripts/build-libraw-helper-cross.sh
 ```
 
 产物：`professional-tools/libraw/macos-arm64/film-raw-helper` 与 `helper.json`。helper 只接受
@@ -193,3 +195,12 @@ mvn package              # 打包 target/camera-border-engine.jar（托管模式
 底片模式通过同一逐图配方提供三阶段切换、片基框选、RGB 直方图、实际像素检查、单调曲线与校准参考复用；照片及几何使用 float32 线性 Rec.2020，装饰独立合成。支持带框/无框 sRGB JPEG、16-bit sRGB TIFF 与 16-bit 线性 Rec.2020 TIFF，嵌入匹配 ICC，按元数据策略写回并独立回读核验。输入 TIFF 必须由用户确认是真实线性数据，带 ICC 时核验 TRC 与基色。来源指纹、相机/白平衡/空间绑定和单槽调度详见 [底片实施复核](../docs/film-digitization-review.md)。
 
 本轮不打包。真实 Gold 200/Portra 160 校色、无内嵌 JPEG 机型、其他平台及干净机器离线安装保持未验收。当前仅提供通用彩负转换，不宣称胶卷专属还原或正式发布支持。
+
+## 胶片校色 v2 与文献索引
+
+- `POST /api/image-probe`：只读头部/来源事实（JPEG/PNG/TIFF、RAW、FFF），不分配整幅像素；导入、恢复、重新定位和预检共用。
+- `POST /api/image-analysis` 支持 `purpose=histogram|neutral-balance`；中性建议强制从 `base-positive` 取样，过滤过暗/剪裁样本，并以 `sourceVersion + recipeSignature + gains` 生成 binding。
+- v2 `ImageProcessingConfig` 把 `inputSource` 与 `filmPolarity` 分开；`encoded-raster` 支持显式/嵌入 ICC、8/16-bit、灰阶与透明背景合成；`flextight-fff` 只读 TIFF 容器 RGB16 主图并按 256 行分块。
+- `POST /api/film-reference-libraries` / `GET /api/film-references` 只读索引本机 FilmArchive：SHA 相同合并来源、不同修订保留、上游文档 ID 不作为胶片 ID、未知来源不视为官方。
+
+厂商特性曲线的可复现提取入口为 `scripts/extract-film-characteristic-curves.py`，数值与来源指纹见 `docs/film-characteristic-curves.json`，随内置资料索引离线分发。点集保留 logH/Status M 密度域与测量条件，`modelReady=false`；不作为现有像素处理的 LUT 或负片模型。真实 FFF 配对实验见 [补充验收记录](../docs/film-color-review-20261112.md)。

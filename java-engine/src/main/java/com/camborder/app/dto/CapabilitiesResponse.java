@@ -119,7 +119,12 @@ public final class CapabilitiesResponse {
         private String license;
         private String sha256;
         private java.util.List<String> inputModes = new java.util.ArrayList<>();
+        private java.util.List<String> inputSources = new java.util.ArrayList<>();
+        private java.util.List<String> filmPolarities = new java.util.ArrayList<>();
         private java.util.List<String> analysisStages = new java.util.ArrayList<>();
+        private java.util.List<String> analysisPurposes = new java.util.ArrayList<>();
+        private java.util.List<Integer> schemaVersions = new java.util.ArrayList<>();
+        private ReferenceLibraryCapability filmReferenceLibraries;
         private Map<String, Boolean> outputs = new LinkedHashMap<>();
         private String reason;
 
@@ -137,14 +142,50 @@ public final class CapabilitiesResponse {
         public void setInputModes(final java.util.List<String> inputModes) {
             this.inputModes = inputModes == null ? new java.util.ArrayList<>() : inputModes;
         }
+        public java.util.List<String> getInputSources() { return inputSources; }
+        public void setInputSources(final java.util.List<String> inputSources) {
+            this.inputSources = inputSources == null ? new java.util.ArrayList<>() : inputSources;
+        }
+        public java.util.List<String> getFilmPolarities() { return filmPolarities; }
+        public void setFilmPolarities(final java.util.List<String> filmPolarities) {
+            this.filmPolarities = filmPolarities == null ? new java.util.ArrayList<>() : filmPolarities;
+        }
         public java.util.List<String> getAnalysisStages() { return analysisStages; }
         public void setAnalysisStages(final java.util.List<String> analysisStages) {
             this.analysisStages = analysisStages == null ? new java.util.ArrayList<>() : analysisStages;
+        }
+        public java.util.List<String> getAnalysisPurposes() { return analysisPurposes; }
+        public void setAnalysisPurposes(final java.util.List<String> analysisPurposes) {
+            this.analysisPurposes = analysisPurposes == null ? new java.util.ArrayList<>() : analysisPurposes;
+        }
+        public java.util.List<Integer> getSchemaVersions() { return schemaVersions; }
+        public void setSchemaVersions(final java.util.List<Integer> schemaVersions) {
+            this.schemaVersions = schemaVersions == null ? new java.util.ArrayList<>() : schemaVersions;
+        }
+        public ReferenceLibraryCapability getFilmReferenceLibraries() {
+            return filmReferenceLibraries;
+        }
+        public void setFilmReferenceLibraries(final ReferenceLibraryCapability filmReferenceLibraries) {
+            this.filmReferenceLibraries = filmReferenceLibraries;
         }
         public Map<String, Boolean> getOutputs() { return outputs; }
         public void setOutputs(final Map<String, Boolean> outputs) {
             this.outputs = outputs == null ? new LinkedHashMap<>() : outputs;
         }
+        public String getReason() { return reason; }
+        public void setReason(final String reason) { this.reason = reason; }
+    }
+
+    /** 本机 FilmArchive 只读关联能力；解析在引擎，目录选择/打开在 Electron。 */
+    public static final class ReferenceLibraryCapability {
+        private boolean available;
+        private String mode = "local-read-only";
+        private String reason;
+
+        public boolean isAvailable() { return available; }
+        public void setAvailable(final boolean available) { this.available = available; }
+        public String getMode() { return mode; }
+        public void setMode(final String mode) { this.mode = mode; }
         public String getReason() { return reason; }
         public void setReason(final String reason) { this.reason = reason; }
     }

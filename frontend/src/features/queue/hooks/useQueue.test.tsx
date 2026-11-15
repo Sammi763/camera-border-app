@@ -1,3 +1,7 @@
+import { analyzeImage } from "../../../services/engine/imageAnalysisApi"
+vi.mock("../../../services/engine/imageAnalysisApi", () => ({ analyzeImage: vi.fn() }))
+import { probeImage } from "../../../services/engine/imageProbeApi"
+vi.mock("../../../services/engine/imageProbeApi", () => ({ probeImage: vi.fn() }))
 import { describe, expect, it, afterEach, beforeEach, vi } from "vitest"
 import { act, renderHook, waitFor } from "@testing-library/react"
 import { useQueue } from "./useQueue"
@@ -24,6 +28,7 @@ const makeAssets = (): PhotoAssetStore => ({
 })
 
 beforeEach(() => {
+    vi.mocked(probeImage).mockResolvedValue({ recommendedInputSource: "encoded-raster", container: { bitDepth: 8 }, icc: { present: false } } as Awaited<ReturnType<typeof probeImage>>)
   localStorage.clear()
 })
 
@@ -733,11 +738,11 @@ describe("useQueue（T08 每图底片状态、恢复与撤销）", () => {
     act(() => result.current.setActiveImageProcessing(sourceB))
     act(() => result.current.setActive(idC))
 
-    act(() => result.current.syncImageProcessing("all", sourceA, ["positive", "curves"]))
+    await act(async () => { await result.current.syncImageProcessing("all", sourceA, ["positive", "curves"]) })
 
     expect(result.current.items[0]!.imageProcessing?.positive?.exposureEv).toBe(1.2)
     expect(result.current.items[1]!.imageProcessing?.positive?.exposureEv).toBe(1.2)
-    expect(result.current.items[2]!.imageProcessing?.positive?.exposureEv).toBe(1.2)
+    expect(result.current.items[2]!.imageProcessing?.positive?.exposureEv).toBeUndefined()
     // 未勾选的片基/光源保留 B 的普通模式空配置；A 的底片参数不被反向覆盖。
     expect(result.current.getEffectiveImageProcessing(idB)?.negative?.filmBase).toBeUndefined()
     expect(result.current.getEffectiveImageProcessing(idA)?.negative?.filmBase).toEqual(sourceA.negative?.filmBase)
@@ -754,19 +759,82 @@ describe("useQueue（T08 每图底片状态、恢复与撤销）", () => {
       await result.current.addFromPaths(["/photos/a.tif", "/photos/b.tif"])
     })
     const source = filmConfig(0.6)
-    act(() => result.current.syncImageProcessing("all", source, ["positive"]))
+    for (const item of result.current.items) { act(() => result.current.setActive(item.id)); act(() => result.current.setActiveImageProcessing(filmConfig(0))) }
+    await act(async () => { await result.current.syncImageProcessing("all", source, ["positive"]) })
     ;(source.positive as { exposureEv?: number }).exposureEv = 9
     expect(result.current.items[0]!.imageProcessing?.positive?.exposureEv).toBe(0.6)
     expect(result.current.items[1]!.imageProcessing?.positive?.exposureEv).toBe(0.6)
   })
+  it("v2 正片配方可同步到已编码扫描 JPEG，但不跨版本覆盖 v1", async () => {
+    const { result } = renderHook(() => useQueue())
+    await act(async () => { await result.current.addFromPaths(["/photos/a.jpg", "/photos/b.jpg"]) })
+    const source: ImageProcessingConfig = {
+      schemaVersion: 2,
+      algorithmVersion: "film-color-v2",
+      inputSource: "encoded-raster",
+      filmPolarity: "positive",
+      encodedInput: { colorSpace: "srgb", bitDepth: 8 },
+      positive: { exposureEv: 0.8 }
+    }
+    await act(async () => { await result.current.syncImageProcessing("all", source, ["positive"]) })
+    expect(result.current.items[0]!.imageProcessing?.schemaVersion).toBe(2)
+    expect(result.current.items[1]!.imageProcessing?.positive?.exposureEv).toBe(0.8)
+    expect(result.current.items[1]!.imageProcessing?.negative ?? null).toBeNull()
+
+    act(() => result.current.setActive(result.current.items[0]!.id))
+    act(() => result.current.setActiveImageProcessing({
+      schemaVersion: 1, algorithmVersion: "film-digitization-v1", inputMode: "linear-tiff",
+      linearInput: { colorSpace: "linear-rec2020", bitDepth: 16 }, positive: { exposureEv: 0 }
+    }))
+    await act(async () => { await result.current.syncImageProcessing("all", source, ["positive"]) })
+    expect(result.current.items[0]!.imageProcessing?.schemaVersion).toBe(1)
+  })
+
   it("跨输入类型同步不会把 RAW 配方套到普通 JPEG 或线性 TIFF", async () => {
     const { result } = renderHook(() => useQueue())
     await act(async () => { await result.current.addFromPaths(["/photos/a.ARW", "/photos/b.jpg", "/photos/c.tif"]) })
     const source: ImageProcessingConfig = { schemaVersion: 1, algorithmVersion: "film-digitization-v1", inputMode: "sensor-raw", raw: {}, positive: { exposureEv: 1 } }
-    act(() => result.current.syncImageProcessing("all", source, ["positive"]))
+    act(() => result.current.setActive(result.current.items[0]!.id)); act(() => result.current.setActiveImageProcessing(source))
+    await act(async () => { await result.current.syncImageProcessing("all", source, ["positive"]) })
     expect(result.current.items[0]!.imageProcessing?.positive?.exposureEv).toBe(1)
     expect(result.current.items[1]!.imageProcessing).toBeNull()
     expect(result.current.items[2]!.imageProcessing).toBeNull()
   })
 
+})
+
+it("新目标按真实 TIFF16 和嵌入 ICC 初始化，一次撤销", async () => {
+  vi.mocked(probeImage).mockResolvedValue({ recommendedInputSource: "encoded-raster", container: { bitDepth: 16 }, icc: { present: true, sha256: "a".repeat(64) } } as Awaited<ReturnType<typeof probeImage>>)
+  const { result } = renderHook(() => useQueue())
+  await act(async () => { await result.current.addFromPaths(["/scan.tif"]) })
+  const source: ImageProcessingConfig = { schemaVersion: 2, algorithmVersion: "film-color-v2", inputSource: "encoded-raster", filmPolarity: "positive", encodedInput: { bitDepth: 8, colorSpace: "srgb" }, positive: { exposureEv: 1 } }
+  await act(async () => { const report = await result.current.syncImageProcessing("all", source, ["positive"]); expect(report.applied).toHaveLength(1) })
+  expect(result.current.items[0]?.imageProcessing?.encodedInput).toMatchObject({ bitDepth: 16, colorSpace: "embedded", iccSha256: "a".repeat(64) })
+  act(() => result.current.undo())
+  expect(result.current.items[0]?.imageProcessing).toBeNull()
+})
+
+it("同步探测期间编辑和取消均不会被旧结果覆盖", async () => {
+  let resolveProbe!: (value: Awaited<ReturnType<typeof probeImage>>) => void
+  vi.mocked(probeImage).mockImplementation(() => new Promise(resolve => { resolveProbe = resolve }))
+  const { result } = renderHook(() => useQueue())
+  await act(async () => { await result.current.addFromPaths(["/scan.jpg"]) })
+  const source: ImageProcessingConfig = { schemaVersion: 2, algorithmVersion: "film-color-v2", inputSource: "encoded-raster", filmPolarity: "positive", encodedInput: { bitDepth: 8, colorSpace: "srgb" }, positive: { exposureEv: 1 } }
+  const pending = result.current.syncImageProcessing("all", source, ["positive"])
+  act(() => result.current.setActiveImageProcessing({ ...source, positive: { exposureEv: 2 } }))
+  await act(async () => { resolveProbe({ recommendedInputSource: "encoded-raster", container: { bitDepth: 8 }, icc: { present: false } } as Awaited<ReturnType<typeof probeImage>>); expect((await pending).skipped).toHaveLength(1) })
+  expect(result.current.items[0]?.imageProcessing?.positive?.exposureEv).toBe(2)
+  const controller = new AbortController(); controller.abort()
+  await act(async () => { expect((await result.current.syncImageProcessing("all", source, ["positive"], { signal: controller.signal })).cancelled).toBe(true) })
+})
+
+it("负片同步按真实校准空间跳过不兼容目标，并隔离调度标识", async () => {
+  vi.mocked(analyzeImage).mockImplementation(async request => ({ calibrationSpaceKey: request.recipe.imagePath.endsWith("b.ARW") ? "other" : "same", sourceVersion: "sha256:mock" }) as Awaited<ReturnType<typeof analyzeImage>>)
+  const { result } = renderHook(() => useQueue())
+  await act(async () => { await result.current.addFromPaths(["/a.ARW", "/b.ARW"]) })
+  act(() => result.current.setActive(result.current.items[0]!.id))
+  const source: ImageProcessingConfig = { schemaVersion: 2, algorithmVersion: "film-color-v2", inputSource: "camera-raw", filmPolarity: "color-negative", raw: {}, negative: { enabled: true, filmBase: { kind: "manual", stage: "linear-working", rgb: [1,1,1] } } }
+  await act(async () => { const report = await result.current.syncImageProcessing("all", source, ["filmBase"]); expect(report.skipped).toHaveLength(1); expect(report.applied).toHaveLength(1) })
+  expect(new Set(vi.mocked(analyzeImage).mock.calls.slice(-3).map(([request]) => request.clientId)).size).toBe(3)
+  expect(result.current.items[1]?.imageProcessing).toBeNull()
 })

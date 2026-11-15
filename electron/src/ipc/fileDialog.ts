@@ -19,7 +19,7 @@ const IMAGE_FILTERS = [
     extensions: [
       "jpg", "jpeg", "png", "webp", "tif", "tiff", "bmp",
       "heic", "heif",
-      "nef", "cr2", "cr3", "arw", "raf", "dng", "orf", "rw2", "pef"
+      "nef", "cr2", "cr3", "arw", "raf", "dng", "orf", "rw2", "pef", "crw", "nrw", "sr2", "srf", "raw", "rwl", "iiq", "mos", "mrw", "srw", "x3f", "dcr", "kdc", "mef", "erf", "3fr", "fff"
     ]
   }
 ]
@@ -210,7 +210,7 @@ export const registerFileDialogIpc = (): void => {
   const SUPPORTED_IMAGE_EXTENSIONS = new Set([
     ".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp",
     ".heic", ".heif",
-    ".nef", ".cr2", ".cr3", ".arw", ".raf", ".dng", ".orf", ".rw2", ".pef"
+    ".nef", ".cr2", ".cr3", ".arw", ".raf", ".dng", ".orf", ".rw2", ".pef", ".crw", ".nrw", ".sr2", ".srf", ".raw", ".rwl", ".iiq", ".mos", ".mrw", ".srw", ".x3f", ".dcr", ".kdc", ".mef", ".erf", ".3fr", ".fff"
   ])
 
   const isSupportedImage = (filePath: string): boolean => {

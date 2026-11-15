@@ -9,7 +9,7 @@ import {
 } from "./engineClient"
 
 /** 分析请求超时（毫秒）；真实 RAW/大图分析可能比预览慢，但必须有界。 */
-export const IMAGE_ANALYSIS_TIMEOUT_MS = 15000
+export const IMAGE_ANALYSIS_TIMEOUT_MS = 120000
 
 /**
  * 提交图像分析请求（POST /api/image-analysis）。
@@ -34,7 +34,9 @@ export const analyzeImage = async (
       },
       timeoutMs
     )
-  } catch {
+  } catch (error) {
+    if (signal?.aborted) throw signal.reason ?? error
+    if (error !== null && typeof error === "object" && "name" in error && error.name === "TimeoutError") throw new Error("图像分析超时，请重试或检查大图处理状态")
     throw new Error("图像分析请求失败：引擎不可达")
   }
   if (!response.ok) {

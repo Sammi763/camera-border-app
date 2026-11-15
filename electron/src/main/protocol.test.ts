@@ -81,6 +81,10 @@ describe("app:// 安全协议代理", () => {
     ["GET", "app://app/api/health"],
     ["POST", "app://app/api/preview"],
     ["POST", "app://app/api/image-analysis"],
+    ["POST", "app://app/api/image-probe"],
+    ["POST", "app://app/api/film-reference-libraries"],
+    ["GET", "app://app/api/film-references"],
+    ["GET", "app://app/api/film-reference-index"],
     ["GET", "app://app/api/render-jobs/job-1"],
     ["DELETE", "app://app/api/render-jobs/job-1"],
     ["GET", "app://app/previews/preview-1"]

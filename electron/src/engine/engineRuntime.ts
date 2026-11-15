@@ -61,21 +61,39 @@ export const resolveBundledComponentManifest = (): string | null => {
  * 仅 macOS arm64 正式目标；缺失或未完成构建时返回 null，Java 端把能力报告为 false。
  * 不做 PATH 搜索，也不在运行时下载。
  */
+const libRawTarget = (): string | null => process.platform === "win32" && process.arch === "x64"
+  ? "win-x64" : process.platform === "darwin" && ["arm64", "x64"].includes(process.arch)
+    ? `macos-${process.arch}` : null
+
 export const resolveBundledLibRawHelperExecutable = (): string | null => {
-  if (process.platform !== "darwin" || process.arch !== "arm64") return null
-  const candidate = path.join(
-    professionalToolsDir, "libraw", "macos-arm64", "film-raw-helper"
-  )
+  const target = libRawTarget()
+  if (target === null) return null
+  const candidate = path.join(professionalToolsDir, "libraw", target,
+    process.platform === "win32" ? "film-raw-helper.exe" : "film-raw-helper")
   return existsSync(candidate) ? candidate : null
 }
 
-/** 随包 LibRaw helper 清单（版本、源码/二进制校验和、架构）。 */
+/** 所有目标使用相同协议、独立的架构与文件校验清单。 */
 export const resolveBundledLibRawHelperManifest = (): string | null => {
-  if (process.platform !== "darwin" || process.arch !== "arm64") return null
-  const candidate = path.join(
-    professionalToolsDir, "libraw", "macos-arm64", "helper.json"
-  )
+  const target = libRawTarget()
+  if (target === null) return null
+  const candidate = path.join(professionalToolsDir, "libraw", target, "helper.json")
   return existsSync(candidate) ? candidate : null
+}
+
+/**
+ * 随包 LittleCMS 2 动态库解析。
+ * 当前只有 macOS arm64 固定构建；缺失时 Java 端使用矩阵/嵌入 ICC 的受控回退，
+ * 并在能力探测中如实报告 lcms2 不可用。不搜索系统库。
+ */
+export const resolveBundledLcms2Library = (): string | null => {
+  const candidate = process.platform === "win32"
+    ? path.join(professionalToolsDir, "lcms", "win-x64", "lcms2.dll")
+    : process.platform === "darwin"
+      ? path.join(professionalToolsDir, "lcms",
+          process.arch === "arm64" ? "macos-arm64" : "macos-x64", "liblcms2.2.dylib")
+      : null
+  return candidate !== null && existsSync(candidate) ? candidate : null
 }
 
 /** 随包字体目录；缺失时 Java 端必须把字体能力报告为 false。 */

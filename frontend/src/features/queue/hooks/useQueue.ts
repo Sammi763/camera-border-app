@@ -1,3 +1,6 @@
+import { probeImage } from "../../../services/engine/imageProbeApi"
+import { analyzeImage } from "../../../services/engine/imageAnalysisApi"
+import { cancelFilmRequests } from "../../../services/engine/filmRequestsApi"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { fetchDevPhotos } from "../../../services/engine/devPhotosApi"
 import { resolveHeicPaths } from "../../../services/desktop/heicConvert"
@@ -7,9 +10,9 @@ import { createEmptyIdentity } from "../../metadata/types"
 import { mergeIdentityChain, resolvePresetIdentity } from "../../metadata/utils/resolveIdentity"
 import type { PhotoAssetStore, PhotoIdentity, ShootingPreset } from "../../metadata/types"
 import type { PhotoMetadata } from "../../../types/preview"
-import type { ImportResult, OperationScope, QueueController, QueueItem, FilmSyncField } from "../types"
+import type { ImportResult, OperationScope, QueueController, QueueItem, FilmSyncField, FilmSyncResult, FilmSyncOptions } from "../types"
 import type { ImageProcessingConfig, MonotonicCurve } from "../../../types/imageProcessing"
-import { createDefaultFilmProcessing } from "../../editing/defaults"
+import { createDefaultFilmColorProcessing, createDefaultFilmProcessing } from "../../editing/defaults"
 import { cloneImageProcessing, migrateImageProcessing } from "../imageProcessingSession"
 import { nextHistorySeq, type HistoryEntryMeta } from "../../../utils/historySequence"
 import { resolveIdentityFieldSources } from "../../metadata/utils/resolveIdentityFieldSources"
@@ -616,30 +619,78 @@ export const useQueue = (): QueueController => {
    * 只合并指定字段组；目标已有配置时保留其他组，新建目标以源配置为骨架。
    * 每个目标独立深复制，后续修改任意一张不会污染其他图。
    */
-  const syncImageProcessing = useCallback((
-    scope: OperationScope,
-    source: ImageProcessingConfig,
-    fields: readonly FilmSyncField[]
-  ): void => {
-    if (fields.length === 0) return
+  const syncImageProcessing = useCallback(async (
+    scope: OperationScope, source: ImageProcessingConfig, fields: readonly FilmSyncField[], options?: FilmSyncOptions
+  ): Promise<FilmSyncResult> => {
+    const result: FilmSyncResult = { applied: [], unchanged: [], skipped: [], failed: [], cancelled: false }
+    if (!fields.length) return result
+    const frozen = snapshotRef.current
+    const ids = new Set(resolveScopeIds(scope, frozen))
+    const targets = frozen.items.filter(item => ids.has(item.id))
+    const sourceClone = cloneImageProcessing(source)!
     const selected = new Set(fields)
-    const sourceClone = cloneImageProcessing(source)
-    if (sourceClone === null) return
-    commit((previous) => {
-      const targetIds = new Set(resolveScopeIds(scope, previous))
-      let changed = false
-      const items = previous.items.map((item) => {
-        if (!targetIds.has(item.id) || item.imageProcessingError != null) return item
-        const defaults = createDefaultFilmProcessing(item.sourcePath)
-        if (defaults === null || defaults.inputMode !== sourceClone.inputMode) return item
-        const base = cloneImageProcessing(item.imageProcessing) ?? defaults
-        const next = mergeFilmProcessing(sourceClone, base, selected)
-        if (JSON.stringify(next) === JSON.stringify(item.imageProcessing)) return item
-        changed = true
-        return { ...item, imageProcessing: next, imageProcessingError: null }
-      })
-      return changed ? { ...previous, items } : previous
-    }, true, "同步底片配置")
+    const needsSpace = sourceClone.negative != null && fields.some(f => ["lightSource", "filmBase", "density"].includes(f))
+    const clientId = `film_sync_${crypto.randomUUID()}`
+    const clients = new Set([clientId])
+    const cancel = () => { for (const id of clients) void cancelFilmRequests(id, 1).catch(() => undefined) }
+    options?.signal?.addEventListener("abort", cancel, { once: true })
+    const prepared = new Map<string, ImageProcessingConfig>()
+    let checked = 0, cursor = 0
+    let sourceSpace: string | null = null
+    try {
+      if (needsSpace) {
+        const active = frozen.items.find(item => item.id === frozen.activeItemId)
+        if (!active) return result
+        const facts = await analyzeImage({ recipe: { imagePath: active.filePath, border: null, gradient: null, texts: [], imagePlacement: { mode: "fit", focalX: 0.5, focalY: 0.5, rotation: 0, targetAspectRatio: null }, imageProcessing: sourceClone }, stage: "raw-linear", clientId, generation: 1 }, undefined, options?.signal)
+        if (active.sourceVersion != null && active.sourceVersion.startsWith("sha256:") && active.sourceVersion !== facts.sourceVersion) throw new Error("源文件已变化，请刷新后同步")
+        sourceSpace = facts.calibrationSpaceKey ?? null
+        if (sourceSpace === null) throw new Error("源图校准空间尚未确认")
+      }
+      const worker = async () => {
+        while (cursor < targets.length && !options?.signal?.aborted) {
+          const item = targets[cursor++]!
+          try {
+            if (item.missing || item.imageProcessingError) throw new Error("文件缺失或原配置损坏")
+            let base = cloneImageProcessing(item.imageProcessing)
+            if (base === null) {
+              if (sourceClone.schemaVersion !== 2) { result.skipped.push({ id: item.id, reason: `${item.fileName}：旧版目标须先开启校色或使用 v2` }); continue }
+              const probe = await probeImage({ imagePath: item.filePath }, undefined, options?.signal)
+              base = createDefaultFilmColorProcessing(item.filePath, sourceClone.filmPolarity ?? "positive", probe)
+            }
+            if (base === null || base.schemaVersion !== sourceClone.schemaVersion
+              || (base.inputSource ?? base.inputMode) !== (sourceClone.inputSource ?? sourceClone.inputMode)
+              || base.filmPolarity !== sourceClone.filmPolarity) {
+              result.skipped.push({ id: item.id, reason: `${item.fileName}：版本、输入来源或正负性质不兼容` }); continue
+            }
+            if (needsSpace) {
+              const targetClient = `${clientId}_${item.id}`; clients.add(targetClient)
+              const facts = await analyzeImage({ recipe: { imagePath: item.filePath, border: null, gradient: null, texts: [], imagePlacement: { mode: "fit", focalX: 0.5, focalY: 0.5, rotation: 0, targetAspectRatio: null }, imageProcessing: base }, stage: "raw-linear", clientId: targetClient, generation: 1 }, undefined, options?.signal)
+              if (facts.calibrationSpaceKey !== sourceSpace) { result.skipped.push({ id: item.id, reason: `${item.fileName}：校准空间不兼容` }); continue }
+            }
+            prepared.set(item.id, mergeFilmProcessing(sourceClone, base, selected))
+          } catch (error) { if (!options?.signal?.aborted) result.failed.push({ id: item.id, reason: `${item.fileName}：${error instanceof Error ? error.message : "探测失败"}` }) }
+          finally { options?.onProgress?.(++checked, targets.length) }
+        }
+      }
+      await Promise.all([worker(), worker()])
+      if (options?.signal?.aborted) { result.cancelled = true; return result }
+      commit(previous => {
+        let changed = false
+        const items = previous.items.map(item => {
+          const next = prepared.get(item.id)
+          if (!next) return item
+          const before = targets.find(target => target.id === item.id)!
+          if (item.filePath !== before.filePath || JSON.stringify(item.imageProcessing) !== JSON.stringify(before.imageProcessing)) {
+            result.skipped.push({ id: item.id, reason: `${item.fileName}：检查期间图片已被编辑或重新定位` }); return item
+          }
+          if (JSON.stringify(next) === JSON.stringify(item.imageProcessing)) { result.unchanged.push(item.id); return item }
+          changed = true; result.applied.push(item.id)
+          return { ...item, imageProcessing: next, imageProcessingError: null }
+        })
+        return changed ? { ...previous, items } : previous
+      }, true, "同步底片配置")
+      return result
+    } catch (error) { if (options?.signal?.aborted) { result.cancelled = true; return result } throw error } finally { options?.signal?.removeEventListener("abort", cancel) }
   }, [commit, resolveScopeIds])
 
   const setActiveIdentityOverride = useCallback((patch: Partial<PhotoIdentity>): void => {

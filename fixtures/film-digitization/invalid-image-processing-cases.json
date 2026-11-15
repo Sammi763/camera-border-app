@@ -3,7 +3,7 @@
     "name": "unknown-schema",
     "expectedCode": "IMAGE_PROCESSING_UNSUPPORTED_SCHEMA",
     "imageProcessing": {
-      "schemaVersion": 2,
+      "schemaVersion": 3,
       "algorithmVersion": "film-digitization-v1",
       "inputMode": "sensor-raw",
       "raw": {}
@@ -44,7 +44,9 @@
       "schemaVersion": 1,
       "algorithmVersion": "film-digitization-v1",
       "inputMode": "sensor-raw",
-      "raw": { "autoBright": true }
+      "raw": {
+        "autoBright": true
+      }
     }
   },
   {
@@ -54,7 +56,9 @@
       "schemaVersion": 1,
       "algorithmVersion": "film-digitization-v1",
       "inputMode": "sensor-raw",
-      "raw": { "gamma": "srgb" }
+      "raw": {
+        "gamma": "srgb"
+      }
     }
   },
   {
@@ -105,9 +109,22 @@
       "raw": {},
       "negative": {
         "enabled": true,
-        "lightSource": { "kind": "calibration" },
-        "filmBase": { "kind": "manual", "rgb": [0.9, 0.8, 0.7], "stage": "linear-working" },
-        "density": { "min": 0, "max": 3 },
+        "lightSource": {
+          "kind": "calibration"
+        },
+        "filmBase": {
+          "kind": "manual",
+          "rgb": [
+            0.9,
+            0.8,
+            0.7
+          ],
+          "stage": "linear-working"
+        },
+        "density": {
+          "min": 0,
+          "max": 3
+        },
         "profile": "generic-color-negative-v1"
       }
     }
@@ -122,9 +139,17 @@
       "raw": {},
       "negative": {
         "enabled": true,
-        "lightSource": { "kind": "camera-white-balance" },
-        "filmBase": { "kind": "roi", "stage": "linear-working" },
-        "density": { "min": 0, "max": 3 },
+        "lightSource": {
+          "kind": "camera-white-balance"
+        },
+        "filmBase": {
+          "kind": "roi",
+          "stage": "linear-working"
+        },
+        "density": {
+          "min": 0,
+          "max": 3
+        },
         "profile": "generic-color-negative-v1"
       }
     }
@@ -139,9 +164,21 @@
       "raw": {},
       "negative": {
         "enabled": true,
-        "lightSource": { "kind": "camera-white-balance" },
-        "filmBase": { "kind": "manual", "rgb": [0.2, 0.3], "stage": "linear-working" },
-        "density": { "min": 0, "max": 3 },
+        "lightSource": {
+          "kind": "camera-white-balance"
+        },
+        "filmBase": {
+          "kind": "manual",
+          "rgb": [
+            0.2,
+            0.3
+          ],
+          "stage": "linear-working"
+        },
+        "density": {
+          "min": 0,
+          "max": 3
+        },
         "profile": "generic-color-negative-v1"
       }
     }
@@ -156,9 +193,22 @@
       "raw": {},
       "negative": {
         "enabled": true,
-        "lightSource": { "kind": "camera-white-balance" },
-        "filmBase": { "kind": "manual", "rgb": [0.9, 0.8, 0.7], "stage": "linear-working" },
-        "density": { "min": 2, "max": 1 },
+        "lightSource": {
+          "kind": "camera-white-balance"
+        },
+        "filmBase": {
+          "kind": "manual",
+          "rgb": [
+            0.9,
+            0.8,
+            0.7
+          ],
+          "stage": "linear-working"
+        },
+        "density": {
+          "min": 2,
+          "max": 1
+        },
         "profile": "generic-color-negative-v1"
       }
     }
@@ -173,9 +223,22 @@
       "raw": {},
       "negative": {
         "enabled": true,
-        "lightSource": { "kind": "camera-white-balance" },
-        "filmBase": { "kind": "manual", "rgb": [0.9, 0.8, 0.7], "stage": "linear-working" },
-        "density": { "min": 0, "max": 3 },
+        "lightSource": {
+          "kind": "camera-white-balance"
+        },
+        "filmBase": {
+          "kind": "manual",
+          "rgb": [
+            0.9,
+            0.8,
+            0.7
+          ],
+          "stage": "linear-working"
+        },
+        "density": {
+          "min": 0,
+          "max": 3
+        },
         "profile": "kodak-gold-200-v1"
       }
     }
@@ -190,8 +253,13 @@
       "raw": {},
       "negative": {
         "enabled": true,
-        "lightSource": { "kind": "camera-white-balance" },
-        "density": { "min": 0, "max": 3 },
+        "lightSource": {
+          "kind": "camera-white-balance"
+        },
+        "density": {
+          "min": 0,
+          "max": 3
+        },
         "profile": "generic-color-negative-v1"
       }
     }
@@ -208,10 +276,22 @@
         "masterCurve": {
           "interpolation": "linear",
           "points": [
-            { "x": 0, "y": 0 },
-            { "x": 0.6, "y": 0.4 },
-            { "x": 0.5, "y": 0.6 },
-            { "x": 1, "y": 1 }
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": 0.6,
+              "y": 0.4
+            },
+            {
+              "x": 0.5,
+              "y": 0.6
+            },
+            {
+              "x": 1,
+              "y": 1
+            }
           ]
         }
       }
@@ -229,9 +309,18 @@
         "masterCurve": {
           "interpolation": "linear",
           "points": [
-            { "x": 0, "y": 0 },
-            { "x": 0.5, "y": 0.5 },
-            { "x": 0.9, "y": 1 }
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": 0.5,
+              "y": 0.5
+            },
+            {
+              "x": 0.9,
+              "y": 1
+            }
           ]
         }
       }
@@ -249,10 +338,22 @@
         "masterCurve": {
           "interpolation": "linear",
           "points": [
-            { "x": 0, "y": 0 },
-            { "x": 0.4, "y": 0.7 },
-            { "x": 0.6, "y": 0.6 },
-            { "x": 1, "y": 1 }
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": 0.4,
+              "y": 0.7
+            },
+            {
+              "x": 0.6,
+              "y": 0.6
+            },
+            {
+              "x": 1,
+              "y": 1
+            }
           ]
         }
       }
@@ -267,7 +368,12 @@
       "inputMode": "sensor-raw",
       "raw": {},
       "sourceGeometry": {
-        "crop": { "x": 0.1, "y": 0.1, "width": 0, "height": 0.5 },
+        "crop": {
+          "x": 0.1,
+          "y": 0.1,
+          "width": 0,
+          "height": 0.5
+        },
         "rotationDegrees": 0
       }
     }
@@ -281,7 +387,12 @@
       "inputMode": "sensor-raw",
       "raw": {},
       "sourceGeometry": {
-        "crop": { "x": 0, "y": 0, "width": 1, "height": 1 },
+        "crop": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
         "rotationDegrees": 90
       }
     }
@@ -294,7 +405,12 @@
       "algorithmVersion": "film-digitization-v1",
       "inputMode": "sensor-raw",
       "raw": {},
-      "positive": { "rgbBalanceEv": [0, 0] }
+      "positive": {
+        "rgbBalanceEv": [
+          0,
+          0
+        ]
+      }
     }
   },
   {
@@ -305,7 +421,10 @@
       "algorithmVersion": "film-digitization-v1",
       "inputMode": "sensor-raw",
       "raw": {},
-      "positive": { "blackPoint": 0.8, "whitePoint": 0.7 }
+      "positive": {
+        "blackPoint": 0.8,
+        "whitePoint": 0.7
+      }
     }
   },
   {
@@ -316,7 +435,9 @@
       "algorithmVersion": "film-digitization-v1",
       "inputMode": "sensor-raw",
       "raw": {},
-      "positive": { "saturation": 3 }
+      "positive": {
+        "saturation": 3
+      }
     }
   }
 ]

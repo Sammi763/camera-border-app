@@ -1,3 +1,4 @@
+import { registerFilmColorPresetsIpc } from "./filmColorPresets.js"
 import { registerAssetStorageIpc } from "./assetStorage.js"
 import { registerFileDialogIpc } from "./fileDialog.js"
 import { registerImageConvertIpc } from "./imageConvert.js"
@@ -9,6 +10,7 @@ import { registerFilePresenceIpc, registerImageFileVersionIpc } from "./filePres
 import { registerWindowStateIpc } from "./windowState.js"
 import { registerPackageCapabilitiesIpc } from "./packageCapabilities.js"
 import { registerAiGatewayIpc } from "./aiGateway.js"
+import { registerFilmArchiveIpc } from "./filmArchive.js"
 
 /**
  * 统一注册所有 IPC handler。
@@ -21,6 +23,7 @@ export const registerAllIpc = (): void => {
   registerFileDialogIpc()
   registerTemplateStorageIpc()
   registerAssetStorageIpc()
+  registerFilmColorPresetsIpc()
   registerImageConvertIpc()
   // 引擎诊断与重试：bridge 未创建时诊断返回 null、重试返回 false（安全降级）
   registerEngineDiagnosticsIpc()
@@ -32,6 +35,8 @@ export const registerAllIpc = (): void => {
   registerFilePresenceIpc()
   // 预览缓存仅用 mtime/字节数失效，不向渲染进程暴露文件内容或目录能力。
   registerImageFileVersionIpc()
+  // FilmArchive：只读目录选择、固定白名单根与受控打开；解析在 Java 引擎。
+  registerFilmArchiveIpc()
   // AI 网关（联通国际 Uni Token）：V2 AI 能力预留；密钥未配置时调用返回 key-missing 错误。
   registerAiGatewayIpc()
 }

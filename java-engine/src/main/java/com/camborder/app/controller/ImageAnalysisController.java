@@ -45,7 +45,14 @@ public final class ImageAnalysisController {
             throw new ApiException("analysis recipe is required", HttpStatus.BAD_REQUEST,
                     "IMAGE_ANALYSIS_RECIPE_REQUIRED");
         }
-        if (request.getStage() == null || request.getStage().isBlank()) {
+        if (request.getPurpose() != null && !request.getPurpose().isBlank()
+                && !com.camborder.app.util.ImageProcessingValidator.ANALYSIS_PURPOSES
+                .contains(request.getPurpose())) {
+            throw new ApiException("analysis purpose is invalid", HttpStatus.BAD_REQUEST,
+                    "IMAGE_ANALYSIS_INVALID_PURPOSE");
+        }
+        final boolean neutral = "neutral-balance".equals(request.getPurpose());
+        if (!neutral && (request.getStage() == null || request.getStage().isBlank())) {
             throw new ApiException("analysis stage is required", HttpStatus.BAD_REQUEST,
                     DefaultImageAnalysisService.CODE_INVALID_STAGE);
         }

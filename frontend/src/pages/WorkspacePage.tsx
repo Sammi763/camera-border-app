@@ -27,6 +27,7 @@ import { calculateOutputPixelDimensions } from "../features/settings/utils/image
 import { buildNamingPreview, effectiveExportFormat } from "../features/preview/hooks/useExportController"
 import { SettingsPanel } from "../features/settings/components/SettingsPanel"
 import { FilmEditingPanel } from "../features/editing/components/FilmEditingPanel"
+import { FilmReferencePanel } from "../features/editing/components/FilmReferencePanel"
 import { ShootingPresetPanel } from "../features/metadata/components/ShootingPresetPanel"
 import { AssetLibraryPanel } from "../features/metadata/components/AssetLibraryPanel"
 import { PhotoIdentityPanel } from "../features/metadata/components/PhotoIdentityPanel"
@@ -1056,16 +1057,19 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
       id: "film",
       label: "底片",
       content: (
-        <FilmEditingPanel
-          config={queue.activeImageProcessing}
-          error={queue.activeImageProcessingError}
-          sourcePath={queue.activeItem?.sourcePath ?? null}
-          capabilities={capabilities}
-          onChange={queue.setActiveImageProcessing}
-          operationScope={operationScope}
-          onOperationScopeChange={setOperationScope}
-          onSync={queue.syncImageProcessing}
-        />
+        <div className="workspaceFilmTab">
+          <FilmEditingPanel
+            config={queue.activeImageProcessing}
+            error={queue.activeImageProcessingError}
+            sourcePath={queue.activeItem?.sourcePath ?? null}
+            capabilities={capabilities}
+            onChange={queue.setActiveImageProcessing}
+            operationScope={operationScope}
+            onOperationScopeChange={setOperationScope}
+            onSync={queue.syncImageProcessing}
+          />
+          <FilmReferencePanel />
+        </div>
       )
     },
     {

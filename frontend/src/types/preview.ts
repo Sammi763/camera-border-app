@@ -326,7 +326,16 @@ export type FilmDigitizationCapability = {
   readonly license?: string | null
   readonly sha256?: string | null
   readonly inputModes: readonly string[]
+  readonly inputSources?: readonly string[]
+  readonly filmPolarities?: readonly string[]
   readonly analysisStages: readonly string[]
+  readonly analysisPurposes?: readonly string[]
+  readonly schemaVersions?: readonly number[]
+  readonly filmReferenceLibraries?: {
+    readonly available: boolean
+    readonly mode?: string | null
+    readonly reason?: string | null
+  } | null
   readonly outputs: Readonly<Record<string, boolean>>
   readonly reason?: string | null
 }

@@ -102,11 +102,38 @@ if [ ! -f "$EXIFTOOL_CHECK" ] || [ ! -f "$PROFESSIONAL_TOOLS/components.json" ];
   TARGETS="$PROFESSIONAL_TARGET" bash "$ROOT/scripts/fetch-professional-tools.sh"
 fi
 
+if [ "$ARCH" = "x64" ]; then
+  HELPER_NAME="film-raw-helper"
+  if [ "$OS_TAG" = "win" ]; then HELPER_NAME="film-raw-helper.exe"; fi
+  if [ ! -f "$PROFESSIONAL_TOOLS/libraw/$RUNTIME_KEY/$HELPER_NAME" ] \
+      || [ ! -f "$PROFESSIONAL_TOOLS/libraw/$RUNTIME_KEY/helper.json" ]; then
+    TARGET_OS="$OS_TAG" ARCH=x64 bash "$ROOT/scripts/build-libraw-helper-cross.sh"
+  fi
+fi
 if [ "$OS_TAG" = "macos" ] && [ "$ARCH" = "arm64" ]; then
   if [ ! -f "$PROFESSIONAL_TOOLS/libraw/macos-arm64/film-raw-helper" ] \
       || [ ! -f "$PROFESSIONAL_TOOLS/libraw/macos-arm64/helper.json" ]; then
     echo "[package] 构建随包 LibRaw helper（macOS arm64）..."
     bash "$ROOT/scripts/build-libraw-helper.sh"
+  fi
+  if [ ! -f "$PROFESSIONAL_TOOLS/lcms/macos-arm64/liblcms2.2.dylib" ] \
+      || [ ! -f "$PROFESSIONAL_TOOLS/lcms/macos-arm64/lcms2.json" ]; then
+    echo "[package] 构建随包 LittleCMS 2（macOS arm64）..."
+    bash "$ROOT/scripts/build-lcms2.sh"
+  fi
+fi
+if [ "$OS_TAG" = "macos" ] && [ "$ARCH" = "x64" ]; then
+  if [ ! -f "$PROFESSIONAL_TOOLS/lcms/macos-x64/liblcms2.2.dylib" ] \
+      || [ ! -f "$PROFESSIONAL_TOOLS/lcms/macos-x64/lcms2.json" ]; then
+    echo "[package] 构建随包 LittleCMS 2（macOS x64）..."
+    ARCH=x64 bash "$ROOT/scripts/build-lcms2.sh"
+  fi
+fi
+if [ "$OS_TAG" = "win" ] && [ "$ARCH" = "x64" ]; then
+  if [ ! -f "$PROFESSIONAL_TOOLS/lcms/win-x64/lcms2.dll" ] \
+      || [ ! -f "$PROFESSIONAL_TOOLS/lcms/win-x64/lcms2.json" ]; then
+    echo "[package] 构建随包 LittleCMS 2（Windows x64）..."
+    TARGET_OS=win ARCH=x64 bash "$ROOT/scripts/build-lcms2.sh"
   fi
 fi
 

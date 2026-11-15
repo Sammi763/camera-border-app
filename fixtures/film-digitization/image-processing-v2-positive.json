@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 2,
+  "algorithmVersion": "film-color-v2",
+  "inputSource": "encoded-raster",
+  "filmPolarity": "positive",
+  "encodedInput": {
+    "colorSpace": "embedded",
+    "bitDepth": 8,
+    "iccSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "alphaBackground": "white"
+  },
+  "positive": {
+    "exposureEv": 0,
+    "rgbBalanceEv": [0, 0, 0],
+    "blackPoint": 0,
+    "whitePoint": 1,
+    "saturation": 1
+  },
+  "sourceGeometry": {
+    "crop": { "x": 0, "y": 0, "width": 1, "height": 1 },
+    "rotationDegrees": 0
+  },
+  "negative": null
+}

@@ -65,6 +65,23 @@ final class DefaultRenderJobServiceTest {
     }
 
     @Test
+    void fatalErrorTerminatesWholeBatchInsteadOfLeavingRunningStatus() throws Exception {
+        final ImageRenderService renderer = mock(ImageRenderService.class);
+        when(renderer.compose(any(RenderRecipe.class), anyInt(), anyInt()))
+                .thenThrow(new OutOfMemoryError("测试注入，不分配实际大数组"));
+        final DefaultRenderJobService service = service(renderer);
+        final RenderRecipe recipe = new RenderRecipe("/photos/test.png", null, null, null, false);
+        final RenderJobStatusResponse accepted = service.submitJob(new RenderJobRequest(List.of(
+                new RenderJobSnapshot(recipe, export("/exports/first.png")),
+                new RenderJobSnapshot(recipe, export("/exports/second.png")))));
+        final RenderJobStatusResponse terminal = waitForTerminal(service, accepted.getJobId());
+        assertThat(terminal.getStatus()).isEqualTo("failed");
+        assertThat(terminal.getFailed()).isEqualTo(2);
+        assertThat(terminal.getItems().get(0).getError()).contains("内存不足");
+        verify(renderer, times(1)).compose(any(RenderRecipe.class), anyInt(), anyInt());
+    }
+
+    @Test
     void shouldFreezeRecipeAndExportSettingsAtSubmissionTime() throws Exception {
         ImageRenderService imageRenderService = mock(ImageRenderService.class);
         CountDownLatch composeStarted = new CountDownLatch(1);

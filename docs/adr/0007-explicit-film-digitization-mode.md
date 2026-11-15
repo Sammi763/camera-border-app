@@ -1,6 +1,8 @@
 # ADR-0007：显式底片数字化模式（真实 RAW、彩负转正与校色）
 
-- 状态：已接受（范围与边界；实现和验收按 [底片数字化执行方案](../opencode-film-digitization-plan.md) 推进）
+- 状态：已接受（范围与边界；v2 的输入来源/正负分离与 FilmArchive 关联见
+  [ADR-0009](0009-film-color-grading-v2-and-filmarchive.md)；实现和验收按
+  [底片数字化执行方案](../opencode-film-digitization-plan.md) 推进）
 - 决策日期：2026-11-11
 - 权威文档：[docs/opencode-film-digitization-plan.md](../opencode-film-digitization-plan.md)（任务、契约与进度）
 - 权威代码（随任务落地逐步补齐）：`java-engine/.../model/RenderRecipe.java`、`java-engine/.../util/RawDecoder.java`、`java-engine/.../service/ImageRenderService.java`、`frontend/src/features/settings/utils/buildRecipe.ts`、`electron/src/main/protocol.ts`

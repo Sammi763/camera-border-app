@@ -19,10 +19,18 @@ public final class FilmOutputProfile {
         final double[][] adaptation = {{1.04788600322255, 0.02291876517478, -0.05021609531173},
                 {0.02958178249800, 0.99048351849055, -0.01707870770448},
                 {-0.00925188083921, 0.01507260748703, 0.75167813361760}};
-        final ICC_Profile profile = ICC_Profile.getInstance(ICC_Profile.getInstance(ColorSpace.CS_LINEAR_RGB).getData());
-        final byte[] header = profile.getData(ICC_Profile.icSigHead);
+        final byte[] template = ICC_Profile.getInstance(ColorSpace.CS_LINEAR_RGB).getData();
+        final byte[] header = java.util.Arrays.copyOf(template, 128);
         header[8] = 2; header[9] = 0x30;
-        profile.setData(ICC_Profile.icSigHead, header);
+        java.util.Arrays.fill(header, 84, 100, (byte) 0);
+        final java.util.Map<Integer, byte[]> payloads = new java.util.LinkedHashMap<>();
+        final ByteBuffer original = ByteBuffer.wrap(template).order(ByteOrder.BIG_ENDIAN);
+        final int count = original.getInt(128);
+        for (int i = 0; i < count; i++) {
+            final int entry = 132 + i * 12;
+            final int offset = original.getInt(entry + 4), length = original.getInt(entry + 8);
+            payloads.put(original.getInt(entry), java.util.Arrays.copyOfRange(template, offset, offset + length));
+        }
         final int[] tags = {ICC_Profile.icSigRedColorantTag, ICC_Profile.icSigGreenColorantTag,
                 ICC_Profile.icSigBlueColorantTag};
         for (int c = 0; c < 3; c++) {
@@ -34,18 +42,29 @@ public final class FilmOutputProfile {
                 final double value = adaptation[row][0] * xyz[0] + adaptation[row][1] * xyz[1] + adaptation[row][2] * xyz[2];
                 data.putInt((int) Math.round(value * 65536));
             }
-            profile.setData(tags[c], data.array());
+            payloads.put(tags[c], data.array());
         }
         // 显式线性曲线，不能沿用电视 BT.2020 的非线性编码。
         final byte[] trc = ByteBuffer.allocate(14).order(ByteOrder.BIG_ENDIAN)
                 .putInt(0x63757276).putInt(0).putInt(1).putShort((short) 256).array();
         for (int tag : new int[]{ICC_Profile.icSigRedTRCTag, ICC_Profile.icSigGreenTRCTag, ICC_Profile.icSigBlueTRCTag})
-            profile.setData(tag, trc);
+            payloads.put(tag, trc);
         final byte[] name = "Camera Border Linear Rec.2020\0".getBytes(StandardCharsets.US_ASCII);
         final ByteBuffer desc = ByteBuffer.allocate(12 + name.length + 78).order(ByteOrder.BIG_ENDIAN);
         desc.putInt(0x64657363).putInt(0).putInt(name.length).put(name);
-        profile.setData(ICC_Profile.icSigProfileDescriptionTag, desc.array());
-        return profile.getData();
+        payloads.put(ICC_Profile.icSigProfileDescriptionTag, desc.array());
+        // 一次构造完整 ICC，避免 Java 11 的旧 CMM 在逐个改写矩阵标签时拒绝中间状态。
+        int size = 132 + payloads.size() * 12;
+        for (byte[] value : payloads.values()) size += (value.length + 3) & ~3;
+        final ByteBuffer packed = ByteBuffer.allocate(size).order(ByteOrder.BIG_ENDIAN);
+        packed.put(header); packed.putInt(0, size); packed.position(128); packed.putInt(payloads.size());
+        int offset = 132 + payloads.size() * 12;
+        for (java.util.Map.Entry<Integer, byte[]> entry : payloads.entrySet()) {
+            packed.putInt(entry.getKey()).putInt(offset).putInt(entry.getValue().length);
+            System.arraycopy(entry.getValue(), 0, packed.array(), offset, entry.getValue().length);
+            offset += (entry.getValue().length + 3) & ~3;
+        }
+        return packed.array();
     }
 
     public static BufferedImage toLinearRec2020(final FloatRgbImage image) {

@@ -49,10 +49,10 @@ cd .. && pnpm dev
 | 项目 | 冻结范围 |
 |---|---|
 | 平台 | 正式：macOS arm64；候选：macOS x64、Windows x64（Windows 状态为 `SIMULATED`） |
-| 输入 | JPEG、PNG、TIFF、HEIC/HEIF；普通模式 RAW 内嵌 JPEG 预览；底片数字化模式（实施中）真实传感器 RAW |
+| 输入 | JPEG、PNG、TIFF、HEIC/HEIF；普通模式 RAW 内嵌 JPEG 预览；胶片校色 v2 支持已转正扫描/数码正片、真实 RAW、Hasselblad 3FR 与 Flextight FFF（TIFF 容器 RGB16 主图） |
 | 输出 | JPEG 8-bit、PNG 8/16-bit、TIFF 8/16-bit；底片模式另提供 16-bit TIFF 母版 |
 | 固定导出档位 | 快速分享（JPEG 92 / 长边 2048 / sRGB / 移除 GPS/位置）；标准交付（JPEG 95 / 原图尺寸 / 8-bit / 源 ICC + 全部元数据）；高保真归档（TIFF / 原图尺寸 / 源位深 / 源 ICC + 全部元数据） |
-| RAW 边界 | 普通模式只读取内嵌 JPEG，不做真实 RAW 显影；底片数字化模式显式开启后可读真实 RAW，当前实施中、未验收 |
+| RAW 边界 | 普通模式只读取内嵌 JPEG，不做真实 RAW 显影；胶片校色 v2 显式开启后可读真实 RAW/3FR，真实 FFF 读取已验证；物理输入域、胶片专属模型与各平台验收见实施复核 |
 
 PNG 必须作为档位内的格式变体提供：快速分享和标准交付可选 PNG 8-bit，高保真归档可选
 按源位深的 PNG 8/16-bit；这不增加第四个导出档位。标准交付和高保真归档保留 GPS/位置；
@@ -61,7 +61,7 @@ PNG 必须作为档位内的格式变体提供：快速分享和标准交付可�
 [ADR-0007](docs/adr/0007-explicit-film-digitization-mode.md)。RAW 扩展名与样片范围、
 格式/位深/ICC/元数据预期见 [`docs/test-samples.md`](docs/test-samples.md)。
 
-统一术语为：版式、拍摄信息预设、拍摄画幅、边框布局建议。拍摄画幅只产生边框布局建议，
+统一术语为：版式、拍摄信息预设、拍摄画幅、边框布局建议。胶片校色 v2 把输入来源（扫描/RAW/FFF）与正负性质分开；文献关联只读，不自动改色。拍摄画幅只产生边框布局建议，
 不自动裁剪或改变原图尺寸；版式负责排版，拍摄信息预设负责拍摄身份。
 
 ## 当前已实现（工程基线，不等于最终支持）
@@ -120,6 +120,14 @@ PNG 必须作为档位内的格式变体提供：快速分享和标准交付可�
 - `raw-linear` / `base-positive` / `current-positive` 浮点阶段缓存按字节有界，改曲线不重复
   RAW 解码与基础转正，改边框只重做合成；源文件与参考帧使用 SHA-256 内容版本。缓存可关闭做
   逐位回归；预算和调度保护始终生效。详见 [ADR-0008](docs/adr/0008-tuning-coalescing-memory-and-stage-cache.md)。
+- 胶片校色 v2 将 `inputSource` 与 `filmPolarity` 分开：已转正扫描/数码正片跳过反相；
+  彩负才进入片基/光源/密度。已编码栅格必须显式选择 ICC/sRGB/Adobe RGB/线性输入，
+  无 ICC 不静默猜测；透明输入按配方声明背景在 float32 合成。Flextight FFF 只读 RGB16
+  主图并按 256 行分块解码。共享契约见 [ADR-0009](docs/adr/0009-film-color-grading-v2-and-filmarchive.md)。
+- 工作台「底片」页签内的资料参考只读关联本机 FilmArchive：文献卡片显示来源、出版号/日期
+  线索、SHA-256、修订与缺口；安装包另带冻结研究索引（来源链接/别名/缺口），PDF 由 Electron
+  白名单根受控打开。文献不是胶片 ID，
+  选择资料卡不会自动改色。
 
 ### 多选批量工作流
 
@@ -257,3 +265,5 @@ Linux、Windows arm64 和移动端也不在发行范围内。
 [docs/release-checklist.md](docs/release-checklist.md) 记录候选结果，Windows 不得写成平台验收 `PASS`。代码签名、公证不属于当前测试包要求；
 自动更新属于明确不做能力。完整任务拆分见 [docs/tasks.md](docs/tasks.md)，产品规划与优先级见
 [docs/prd.md](docs/prd.md)。
+
+个人校色观感可独立保存、应用与删除，并在桌面应用重启后恢复。底片资料支持离线型号/别称检索，首批厂商特性曲线只读展示；提取点集不等于已标定胶片模型。实际大图与候选包证据见 [胶片校色实施复核](docs/film-color-review-20261112.md)。

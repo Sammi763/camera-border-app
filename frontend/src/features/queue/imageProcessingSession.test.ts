@@ -24,3 +24,44 @@ describe("底片会话嵌套配置恢复", () => {
     expect(result.error).toBeTruthy()
   })
 })
+
+describe("v2 胶片校色会话恢复", () => {
+  const v2 = {
+    schemaVersion: 2,
+    algorithmVersion: "film-color-v2",
+    inputSource: "encoded-raster",
+    filmPolarity: "positive",
+    encodedInput: { colorSpace: "srgb", bitDepth: 8 },
+    positive: { exposureEv: 0.4 }
+  }
+
+  it("保留正片来源与正负性质，不要求 negative", () => {
+    const result = migrateImageProcessing(v2)
+    expect(result.error).toBeNull()
+    expect(result.config?.schemaVersion).toBe(2)
+    expect(result.config?.inputSource).toBe("encoded-raster")
+    expect(result.config?.filmPolarity).toBe("positive")
+  })
+
+  it.each([
+    { ...v2, algorithmVersion: "film-digitization-v1" },
+    { ...v2, inputSource: "scanner-mode" },
+    { ...v2, filmPolarity: "negative" },
+    { ...v2, encodedInput: null },
+    { ...v2, sourceGeometry: "broken" }
+  ])("损坏或未知 v2 配置关闭处理：%j", (value) => {
+    const result = migrateImageProcessing(value)
+    expect(result.config).toBeNull()
+    expect(result.error).toBeTruthy()
+  })
+})
+
+it("拒绝损坏的 v2 输入域、位深和超界裁切", () => {
+  const base = { schemaVersion: 2, algorithmVersion: "film-color-v2", filmPolarity: "positive", inputSource: "encoded-raster", encodedInput: { colorSpace: "srgb", bitDepth: 16 } }
+  for (const config of [
+    { ...base, encodedInput: { colorSpace: "unknown", bitDepth: 16 } },
+    { ...base, encodedInput: { colorSpace: "srgb", bitDepth: 32 } },
+    { ...base, sourceGeometry: { crop: { x: .9, y: 0, width: .5, height: 1 } } },
+    { ...base, positive: { exposureEv: 20 } }
+  ]) expect(migrateImageProcessing(config).config).toBeNull()
+})

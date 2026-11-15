@@ -23,6 +23,8 @@ public final class ImageAnalysisRequest {
 
     private RenderRecipe recipe;
     private String stage;
+    /** histogram（默认）或 neutral-balance（从基础正片生成中性区域建议）。 */
+    private String purpose;
     /** 可选 ROI；null 表示完整源图。 */
     private ImageProcessingConfig.NormalizedCrop roi;
 
@@ -30,6 +32,8 @@ public final class ImageAnalysisRequest {
     public void setRecipe(final RenderRecipe recipe) { this.recipe = recipe; }
     public String getStage() { return stage; }
     public void setStage(final String stage) { this.stage = stage; }
+    public String getPurpose() { return purpose; }
+    public void setPurpose(final String purpose) { this.purpose = purpose; }
     public ImageProcessingConfig.NormalizedCrop getRoi() { return roi; }
     public void setRoi(final ImageProcessingConfig.NormalizedCrop roi) { this.roi = roi; }
 }

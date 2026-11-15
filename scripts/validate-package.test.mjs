@@ -122,11 +122,33 @@ const makeBundle = async (root, platform, arch) => {
   await writeFile(path.join(root, "professional-tools", "licenses", "ExifTool-LICENSE.txt"), "ExifTool license")
   await writeFile(path.join(root, "professional-tools", "licenses", "TwelveMonkeys-LICENSE.txt"), "TwelveMonkeys license")
   await writeFile(path.join(legalPath, "LICENSE"), "JRE license")
-  if (platform === "darwin" && arch === "arm64") {
-    const helper = makeMachO(0x0100000c)
-    const helperDirectory = path.join(root, "professional-tools", "libraw", "macos-arm64")
+  if (platform === "win32") {
+    const lcmsDirectory = path.join(root, "professional-tools", "lcms", "win-x64")
+    const lcms = makePe()
+    await mkdir(lcmsDirectory, { recursive: true })
+    await writeFile(path.join(lcmsDirectory, "lcms2.dll"), lcms)
+    await writeFile(path.join(lcmsDirectory, "lcms2.json"), JSON.stringify({
+      schemaVersion: 1, component: "lcms2", version: "2.19", sha256: sha256(lcms)
+    }))
+  }
+  if (platform === "darwin") {
+    const lcmsTag = arch === "arm64" ? "macos-arm64" : "macos-x64"
+    const lcmsDirectory = path.join(root, "professional-tools", "lcms", lcmsTag)
+    const lcms = makeMachO(arch === "arm64" ? 0x0100000c : 0x01000007)
+    await mkdir(lcmsDirectory, { recursive: true })
+    await writeFile(path.join(lcmsDirectory, "liblcms2.2.dylib"), lcms)
+    await writeFile(path.join(lcmsDirectory, "lcms2.json"), JSON.stringify({
+      schemaVersion: 1,
+      component: "lcms2",
+      version: "2.19",
+      sha256: sha256(lcms)
+    }))
+  }
+  if (platform === "darwin" || platform === "win32") {
+    const helper = platform === "win32" ? makePe() : makeMachO(arch === "arm64" ? 0x0100000c : 0x01000007)
+    const helperDirectory = path.join(root, "professional-tools", "libraw", platform === "win32" ? "win-x64" : `macos-${arch}`)
     await mkdir(helperDirectory, { recursive: true })
-    await writeFile(path.join(helperDirectory, "film-raw-helper"), helper)
+    await writeFile(path.join(helperDirectory, platform === "win32" ? "film-raw-helper.exe" : "film-raw-helper"), helper)
     await writeFile(path.join(helperDirectory, "helper.json"), JSON.stringify({
       schemaVersion: 1,
       component: "libraw",

@@ -153,6 +153,19 @@ public final class DefaultRenderJobService implements RenderJobService {
                 }
             } catch (RuntimeException exception) {
                 record.failItem(index, safeErrorMessage(exception));
+            } catch (Error error) {
+                // Executor 的 Future 会吞掉 Error；必须终结状态，避免永远显示处理中。
+                org.slf4j.LoggerFactory.getLogger(DefaultRenderJobService.class)
+                        .error("导出任务发生致命错误，停止当前批次", error);
+                final String message = error instanceof OutOfMemoryError
+                        ? "导出内存不足，请关闭其他大图任务后重试"
+                        : "导出组件发生严重错误：" + error.getClass().getSimpleName();
+                record.failItem(index, message);
+                for (int remaining = index + 1; remaining < snapshots.size(); remaining++) {
+                    record.failItem(remaining, "同批次因严重错误停止，未执行");
+                }
+                if (error instanceof ThreadDeath) throw error;
+                return;
             }
             if (record.isCancellationRequested()) {
                 // 下一次 startItem 会把剩余 queued 项统一标记为 cancelled。

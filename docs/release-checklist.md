@@ -364,6 +364,10 @@ Windows：
 - [ ] 安装包包含与目标平台匹配的 JRE、Java Engine、ExifTool、HEIC 解码助手、字体及许可证；
 - [ ] macOS arm64 安装包包含 `professional-tools/libraw/macos-arm64/film-raw-helper` 与 `helper.json`，
       二进制 SHA-256/架构/LibRaw 版本与清单一致；底片组件缺失时 `components.libraw.available=false`；
+- [ ] 安装包包含 `professional-tools/lcms/macos-arm64/liblcms2.2.dylib` 与 `lcms2.json`；SHA-256/架构/版本一致，
+      缺失时 `components.lcms2.available=false` 且 ICC 回退不能写成随包 LittleCMS 已验收；
+- [ ] v2 正片、彩负、FFF 扫描输入与 FilmArchive 只读关联至少各有一条成功和失败路径证据；
+      真实 Flextight/8080 万像素/Windows x64 未执行时保持 `NOT_RUN`；
 - [ ] JRE 的 `release`、`NOTICE` 和 Java Engine 的 `Implementation-Version` 随包存在，且
       清单中的厂商、版本、架构与实际资源一致；不得通过删除 `release` 元数据来绕过校验；
 - [ ] `package-manifest.json` 记录版本、完整 40 位源码 commit、目标平台/架构、组件版本、许可证和 SHA-256；

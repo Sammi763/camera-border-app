@@ -82,3 +82,32 @@ final class FilmStageKeysTest {
         return positive;
     }
 }
+
+/** v2 输入解释、ICC 与正负性质必须进入缓存键。 */
+final class FilmStageKeysV2Test {
+    @Test
+    void v2RawKeyTracksSourcePolarityIccAndDecoderVersion() {
+        final ImageProcessingConfig config = new ImageProcessingConfig();
+        config.setSchemaVersion(ImageProcessingConfig.SCHEMA_VERSION_V2);
+        config.setAlgorithmVersion(ImageProcessingConfig.ALGORITHM_VERSION_V2);
+        config.setInputSource("encoded-raster");
+        config.setFilmPolarity("positive");
+        final ImageProcessingConfig.EncodedInput encoded = new ImageProcessingConfig.EncodedInput();
+        encoded.setColorSpace("embedded");
+        encoded.setBitDepth(8);
+        encoded.setIccSha256("a".repeat(64));
+        config.setEncodedInput(encoded);
+        final String first = FilmStageKeys.rawKey(config, 10, 10, "sha256:a;size:1",
+                "encoded-raster-v2|icc-a");
+
+        encoded.setIccSha256("b".repeat(64));
+        assertThat(FilmStageKeys.rawKey(config, 10, 10, "sha256:a;size:1",
+                "encoded-raster-v2|icc-b")).isNotEqualTo(first);
+        config.setFilmPolarity("color-negative");
+        assertThat(FilmStageKeys.rawKey(config, 10, 10, "sha256:a;size:1",
+                "encoded-raster-v2|icc-a")).isNotEqualTo(first);
+        config.setInputSource("linear-tiff");
+        assertThat(FilmStageKeys.rawKey(config, 10, 10, "sha256:a;size:1",
+                "encoded-raster-v2|icc-a")).isNotEqualTo(first);
+    }
+}

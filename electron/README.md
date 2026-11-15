@@ -110,9 +110,20 @@ JavaBridge 的实际端口只存在于主进程，不通过 preload、IPC 或运
   不为普通模式携带、注入或启动任何外部 RAW 显影工具。底片数字化模式计划使用随包、固定
   版本的受控 helper，当前实施中，见
   [ADR-0007](../docs/adr/0007-explicit-film-digitization-mode.md)。
-- LibRaw helper：仅 macOS arm64 随包时通过 `CAMBORDER_LIBRAW_HELPER_PATH` 注入 Java 引擎；
+- LibRaw helper：macOS arm64/x64 与 Windows x64 均随包，通过 `CAMBORDER_LIBRAW_HELPER_PATH` 注入 Java 引擎；
   缺失时不注入，Java 能力探测为 false，不回退 PATH。构建见
   [docs/cookbook.md](../docs/cookbook.md) 与 [java-engine/README.md](../java-engine/README.md)。
 - 引擎端口可用环境变量 `CAMBORDER_ENGINE_PORT` 覆盖（默认 8099）。
 - macOS 本地开发：`scripts/prepare-electron-dev.mjs` 会检查 Electron.app 是否完整，并修复 npm 开发副本的 ad-hoc 签名/隔离属性；它只作用于 `node_modules`，不参与正式打包签名。若依赖安装中断，可手动执行根目录 `pnpm prepare:electron-dev`。
 - macOS 打包签名：`build-hooks/afterPack.cjs` 在 DMG 前对嵌套 framework/helper 与外层 ad-hoc 签名，**不重签 java-runtime**（会破坏 Temurin hardened-runtime 签名导致 SIGKILL）。
+
+## FilmArchive 本机只读关联
+
+- `selectFilmArchiveFolder`：系统目录选择；主进程校验根目录存在 `catalog.json`（或 `Docs/catalog.json`），并把真实路径写入 `userData/film-archive.json`。
+- `getFilmArchiveStatus`：只返回固定根路径和是否仍可用，不扫描目录内容。
+- `openFilmReferenceDocument`：仅允许当前白名单根内、扩展名受控（PDF/TXT/HTML/MD/图片）的常规文件，交给系统默认应用打开。
+- `openFilmReferenceSource`：仅允许 http(s) 且不含凭据的来源链接。catalog 解析、SHA-256 合并与文献/胶片关联在 Java 引擎完成，渲染进程不获得文件系统权限。
+
+## 个人校色观感存储
+
+`readFilmColorPresets` / `writeFilmColorPresets` 只访问 `userData/film-color-presets.json`，写入受大小及数量限制并通过同目录临时文件原子替换。读取失败向上传递，避免空列表覆盖旧数据；前端负责版本、参数范围及曲线合法性。

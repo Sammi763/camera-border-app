@@ -102,6 +102,9 @@ export type DesktopApi = {
   /** 将 Roll 胶卷数据 JSON 字符串写入 userData 中的 rolls 文件。（旧版兼容，不扩展） */
   readonly writeRolls: (json: string) => Promise<void>
   /** 读取 userData 中的摄影预设 JSON 字符串。文件不存在时返回 "[]"。 */
+  /** 独立校色观感预设；不包含片基、源文件或裁切。 */
+  readonly readFilmColorPresets?: () => Promise<string>
+  readonly writeFilmColorPresets?: (json: string) => Promise<void>
   readonly readPresets: () => Promise<string>
   /** 将摄影预设 JSON 字符串写入 userData 中的预设文件。 */
   readonly writePresets: (json: string) => Promise<void>
@@ -166,6 +169,20 @@ export type DesktopApi = {
    */
   readonly checkImagePaths: (paths: readonly string[]) => Promise<readonly boolean[]>
   /**
+   * 选择本机 FilmArchive 目录。主进程只校验目录结构并记住白名单根；
+   * 目录内容由 Java 引擎只读解析，渲染进程不获得文件系统权限。
+   */
+  readonly selectFilmArchiveFolder: () => Promise<FilmArchiveSelection | null>
+  /** 读取上次选择的 FilmArchive 目录状态；不存在/已移走时 available=false。 */
+  readonly getFilmArchiveStatus: () => Promise<FilmArchiveStatus>
+  /**
+   * 在系统默认应用中打开已注册 FilmArchive 根下的文献文件。
+   * 路径必须位于当前白名单根内且扩展名受限；失败返回 false。
+   */
+  readonly openFilmReferenceDocument: (documentPath: string) => Promise<boolean>
+  /** 用系统浏览器打开 http(s) 来源链接；其他协议一律拒绝。 */
+  readonly openFilmReferenceSource: (sourceUrl: string) => Promise<boolean>
+  /**
    * 获取预览缓存失效所需的最小文件版本信息。
    * 仅接受受支持图片扩展名与数量上限内的绝对路径；结果与输入等长，非法/缺失项为 null。
    */
@@ -213,6 +230,18 @@ export type ImageFileVersion = {
   readonly sizeBytes: number
 }
 
+/** 本机 FilmArchive 目录选择结果；只包含目录与 catalog 路径。 */
+export type FilmArchiveSelection = {
+  readonly libraryPath: string
+  readonly catalogPath: string
+}
+
+/** 已固定的 FilmArchive 目录状态；不返回任意文件列表。 */
+export type FilmArchiveStatus = {
+  readonly libraryPath: string | null
+  readonly available: boolean
+}
+
 /**
  * 引擎托管诊断信息（引擎启动失败页面使用）。
  * 由主进程根据引擎 jar / 运行时 / 进程 / 端口状态分类生成。
@@ -248,6 +277,8 @@ export const IPC_CHANNELS = {
   WRITE_ASSETS: "desktop:write-assets",
   READ_ROLLS: "desktop:read-rolls",
   WRITE_ROLLS: "desktop:write-rolls",
+  READ_FILM_COLOR_PRESETS: "desktop:read-film-color-presets",
+  WRITE_FILM_COLOR_PRESETS: "desktop:write-film-color-presets",
   READ_PRESETS: "desktop:read-presets",
   WRITE_PRESETS: "desktop:write-presets",
   EXPORT_TEMPLATE_JSON: "desktop:export-template-json",
@@ -263,6 +294,10 @@ export const IPC_CHANNELS = {
   SHOW_NOTIFICATION: "desktop:show-notification",
   LOAD_LOCAL_IMAGE_PREVIEW: "desktop:load-local-image-preview",
   CHECK_IMAGE_PATHS: "desktop:check-image-paths",
+  SELECT_FILM_ARCHIVE_FOLDER: "desktop:select-film-archive-folder",
+  GET_FILM_ARCHIVE_STATUS: "desktop:get-film-archive-status",
+  OPEN_FILM_REFERENCE_DOCUMENT: "desktop:open-film-reference-document",
+  OPEN_FILM_REFERENCE_SOURCE: "desktop:open-film-reference-source",
   GET_IMAGE_FILE_VERSIONS: "desktop:get-image-file-versions",
   OPEN_LOG_FILE: "desktop:open-log-file",
   AI_GATEWAY_GET_STATUS: "ai-gateway:get-status",

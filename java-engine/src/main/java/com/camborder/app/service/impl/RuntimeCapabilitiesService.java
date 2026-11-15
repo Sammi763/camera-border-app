@@ -44,6 +44,7 @@ public final class RuntimeCapabilitiesService implements CapabilitiesService {
     private final String heicDecoderAvailable;
     private final String bundledFontsDirectory;
     private final String librawHelperPath;
+    private final String lcms2Path;
     private final ObjectMapper objectMapper;
     private final Map<String, String> componentChecksums = new LinkedHashMap<>();
     private boolean tiffPluginAvailable;
@@ -51,6 +52,7 @@ public final class RuntimeCapabilitiesService implements CapabilitiesService {
     private boolean componentManifestValid;
     private ComponentProbe exifToolProbe;
     private LibRawProbe librawProbe;
+    private Lcms2Probe lcms2Probe;
 
     @Autowired
     public RuntimeCapabilitiesService(
@@ -59,12 +61,14 @@ public final class RuntimeCapabilitiesService implements CapabilitiesService {
             @Value("${CAMBORDER_HEIC_DECODER_AVAILABLE:false}") final String heicDecoderAvailable,
             @Value("${CAMBORDER_BUNDLED_FONTS_DIR:}") final String bundledFontsDirectory,
             @Value("${CAMBORDER_LIBRAW_HELPER_PATH:}") final String librawHelperPath,
+            @Value("${CAMBORDER_LCMS2_PATH:}") final String lcms2Path,
             final ObjectMapper objectMapper) {
         this.exifToolPath = exifToolPath == null ? "" : exifToolPath.trim();
         this.componentManifestPath = componentManifestPath == null ? "" : componentManifestPath.trim();
         this.heicDecoderAvailable = heicDecoderAvailable == null ? "false" : heicDecoderAvailable.trim();
         this.bundledFontsDirectory = bundledFontsDirectory == null ? "" : bundledFontsDirectory.trim();
         this.librawHelperPath = librawHelperPath == null ? "" : librawHelperPath.trim();
+        this.lcms2Path = lcms2Path == null ? "" : lcms2Path.trim();
         this.objectMapper = objectMapper;
     }
 
@@ -72,18 +76,26 @@ public final class RuntimeCapabilitiesService implements CapabilitiesService {
     public RuntimeCapabilitiesService(final String exifToolPath, final String componentManifestPath,
                                       final String heicDecoderAvailable, final String bundledFontsDirectory,
                                       final ObjectMapper objectMapper) {
-        this(exifToolPath, componentManifestPath, heicDecoderAvailable, bundledFontsDirectory, "", objectMapper);
+        this(exifToolPath, componentManifestPath, heicDecoderAvailable, bundledFontsDirectory, "", "", objectMapper);
+    }
+
+    /** 兼容 LibRaw helper 探测测试；LittleCMS 路径默认不注入。 */
+    public RuntimeCapabilitiesService(final String exifToolPath, final String componentManifestPath,
+                                      final String heicDecoderAvailable, final String bundledFontsDirectory,
+                                      final String librawHelperPath, final ObjectMapper objectMapper) {
+        this(exifToolPath, componentManifestPath, heicDecoderAvailable, bundledFontsDirectory,
+                librawHelperPath, "", objectMapper);
     }
 
     /** 兼容不使用 Spring 的能力探测测试。 */
     public RuntimeCapabilitiesService(final String exifToolPath) {
-        this(exifToolPath, "", "false", "", "", new ObjectMapper());
+        this(exifToolPath, "", "false", "", "", "", new ObjectMapper());
     }
 
     /** 保留阶段五测试和嵌入调用使用的三参数构造器。 */
     public RuntimeCapabilitiesService(final String exifToolPath, final String componentManifestPath,
                                       final ObjectMapper objectMapper) {
-        this(exifToolPath, componentManifestPath, "false", "", "", objectMapper);
+        this(exifToolPath, componentManifestPath, "false", "", "", "", objectMapper);
     }
 
     @PostConstruct
@@ -98,6 +110,7 @@ public final class RuntimeCapabilitiesService implements CapabilitiesService {
         loadComponentManifest();
         exifToolProbe = probeExifTool();
         librawProbe = probeLibRaw();
+        lcms2Probe = probeLcms2();
     }
 
     @Override
@@ -107,6 +120,9 @@ public final class RuntimeCapabilitiesService implements CapabilitiesService {
         }
         if (librawProbe == null) {
             librawProbe = probeLibRaw();
+        }
+        if (lcms2Probe == null) {
+            lcms2Probe = probeLcms2();
         }
         final boolean metadata = exifToolProbe.available;
         final boolean twelveMonkeysAvailable = tiffPluginAvailable && twelveMonkeysManifestValid;
@@ -123,6 +139,9 @@ public final class RuntimeCapabilitiesService implements CapabilitiesService {
         components.put("libraw", new CapabilitiesResponse.Component(
                 librawProbe.available, librawProbe.available ? LIBRAW_VERSION : null,
                 "LGPL-2.1-only OR CDDL-1.0", librawProbe.sha256, librawProbe.reason));
+        components.put("lcms2", new CapabilitiesResponse.Component(
+                lcms2Probe.available, lcms2Probe.available ? lcms2Probe.version : null,
+                "MIT", lcms2Probe.sha256, lcms2Probe.reason));
         FontProbe fonts = probeFonts();
         components.put("fonts", new CapabilitiesResponse.Component(
                 fonts.available, null, "SIL OFL 1.1", null, fonts.reason));
@@ -170,7 +189,23 @@ public final class RuntimeCapabilitiesService implements CapabilitiesService {
         if (librawProbe.available) filmInputs.add("sensor-raw");
         if (twelveMonkeysAvailable) filmInputs.add("linear-tiff");
         film.setInputModes(filmInputs);
+        final java.util.List<String> inputSources = new java.util.ArrayList<>();
+        inputSources.add("encoded-raster");
+        if (librawProbe.available) inputSources.add("camera-raw");
+        if (twelveMonkeysAvailable) {
+            inputSources.add("linear-tiff");
+            inputSources.add("flextight-fff");
+        }
+        film.setInputSources(inputSources);
+        film.setFilmPolarities(java.util.List.of("positive", "color-negative"));
         film.setAnalysisStages(java.util.List.of("raw-linear", "base-positive", "current-positive"));
+        film.setAnalysisPurposes(java.util.List.of("histogram", "neutral-balance"));
+        film.setSchemaVersions(java.util.List.of(1, 2));
+        final CapabilitiesResponse.ReferenceLibraryCapability references =
+                new CapabilitiesResponse.ReferenceLibraryCapability();
+        references.setAvailable(true);
+        references.setReason(null);
+        film.setFilmReferenceLibraries(references);
         final Map<String, Boolean> filmOutputs = new LinkedHashMap<>();
         filmOutputs.put("srgb-jpeg", metadata);
         filmOutputs.put("tiff16-srgb", twelveMonkeysAvailable && metadata);
@@ -204,6 +239,46 @@ public final class RuntimeCapabilitiesService implements CapabilitiesService {
      * LibRaw helper 探测：必须存在、可执行、SHA-256 与随包 helper.json 一致，
      * 且 --version 输出匹配固定版本。缺失/篡改/错误版本一律 fail-closed。
      */
+    private Lcms2Probe probeLcms2() {
+        if (lcms2Path.isBlank()) {
+            return new Lcms2Probe(false, null, null, "未配置随包 LittleCMS 2");
+        }
+        final Path library;
+        try {
+            library = Path.of(lcms2Path);
+        } catch (RuntimeException exception) {
+            return new Lcms2Probe(false, null, null, "随包 LittleCMS 2 路径非法");
+        }
+        if (!Files.isRegularFile(library) || !Files.isReadable(library)) {
+            return new Lcms2Probe(false, null, null, "随包 LittleCMS 2 不存在或不可读");
+        }
+        final Path manifest = library.getParent() == null ? null
+                : library.getParent().resolve("lcms2.json");
+        try {
+            if (manifest == null || !Files.isRegularFile(manifest)) {
+                return new Lcms2Probe(false, null, null, "随包 LittleCMS 2 清单缺失");
+            }
+            final JsonNode root = objectMapper.readTree(Files.readString(manifest));
+            final String expected = root.path("sha256").asText("");
+            final String version = root.path("version").asText("");
+            final String actual = sha256File(library);
+            if (expected.isBlank() || !expected.equalsIgnoreCase(actual)) {
+                return new Lcms2Probe(false, actual, null, "随包 LittleCMS 2 校验和不匹配");
+            }
+            if (!com.camborder.app.util.Lcms2ColorTransform.isAvailable()) {
+                return new Lcms2Probe(false, actual, version, "随包 LittleCMS 2 无法加载");
+            }
+            final String expectedCmm = root.path("cmmVersion").asText("");
+            if (!expectedCmm.isBlank()
+                    && !expectedCmm.equals(com.camborder.app.util.Lcms2ColorTransform.version())) {
+                return new Lcms2Probe(false, actual, version, "随包 LittleCMS 2 CMM 版本与清单不一致");
+            }
+            return new Lcms2Probe(true, actual, version, null);
+        } catch (IOException | RuntimeException exception) {
+            return new Lcms2Probe(false, null, null, "随包 LittleCMS 2 清单或加载探测失败");
+        }
+    }
+
     private LibRawProbe probeLibRaw() {
         if (librawHelperPath.isBlank()) {
             return new LibRawProbe(false, null, "未配置随包 LibRaw helper");
@@ -454,6 +529,21 @@ public final class RuntimeCapabilitiesService implements CapabilitiesService {
 
         private ComponentProbe(final boolean available, final String version, final String reason) {
             this.available = available;
+            this.version = version;
+            this.reason = reason;
+        }
+    }
+
+    private static final class Lcms2Probe {
+        private final boolean available;
+        private final String sha256;
+        private final String version;
+        private final String reason;
+
+        private Lcms2Probe(final boolean available, final String sha256,
+                           final String version, final String reason) {
+            this.available = available;
+            this.sha256 = sha256;
             this.version = version;
             this.reason = reason;
         }

@@ -61,6 +61,8 @@ export const exposeDesktopApi = (): void => {
       ipcRenderer.invoke(IPC_CHANNELS.READ_ROLLS),
     writeRolls: (json: string): Promise<void> =>
       ipcRenderer.invoke(IPC_CHANNELS.WRITE_ROLLS, json),
+    readFilmColorPresets: (): Promise<string> => ipcRenderer.invoke(IPC_CHANNELS.READ_FILM_COLOR_PRESETS),
+    writeFilmColorPresets: (json: string): Promise<void> => ipcRenderer.invoke(IPC_CHANNELS.WRITE_FILM_COLOR_PRESETS, json),
     readPresets: (): Promise<string> =>
       ipcRenderer.invoke(IPC_CHANNELS.READ_PRESETS),
     writePresets: (json: string): Promise<void> =>
@@ -95,6 +97,14 @@ export const exposeDesktopApi = (): void => {
       ipcRenderer.invoke(IPC_CHANNELS.LOAD_LOCAL_IMAGE_PREVIEW, imagePath, maxWidth, maxHeight),
     checkImagePaths: (paths: readonly string[]): Promise<readonly boolean[]> =>
       ipcRenderer.invoke(IPC_CHANNELS.CHECK_IMAGE_PATHS, paths),
+    selectFilmArchiveFolder: (): Promise<import("../types/desktopApi.js").FilmArchiveSelection | null> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SELECT_FILM_ARCHIVE_FOLDER),
+    getFilmArchiveStatus: (): Promise<import("../types/desktopApi.js").FilmArchiveStatus> =>
+      ipcRenderer.invoke(IPC_CHANNELS.GET_FILM_ARCHIVE_STATUS),
+    openFilmReferenceDocument: (documentPath: string): Promise<boolean> =>
+      ipcRenderer.invoke(IPC_CHANNELS.OPEN_FILM_REFERENCE_DOCUMENT, documentPath),
+    openFilmReferenceSource: (sourceUrl: string): Promise<boolean> =>
+      ipcRenderer.invoke(IPC_CHANNELS.OPEN_FILM_REFERENCE_SOURCE, sourceUrl),
     getImageFileVersions: (paths: readonly string[]): Promise<readonly (import("../types/desktopApi.js").ImageFileVersion | null)[]> =>
       ipcRenderer.invoke(IPC_CHANNELS.GET_IMAGE_FILE_VERSIONS, paths),
     openLogFile: (logPath: string): Promise<boolean> =>

@@ -29,7 +29,10 @@ public final class FilmStageKeys {
                                 final int height, final String sourceVersion,
                                 final String decoderVersion) {
         final StringBuilder value = new StringBuilder("raw-linear|")
+                .append(config.getSchemaVersion()).append('|')
                 .append(config.getInputMode()).append('|')
+                .append(config.getInputSource()).append('|')
+                .append(config.getFilmPolarity()).append('|')
                 .append(config.getAlgorithmVersion()).append('|')
                 .append(FloatRgbImage.WORKING_COLOR_SPACE).append('|')
                 .append(width).append('x').append(height).append('|')
@@ -49,6 +52,22 @@ public final class FilmStageKeys {
                     .append(linear.getColorSpace()).append(',')
                     .append(linear.getBitDepth()).append(',')
                     .append(nullSafe(linear.getIccSha256()));
+        }
+        final ImageProcessingConfig.EncodedInput encoded = config.getEncodedInput();
+        if (encoded != null) {
+            value.append("|encoded:").append(encoded.getColorSpace()).append(',')
+                    .append(encoded.getBitDepth()).append(',')
+                    .append(nullSafe(encoded.getIccSha256())).append(',')
+                    .append(encoded.getAlphaBackground());
+        }
+        final ImageProcessingConfig.FlextightInput fff = config.getFlextightInput();
+        if (fff != null) {
+            value.append("|fff:").append(fff.getDevice()).append(',')
+                    .append(fff.getMainImage()).append(',')
+                    .append(fff.getColorSpace()).append(',')
+                    .append(fff.getTransferFunction()).append(',')
+                    .append(fff.getBitDepth()).append(',')
+                    .append(nullSafe(fff.getIccSha256()));
         }
         return hash(value.toString());
     }

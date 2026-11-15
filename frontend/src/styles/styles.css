@@ -5574,3 +5574,51 @@ textarea:focus-visible {
     display: none;
   }
 }
+
+/* FilmArchive 资料卡：只读、可检索，不与校色参数混排。 */
+.filmReferenceList {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.filmReferenceCard {
+  border: 1px solid var(--studio-border, #d8d2c8);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--studio-panel, rgba(255, 255, 255, 0.62));
+}
+
+.filmReferenceCard header {
+  display: grid;
+  gap: 2px;
+}
+
+.filmReferenceCard ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.filmReferenceActions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.filmReferenceActiveLink {
+  font-weight: 600;
+  color: var(--studio-accent, #8a5a2b);
+}
+
+.filmReferenceCompare {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.filmReferenceCompare img {
+  max-width: 100%;
+  max-height: 32vh;
+  object-fit: contain;
+  border-radius: 8px;
+}

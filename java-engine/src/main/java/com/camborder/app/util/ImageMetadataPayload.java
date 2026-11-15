@@ -86,18 +86,27 @@ public final class ImageMetadataPayload {
             if (!Files.isRegularFile(path) || !Files.isReadable(path)) {
                 return empty();
             }
-            final byte[] bytes = Files.readAllBytes(path);
-            if (bytes.length == 0) {
+            // TIFF/FFF 可能非常大；先读头部判断容器，TIFF 用随机访问 metadata，
+            // 不把整份文件读入内存。JPEG/PNG 的 APP/iCCP 解析仍按文件字节进行。
+            final byte[] header = new byte[16];
+            final int headerLength;
+            try (InputStream input = Files.newInputStream(path)) {
+                headerLength = input.read(header);
+            }
+            if (headerLength <= 0) {
                 return new ImageMetadataPayload(null, null, true, null, false, false);
             }
+            final byte[] prefix = headerLength == header.length
+                    ? header : java.util.Arrays.copyOf(header, headerLength);
+            if (isTiff(prefix)) {
+                return readTiff(path);
+            }
+            final byte[] bytes = Files.readAllBytes(path);
             if (startsWith(bytes, JPEG_SIGNATURE)) {
                 return readJpeg(bytes);
             }
             if (startsWith(bytes, PNG_SIGNATURE)) {
                 return readPng(bytes);
-            }
-            if (isTiff(bytes)) {
-                return readTiff(path);
             }
             return new ImageMetadataPayload(null, null, true, null, false, false);
         } catch (IOException | RuntimeException ignored) {

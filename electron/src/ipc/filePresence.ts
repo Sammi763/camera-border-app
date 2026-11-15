@@ -12,7 +12,7 @@ export type ImageFileVersion = {
 /** 会话恢复允许检查的图片扩展名；与导入对话框白名单保持一致。 */
 const IMAGE_EXTENSIONS = new Set([
   ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".heif",
-  ".nef", ".cr2", ".cr3", ".arw", ".raf", ".dng", ".orf", ".rw2", ".pef"
+  ".nef", ".cr2", ".cr3", ".arw", ".raf", ".dng", ".orf", ".rw2", ".pef", ".crw", ".nrw", ".sr2", ".srf", ".raw", ".rwl", ".iiq", ".mos", ".mrw", ".srw", ".x3f", ".dcr", ".kdc", ".mef", ".erf", ".3fr", ".fff"
 ])
 
 const MAX_PATHS_PER_REQUEST = 200

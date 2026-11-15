@@ -217,19 +217,37 @@ const validateBundle = async ({ bundleDir, platform, arch, installed = false }) 
   if (typeof releaseProperties.IMPLEMENTOR !== "string" || typeof releaseProperties.JAVA_RUNTIME_VERSION !== "string") {
     throw new Error("JRE release 缺少 vendor 或 version")
   }
-  if (platform === "win32") await requirePeX64(java, "java-runtime/bin/java.exe")
-  else await requireMachOArch(java, arch, "java-runtime/Contents/Home/bin/java")
+  if (platform === "win32") {
+    await requirePeX64(java, "java-runtime/bin/java.exe")
+    const lcms2 = filePath(bundleDir, "professional-tools", "lcms", "win-x64", "lcms2.dll")
+    await requireFile(lcms2, "professional-tools/lcms/win-x64/lcms2.dll")
+    await requirePeX64(lcms2, "professional-tools/lcms/win-x64/lcms2.dll")
+    const lcms2Manifest = await readJson(
+      filePath(bundleDir, "professional-tools", "lcms", "win-x64", "lcms2.json"),
+      "professional-tools/lcms/win-x64/lcms2.json"
+    )
+    if (lcms2Manifest.component !== "lcms2" || lcms2Manifest.version !== "2.19") {
+      throw new Error("LittleCMS 2 清单版本不匹配")
+    }
+    if (typeof lcms2Manifest.sha256 !== "string"
+        || await sha256File(lcms2) !== lcms2Manifest.sha256) {
+      throw new Error("LittleCMS 2 SHA-256 不匹配")
+    }
+  } else await requireMachOArch(java, arch, "java-runtime/Contents/Home/bin/java")
 
   const exifTool = filePath(bundleDir, ...exifToolRelativePath(platform))
   if (platform === "win32") await requirePeX64(exifTool, "professional-tools/exiftool/win-x64/exiftool.exe")
   else await requireFile(exifTool, "professional-tools/exiftool/macos/exiftool")
-  if (platform === "darwin" && arch === "arm64") {
-    const librawHelper = filePath(bundleDir, "professional-tools", "libraw", "macos-arm64", "film-raw-helper")
-    await requireFile(librawHelper, "professional-tools/libraw/macos-arm64/film-raw-helper")
-    await requireMachOArch(librawHelper, arch, "professional-tools/libraw/macos-arm64/film-raw-helper")
+  if (platform === "darwin" || platform === "win32") {
+    const tag = platform === "win32" ? "win-x64" : `macos-${arch}`
+    const helperName = platform === "win32" ? "film-raw-helper.exe" : "film-raw-helper"
+    const librawHelper = filePath(bundleDir, "professional-tools", "libraw", tag, helperName)
+    await requireFile(librawHelper, `professional-tools/libraw/${tag}/${helperName}`)
+    if (platform === "win32") await requirePeX64(librawHelper, "LibRaw helper")
+    else await requireMachOArch(librawHelper, arch, "LibRaw helper")
     const librawManifest = await readJson(
-      filePath(bundleDir, "professional-tools", "libraw", "macos-arm64", "helper.json"),
-      "professional-tools/libraw/macos-arm64/helper.json"
+      filePath(bundleDir, "professional-tools", "libraw", tag, "helper.json"),
+      `professional-tools/libraw/${tag}/helper.json`
     )
     if (librawManifest.component !== "libraw" || librawManifest.librawVersion !== "0.22.3") {
       throw new Error("LibRaw helper 清单版本不匹配")
@@ -237,6 +255,23 @@ const validateBundle = async ({ bundleDir, platform, arch, installed = false }) 
     if (typeof librawManifest.binarySha256 !== "string"
         || await sha256File(librawHelper) !== librawManifest.binarySha256) {
       throw new Error("LibRaw helper SHA-256 不匹配")
+    }
+  }
+  if (platform === "darwin") {
+    const lcmsTag = arch === "arm64" ? "macos-arm64" : "macos-x64"
+    const lcms2 = filePath(bundleDir, "professional-tools", "lcms", lcmsTag, "liblcms2.2.dylib")
+    await requireFile(lcms2, `professional-tools/lcms/${lcmsTag}/liblcms2.2.dylib`)
+    await requireMachOArch(lcms2, arch, `professional-tools/lcms/${lcmsTag}/liblcms2.2.dylib`)
+    const lcms2Manifest = await readJson(
+      filePath(bundleDir, "professional-tools", "lcms", lcmsTag, "lcms2.json"),
+      `professional-tools/lcms/${lcmsTag}/lcms2.json`
+    )
+    if (lcms2Manifest.component !== "lcms2" || lcms2Manifest.version !== "2.19") {
+      throw new Error("LittleCMS 2 清单版本不匹配")
+    }
+    if (typeof lcms2Manifest.sha256 !== "string"
+        || await sha256File(lcms2) !== lcms2Manifest.sha256) {
+      throw new Error("LittleCMS 2 SHA-256 不匹配")
     }
   }
   const components = await readJson(
@@ -372,6 +407,21 @@ const createManifest = async ({ bundleDir, installerPath, platform, arch, versio
         sha256: await sha256File(exifPath)
       },
       twelveMonkeys: components.components["twelvemonkeys-imageio"],
+      lcms2: await (async () => {
+        const tag = platform === "win32" ? "win-x64" : (arch === "arm64" ? "macos-arm64" : "macos-x64")
+        const fileName = platform === "win32" ? "lcms2.dll" : "liblcms2.2.dylib"
+        const lcmsPath = filePath(bundleDir, "professional-tools", "lcms", tag, fileName)
+        const lcmsManifest = await readJson(
+          filePath(bundleDir, "professional-tools", "lcms", tag, "lcms2.json"),
+          `professional-tools/lcms/${tag}/lcms2.json`
+        )
+        return {
+          file: `professional-tools/lcms/${tag}/${fileName}`,
+          version: lcmsManifest.version,
+          license: lcmsManifest.license ?? "MIT",
+          sha256: await sha256File(lcmsPath)
+        }
+      })(),
       heic: heicManifest,
       fonts: fontManifest.fonts
     },

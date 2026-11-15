@@ -22,7 +22,7 @@ import {
  */
 export const requestPreview = async (
   request: PreviewRequest,
-  timeoutMs: number = getPreviewRequestTimeoutMs(),
+  timeoutMs: number = request.recipe.imageProcessing == null ? getPreviewRequestTimeoutMs() : 120000,
   signal?: AbortSignal
 ): Promise<PreviewResponse> => {
   let response: Response
@@ -38,7 +38,9 @@ export const requestPreview = async (
       },
       timeoutMs
     )
-  } catch {
+  } catch (error) {
+    if (signal?.aborted) throw signal.reason ?? error
+    if (error !== null && typeof error === "object" && "name" in error && error.name === "TimeoutError") throw new Error("预览处理超时，请重试或检查大图处理状态")
     throw new Error("预览请求失败：引擎不可达")
   }
 

@@ -61,4 +61,4 @@ ColorSpace、EXIF/XMP/IPTC/GPS/ICC/DPI；再用独立图像工具确认 PNG/TIFF
 色差门槛。
 
 
-底片模式按显式 RAW/线性 TIFF 输入定义进入 float32 线性 Rec.2020，不能套用普通模式“无 ICC 按 sRGB”假设。宽色域输出为线性编码加 TRC=1 的匹配 ICC；sRGB 输出执行实际矩阵及传递函数转换。照片与独立装饰层浮点合成后再量化一次，元数据复用受控写回/回读。预检结果仅为预计，完成报告才是输出文件事实；实现与验收入口见 [底片复核记录](film-digitization-review.md)。
+底片模式按显式 RAW/线性 TIFF/扫描栅格/FFF 输入定义进入 float32 线性 Rec.2020，不能套用普通模式“无 ICC 按 sRGB”假设；v2 的扫描栅格无 ICC 时必须显式选择色空间并保存，不能静默猜 sRGB。宽色域输出为线性编码加 TRC=1 的匹配 ICC；sRGB 输出执行实际矩阵及传递函数转换。照片与独立装饰层浮点合成后再量化一次，元数据复用受控写回/回读。预检结果仅为预计，完成报告才是输出文件事实；实现与验收入口见 [底片复核记录](film-digitization-review.md)。

@@ -136,7 +136,11 @@ const QueueRow = ({
               <span className="queueRawBadge" title={getRawFormatName(item.filePath) ?? "RAW 格式"}> RAW</span>
             )}
             {isRawFile(item.filePath) && (
-              <span className="queueRawBadge" title="仅使用 RAW 文件内嵌 JPEG 像素；不执行传感器 RAW 显影"> 内嵌 JPEG</span>
+              <span className="queueRawBadge" title="处理模式由每图配方决定；实际解码事实见引擎预览报告">
+                {item.imageProcessing?.inputSource === "flextight-fff" ? "扫描 RGB16"
+                  : item.imageProcessing?.inputSource === "camera-raw" || item.imageProcessing?.inputMode === "sensor-raw" ? "传感器 RAW"
+                    : item.filePath.toLowerCase().endsWith(".fff") ? "FFF 待解析" : "内嵌 JPEG"}
+              </span>
             )}
             {item.missing === true && (
               <span className="queueRawBadge" title="恢复工作会话时未找到源文件"> 文件丢失</span>
