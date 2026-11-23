@@ -204,7 +204,9 @@ try {
     }
     await mouse("mouseReleased", middle + slider.width / 5, y)
     await wait("松手后精算", () => evalPage("document.querySelector('[data-testid=film-engine-preview]').innerText.includes('引擎结果')"))
-    const exposurePreviews = previewRequests.slice(from).filter(request => request.stage === undefined)
+    const requestsDuringTest = previewRequests.slice(from)
+    const exposurePreviews = requestsDuringTest.filter(request => request.previewQuality != null)
+    evidence.exposure.thumbnailRequests = requestsDuringTest.filter(request => request.maxWidth === 120).length
     evidence.exposure.sliderRequests = exposurePreviews.map(request => ({
       quality: request.previewQuality, exposureEv: request.recipe.imageProcessing.positive.exposureEv
     }))
