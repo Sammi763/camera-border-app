@@ -24,6 +24,7 @@ import type { ImageFileVersion } from "../../../types/runtime"
 
 const THUMB_MAX = 120
 const MAX_CONCURRENT = 2
+const PROCESSING_SETTLE_MS = 1000
 
 type ThumbnailPayload = {
   readonly url: string
@@ -163,8 +164,18 @@ const cachedThumbnailMap = (
 }
 
 const EMPTY_PROCESSING: ReadonlyMap<string, ImageProcessingConfig | null> = new Map()
-export const useThumbnails = (inputPaths: readonly string[], processing: ReadonlyMap<string, ImageProcessingConfig | null> = EMPTY_PROCESSING): Map<string, string> => {
-  const processingSignature = JSON.stringify([...processing])
+export const useThumbnails = (inputPaths: readonly string[], latestProcessing: ReadonlyMap<string, ImageProcessingConfig | null> = EMPTY_PROCESSING): Map<string, string> => {
+  const latestSignature = JSON.stringify([...latestProcessing])
+  const [processingSignature, setProcessingSignature] = useState(latestSignature)
+  const processing = useMemo(() => new Map<string, ImageProcessingConfig | null>(
+    JSON.parse(processingSignature)
+  ), [processingSignature])
+  useEffect(() => {
+    // 调整过程由主预览调度。停稳后只为最终配方更新一次队列缩略图。
+    if (latestSignature === processingSignature) return
+    const timer = window.setTimeout(() => setProcessingSignature(latestSignature), PROCESSING_SETTLE_MS)
+    return () => window.clearTimeout(timer)
+  }, [latestSignature, processingSignature])
   const pathSignature = inputPaths.join("\u0000")
   const filePaths = useMemo(() => [...inputPaths], [pathSignature])
   const [versions, setVersions] = useState<ReadonlyMap<string, ImageFileVersion | null>>(new Map())
