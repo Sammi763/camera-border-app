@@ -103,6 +103,12 @@ public final class FilmProcessingPipeline {
             info = processed.getSourceInfo();
             sourceVersion = processed.getSourceVersion();
         }
+
+        private SourceDescription(final SourceDescription cached) {
+            decode = Processed.copy(cached.decode);
+            info = cached.info;
+            sourceVersion = cached.sourceVersion;
+        }
     }
 
     private String descriptionKey(final RenderRecipe recipe, final String version) {
@@ -121,14 +127,19 @@ public final class FilmProcessingPipeline {
     }
 
     public SourceDescription describeSource(final RenderRecipe recipe) {
-        try (Processed processed = processInternal(recipe, "raw-linear", 0, 0, true, false, false)) {
-            SourceDescription description = descriptions.get(descriptionKey(recipe,
-                    processed.getSourceVersion()));
-            if (description == null) {
-                description = new SourceDescription(processed);
-                descriptions.put(descriptionKey(recipe, processed.getSourceVersion()), description);
-            }
-            return description;
+        final ImageProcessingConfig config = recipe.getImageProcessing();
+        final FilmInputProbe.Probed probed = inputProbe.probe(recipe.getImagePath(), config);
+        final String key = descriptionKey(recipe, probed.getSourceVersion());
+        final SourceDescription cached = descriptions.get(key);
+        if (cached != null) {
+            probeReferences(config);
+            return new SourceDescription(cached);
+        }
+        try (Processed processed = processInternal(recipe, "raw-linear", 0, 0,
+                true, false, false, probed)) {
+            final SourceDescription description = new SourceDescription(processed);
+            descriptions.put(key, description);
+            return new SourceDescription(description);
         }
     }
 
@@ -238,24 +249,25 @@ public final class FilmProcessingPipeline {
 
     /** 分析/对比：完整源图坐标，不做输出合成。 */
     public Processed process(final RenderRecipe recipe, final String stage) {
-        return processInternal(recipe, stage, 0, 0, true, false, false);
+        return processInternal(recipe, stage, 0, 0, true, false, false, null);
     }
 
     /** 预览/导出：按输出上限估算合成、装饰和编码缓冲。 */
     public Processed processForOutput(final RenderRecipe recipe, final String stage,
                                       final int maxWidth, final int maxHeight,
                                       final boolean borderless) {
-        return processInternal(recipe, stage, maxWidth, maxHeight, borderless, true, false);
+        return processInternal(recipe, stage, maxWidth, maxHeight, borderless, true, false, null);
     }
 
     public Processed processInteractivePreview(final RenderRecipe recipe, final int maxWidth,
                                                final int maxHeight) {
-        return processInternal(recipe, "current-positive", maxWidth, maxHeight, false, true, true);
+        return processInternal(recipe, "current-positive", maxWidth, maxHeight, false, true, true, null);
     }
 
     private Processed processInternal(final RenderRecipe recipe, final String stage,
                                       final int maxWidth, final int maxHeight,
-                                      final boolean borderless, final boolean compose, final boolean interactive) {
+                                      final boolean borderless, final boolean compose, final boolean interactive,
+                                      final FilmInputProbe.Probed priorProbe) {
         if (recipe == null || recipe.getImageProcessing() == null) {
             throw new FilmProcessingException("底片处理配置缺失",
                     HttpStatus.BAD_REQUEST, CODE_NO_PROCESSING);
@@ -266,7 +278,8 @@ public final class FilmProcessingPipeline {
                     HttpStatus.BAD_REQUEST, CODE_INVALID_STAGE);
         }
         final ImageProcessingConfig config = recipe.getImageProcessing();
-        final FilmInputProbe.Probed probed = inputProbe.probe(recipe.getImagePath(), config);
+        final FilmInputProbe.Probed probed = priorProbe == null
+                ? inputProbe.probe(recipe.getImagePath(), config) : priorProbe;
         final String sourceVersion = probed.getSourceVersion();
 
         final Map<String, FilmInputProbe.Probed> references = probeReferences(config);

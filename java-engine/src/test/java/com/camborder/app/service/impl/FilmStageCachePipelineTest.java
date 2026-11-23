@@ -81,8 +81,38 @@ final class FilmStageCachePipelineTest {
             }
         }
         assertThat(pipeline.getRawDecodeCount()).isEqualTo(1);
+        pipeline.describeSource(recipe);
+        assertThat(pipeline.getRawDecodeCount()).isEqualTo(1);
         assertThat(pipeline.getBaseComputeCount()).isEqualTo(1);
         assertThat(cache.stages()).containsExactly("base-positive");
+    }
+
+    @Test
+    void previewRejectsStalePixelsAfterSameSizeAndTimeReplacement(@TempDir final Path tempDir) throws Exception {
+        final Path path = FilmTestFixtures.writeLinearTiff(tempDir, 3, 2,
+                FilmTestFixtures.constantSamples(6, new int[]{16000, 16000, 16000}));
+        final Path otherDir = java.nio.file.Files.createDirectory(tempDir.resolve("replacement"));
+        final Path replacement = FilmTestFixtures.writeLinearTiff(otherDir, 3, 2,
+                FilmTestFixtures.constantSamples(6, new int[]{12000, 12000, 12000}));
+        final ImageProcessingConfig config = FilmTestFixtures.linearProcessing();
+        config.setNegative(FilmTestFixtures.manualNegative(new double[]{0.5, 0.5, 0.5}));
+        final RenderRecipe recipe = FilmTestFixtures.recipe(path, config);
+        final FilmProcessingPipeline pipeline = pipeline();
+        final String priorVersion;
+        final float priorValue;
+        try (FilmProcessingPipeline.Processed preview = pipeline.processInteractivePreview(recipe, 100, 100)) {
+            priorVersion = preview.getSourceVersion();
+            priorValue = preview.getImage().get(0, 0, 0);
+        }
+        final java.nio.file.attribute.FileTime modified = java.nio.file.Files.getLastModifiedTime(path);
+        final long size = java.nio.file.Files.size(path);
+        java.nio.file.Files.write(path, java.nio.file.Files.readAllBytes(replacement));
+        java.nio.file.Files.setLastModifiedTime(path, modified);
+        assertThat(java.nio.file.Files.size(path)).isEqualTo(size);
+        try (FilmProcessingPipeline.Processed preview = pipeline.processInteractivePreview(recipe, 100, 100)) {
+            assertThat(preview.getSourceVersion()).isNotEqualTo(priorVersion);
+            assertThat(preview.getImage().get(0, 0, 0)).isGreaterThan(priorValue);
+        }
     }
 
     @Test

@@ -8,6 +8,11 @@ import javax.imageio.ImageIO;
 import javax.imageio.ImageReadParam;
 import javax.imageio.ImageReader;
 import javax.imageio.stream.ImageInputStream;
+import com.twelvemonkeys.imageio.metadata.CompoundDirectory;
+import com.twelvemonkeys.imageio.metadata.Directory;
+import com.twelvemonkeys.imageio.metadata.Entry;
+import com.twelvemonkeys.imageio.metadata.tiff.TIFF;
+import com.twelvemonkeys.imageio.metadata.tiff.TIFFReader;
 import java.awt.Rectangle;
 import java.awt.image.BufferedImage;
 import java.awt.image.ColorModel;
@@ -153,13 +158,17 @@ public final class FilmFlextightReader {
             final ImageReader reader = readers.next();
             try {
                 reader.setInput(input, false, true);
-                final ImageReadParam parameter = reader.getDefaultReadParam();
-                for (int top = 0; top < probe.getHeight(); top += BAND_HEIGHT) {
-                    FilmRequestGuard.check();
-                    final int height = Math.min(BAND_HEIGHT, probe.getHeight() - top);
-                    parameter.setSourceRegion(new Rectangle(0, top, probe.getWidth(), height));
-                    final BufferedImage band = reader.read(0, parameter);
-                    copyBand(band, target, top, srgbInput);
+                if (!readContiguousRgb16(input, target, srgbInput)) {
+                    input.seek(0);
+                    reader.setInput(input, false, true);
+                    final ImageReadParam parameter = reader.getDefaultReadParam();
+                    for (int top = 0; top < probe.getHeight(); top += BAND_HEIGHT) {
+                        FilmRequestGuard.check();
+                        final int height = Math.min(BAND_HEIGHT, probe.getHeight() - top);
+                        parameter.setSourceRegion(new Rectangle(0, top, probe.getWidth(), height));
+                        final BufferedImage band = reader.read(0, parameter);
+                        copyBand(band, target, top, srgbInput);
+                    }
                 }
             } finally {
                 reader.dispose();
@@ -176,6 +185,88 @@ public final class FilmFlextightReader {
                 : "FFF 按显式 " + config.getColorSpace()
                 + " 解释主图；输入 ICC 指纹仅作追溯，不作为输出 profile";
         return new ReadResult(oriented, probe, warning);
+    }
+
+    /** 无压缩交错 RGB16 单条带可直接顺序读取，避免 ImageIO 对每一块重复解码整条 strip。 */
+    private static boolean readContiguousRgb16(final ImageInputStream input,
+                                               final FloatRgbImage target, final boolean srgbInput) throws IOException {
+        final Directory directory;
+        try {
+            input.seek(0);
+            directory = new TIFFReader().read(input);
+        } catch (IOException | RuntimeException exception) {
+            return false;
+        }
+        final Directory tags;
+        if (directory instanceof CompoundDirectory) {
+            final CompoundDirectory directories = (CompoundDirectory) directory;
+            if (directories.directoryCount() == 0) return false;
+            tags = directories.getDirectory(0);
+        } else {
+            tags = directory;
+        }
+        final Entry bits = tags.getEntryById(TIFF.TAG_BITS_PER_SAMPLE);
+        final Entry offsets = tags.getEntryById(TIFF.TAG_STRIP_OFFSETS);
+        final Entry sizes = tags.getEntryById(TIFF.TAG_STRIP_BYTE_COUNTS);
+        final Entry sampleFormat = tags.getEntryById(TIFF.TAG_SAMPLE_FORMAT);
+        if (bits == null || bits.valueCount() != 3 || !allEqual(bits, 16)
+                || (sampleFormat != null && !allEqual(sampleFormat, 1))
+                || tagValue(tags, TIFF.TAG_IMAGE_WIDTH, -1) != target.getWidth()
+                || tagValue(tags, TIFF.TAG_IMAGE_HEIGHT, -1) != target.getHeight()
+                || tagValue(tags, TIFF.TAG_COMPRESSION, 1) != 1
+                || tagValue(tags, TIFF.TAG_PHOTOMETRIC_INTERPRETATION, 0) != 2
+                || tagValue(tags, TIFF.TAG_SAMPLES_PER_PIXEL, 1) != 3
+                || tagValue(tags, TIFF.TAG_PLANAR_CONFIGURATION, 1) != 1
+                || tagValue(tags, TIFF.TAG_FILL_ORDER, 1) != 1
+                || tagValue(tags, TIFF.TAG_PREDICTOR, 1) != 1
+                || tagValue(tags, TIFF.TAG_ROWS_PER_STRIP, target.getHeight()) < target.getHeight()
+                || tags.getEntryById(TIFF.TAG_TILE_OFFSETS) != null
+                || tags.getEntryById(TIFF.TAG_EXTRA_SAMPLES) != null
+                || offsets == null || offsets.valueCount() != 1
+                || sizes == null || sizes.valueCount() != 1) return false;
+
+        final long bytes = (long) target.getWidth() * target.getHeight() * 6;
+        final long offset = value(offsets, 0);
+        if (value(sizes, 0) != bytes || offset < 8 || offset > input.length() - bytes) return false;
+
+        input.seek(0);
+        final int order = input.readUnsignedByte();
+        input.setByteOrder(order == 'I' ? java.nio.ByteOrder.LITTLE_ENDIAN : java.nio.ByteOrder.BIG_ENDIAN);
+        input.seek(offset);
+        final short[] row = new short[target.getWidth() * 3];
+        final float[] pixels = target.getRgb();
+        final float[] rgb = new float[3];
+        final float[] converted = new float[3];
+        for (int y = 0; y < target.getHeight(); y++) {
+            FilmRequestGuard.check();
+            input.readFully(row, 0, row.length);
+            final int start = y * row.length;
+            for (int x = 0; x < row.length; x += 3) {
+                for (int c = 0; c < 3; c++) rgb[c] = (row[x + c] & 0xffff) / 65535.0f;
+                if (srgbInput) FilmColorSpace.linearSrgbToRec2020(rgb, converted);
+                System.arraycopy(srgbInput ? converted : rgb, 0, pixels, start + x, 3);
+            }
+        }
+        return true;
+    }
+
+    private static long tagValue(final Directory tags, final int tag, final long fallback) {
+        final Entry field = tags.getEntryById(tag);
+        return field == null ? fallback : value(field, 0);
+    }
+
+    private static boolean allEqual(final Entry field, final int value) {
+        for (int i = 0; i < field.valueCount(); i++) {
+            if (value(field, i) != value) return false;
+        }
+        return true;
+    }
+
+    private static long value(final Entry field, final int index) {
+        final Object raw = field.getValue();
+        final Object element = raw != null && raw.getClass().isArray()
+                ? java.lang.reflect.Array.get(raw, index) : raw;
+        return element instanceof Number ? ((Number) element).longValue() : -1;
     }
 
     private static void copyBand(final BufferedImage band, final FloatRgbImage target,

@@ -21,6 +21,7 @@ const debugPort = await freePort(), enginePort = await freePort()
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 let child, client, timer, lastRecipe, failure = null
 let record
+const previewRequests = []
 const evidence = { status: "RUNNING", sample, sourceInterpretation: "显式人工输入域，仅验收处理链路；不宣称 FFF 物理校准", steps: [] }
 writeFileSync(path.join(output, "evidence.json"), JSON.stringify(evidence, null, 2))
 const evalPage = async (expression) => {
@@ -57,7 +58,13 @@ try {
   await wait("应用健康", () => api("/api/health"))
   console.log("应用健康通过")
   client.on("Network.requestWillBeSent", ({ request }) => {
-    if (request.url.includes("/api/preview") && request.postData) { try { lastRecipe = JSON.parse(request.postData).recipe } catch {} }
+    if (request.url.endsWith("/api/preview") && request.postData) {
+      try {
+        const payload = JSON.parse(request.postData)
+        lastRecipe = payload.recipe
+        previewRequests.push(payload)
+      } catch { /* 记录仅用于验收。 */ }
+    }
   })
   const probe = await api("/api/image-probe", { imagePath: sample })
   assert(probe.width * probe.height > 80_000_000)
@@ -110,6 +117,87 @@ try {
   assert(statSync(path.join(output, "fff-batch-second.tif")).size > 100_000_000)
   evidence.job = job
   console.log("已完成阶段"); evidence.steps.push("完整原尺寸 16-bit TIFF 经导出预检、调度、元数据写入与回读核验")
+  evidence.originalWorkflowMemory = record.snapshot()
+  if (process.argv.includes("--check-exposure")) {
+    const imageSelector = '[data-testid="film-engine-preview"] .filmImageBoard img'
+    const currentImage = () => evalPage(`(() => {
+      const image = document.querySelector(${JSON.stringify(imageSelector)})
+      return image?.complete && image.naturalWidth > 0 ? image.getAttribute("src") : null
+    })()`)
+    const mouse = (type, x, y) => client.call("Input.dispatchMouseEvent", {
+      type, x, y, button: type === "mouseMoved" ? "none" : "left",
+      buttons: type === "mouseReleased" ? 0 : 1, clickCount: type === "mouseMoved" ? 0 : 1
+    })
+    const selectRoi = async (label, x, y, width, height) => {
+      const previous = await currentImage()
+      await click(label)
+      await wait(label, currentImage, url => url && url !== previous)
+      const box = await evalPage(`(() => {
+        const image = document.querySelector(${JSON.stringify(imageSelector)})
+        image.scrollIntoView({block:"center"})
+        const {x,y,width,height} = image.getBoundingClientRect()
+        return {x,y,width,height}
+      })()`)
+      const left = box.x + x * box.width, top = box.y + y * box.height
+      const right = left + width * box.width, bottom = top + height * box.height
+      await mouse("mousePressed", left, top)
+      await mouse("mouseMoved", right, bottom)
+      await sleep(90)
+      await mouse("mouseReleased", right, bottom)
+    }
+    const capture = async (name) => {
+      const data = await evalPage(`(async () => {
+        const image = document.querySelector(${JSON.stringify(imageSelector)})
+        const blob = await (await fetch(image.getAttribute("src"))).blob()
+        const reader = new FileReader()
+        return await new Promise((resolve,reject) => {
+          reader.onload = () => resolve(reader.result.split(",")[1])
+          reader.onerror = reject
+          reader.readAsDataURL(blob)
+        })
+      })()`)
+      writeFileSync(path.join(output, name), Buffer.from(data, "base64"))
+    }
+    await wait("原始转正画面", currentImage)
+    await capture("original-exposure.png")
+    await selectRoi("框选片基", .20, .90, .10, .015)
+    await wait("采用新片基", () => Promise.resolve(lastRecipe?.imageProcessing?.negative?.filmBase?.roi),
+      roi => roi?.y > .88)
+    await wait("片基精算", () => evalPage("document.querySelector('[data-testid=film-engine-preview]').innerText.includes('引擎结果')"))
+    await selectRoi("框选画面建议密度", .08, .045, .78, .208)
+    const hint = await wait("密度建议", () => evalPage("document.querySelector('[data-testid=film-engine-preview]').innerText.match(/建议密度上限 ([0-9.]+)/)?.[1]"))
+    assert(Number(hint) > .35 && Number(hint) < 1.3, `建议范围异常：${hint}`)
+    await click("应用密度建议")
+    await wait("应用密度建议", () => Promise.resolve(lastRecipe?.imageProcessing?.negative?.density?.max),
+      max => max === Number(hint))
+    await wait("校正后精算", () => evalPage("document.querySelector('[data-testid=film-engine-preview]').innerText.includes('引擎结果')"))
+    await capture("corrected-exposure.png")
+    evidence.exposure = { suggestedDensityMax: Number(hint), correctedFilmBase: lastRecipe?.imageProcessing?.negative?.filmBase }
+
+    const slider = await evalPage(`(() => {
+      const input = document.querySelector('[aria-label="曝光 EV滑杆"]')
+      input.scrollIntoView({block:"center"})
+      const {x,y,width,height} = input.getBoundingClientRect()
+      return {x,y,width,height,value:Number(input.value)}
+    })()`)
+    const from = previewRequests.length
+    const middle = slider.x + slider.width * (slider.value + 5) / 10
+    const y = slider.y + slider.height / 2
+    await mouse("mousePressed", middle, y)
+    for (let n = 1; n <= 20; n++) {
+      await mouse("mouseMoved", middle + n * slider.width / 100, y)
+      await sleep(120)
+    }
+    await mouse("mouseReleased", middle + slider.width / 5, y)
+    await wait("松手后精算", () => evalPage("document.querySelector('[data-testid=film-engine-preview]').innerText.includes('引擎结果')"))
+    const exposurePreviews = previewRequests.slice(from).filter(request => request.stage === undefined)
+    assert(exposurePreviews.filter(request => request.previewQuality === "interactive").length >= 2, "连续调参缺少快显")
+    assert.equal(exposurePreviews.at(-1)?.previewQuality, "exact", "松手须精算")
+    assert(exposurePreviews.at(-1)?.recipe.imageProcessing.positive.exposureEv > slider.value, "松手精算须采用最终曝光")
+    evidence.exposure.sliderRequests = exposurePreviews.map(request => ({
+      quality: request.previewQuality, exposureEv: request.recipe.imageProcessing.positive.exposureEv
+    }))
+  }
   assert.equal(failure, null)
   evidence.status = "PASS"
 } catch (e) { evidence.status = "FAIL"; evidence.error = String(e.stack ?? e); process.exitCode = 1 }
