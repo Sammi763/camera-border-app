@@ -70,6 +70,10 @@ public interface ImageRenderService {
     /** 把合成图编码为 PNG 字节，供预览存储使用。 */
     byte[] toPng(BufferedImage image);
 
+    default byte[] toInteractivePng(final BufferedImage image) {
+        return toPng(image);
+    }
+
     /**
      * 把合成图按 export 设置编码并写入文件。
      *

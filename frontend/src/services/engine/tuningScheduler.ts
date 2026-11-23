@@ -75,7 +75,11 @@ export class TuningScheduler {
     options: { readonly immediate?: boolean; readonly coalesce?: boolean } = {}
   ): ScheduleResult {
     if (this.disposed) return "disposed"
-    if (this.inFlight !== null && this.inFlight.key === key) return "duplicate"
+    if (this.inFlight !== null && this.inFlight.key === key) {
+      // 回拖至正在计算的值时，该帧已是最新快照。
+      if (options.coalesce === true && this.inFlight.coalesce) this.pending = null
+      return "duplicate"
+    }
     if (this.pending !== null && this.pending.key === key) {
       if (options.immediate === true) {
         this.pending = { ...this.pending, immediate: true }

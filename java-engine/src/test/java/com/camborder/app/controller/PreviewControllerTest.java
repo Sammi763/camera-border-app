@@ -355,7 +355,22 @@ final class PreviewControllerTest extends AbstractControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("ok"))
                 .andExpect(jsonPath("$.previewAvailable").value(true))
-                .andExpect(jsonPath("$.sourceDecode.mode").value("linear-tiff"));
+                .andExpect(jsonPath("$.sourceDecode.mode").value("linear-tiff"))
+                .andExpect(jsonPath("$.previewQuality").value("exact"))
+                .andExpect(jsonPath("$.fidelityReport.output.bitDepth").value(16));
+
+        final PreviewRequest interactive = new PreviewRequest(recipe, 800, 600);
+        interactive.setPreviewQuality("interactive");
+        final String json = mockMvc.perform(post("/api/preview")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(interactive)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.previewQuality").value("interactive"))
+                .andExpect(jsonPath("$.fidelityReport.output.bitDepth").value(8))
+                .andReturn().getResponse().getContentAsString();
+        final byte[] png = mockMvc.perform(get(objectMapper.readTree(json).get("previewUrl").asText()))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray();
+        assertThat(javax.imageio.ImageIO.read(new java.io.ByteArrayInputStream(png)).getWidth()).isEqualTo(2);
     }
 
     @Test

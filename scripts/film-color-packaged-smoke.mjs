@@ -91,19 +91,17 @@ try {
   await evalPage(`(() => {const i=[...document.querySelectorAll('input')].find(i=>i.parentElement.textContent.includes('配方名称'));Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(i,${JSON.stringify(name)});i.dispatchEvent(new Event('input',{bubbles:true}))})()`)
   await click("保存当前观感")
   await wait("配方写入", () => evalPage("window.desktop.readFilmColorPresets()"), s => JSON.parse(s).some(p => p.name === name))
-  await client.call("Page.reload")
-  await wait("重启恢复", () => evalPage("document.body.innerText.includes('个人校色配方')"))
-  await wait("预设恢复", () => evalPage(`document.body.innerText.includes(${JSON.stringify(name)})`))
-  console.log("已完成阶段"); evidence.steps.push("独立观感配方经磁盘存储与页面重载恢复")
   const frozen = { ...recipe, border: { top: 0, bottom: 0, left: 0, right: 0, color: "#ffffff" }, gradient: null, texts: [], logo: null, borderStyle: null }
   const exportPath = path.join(output, "fff-full-size.tif")
   const request = { items: [{ recipe: frozen, sourceVersion: probe.sourceVersion, export: { format: "tiff", tier: "custom", outputPath: exportPath, filmOutput: "tiff16-rec2020", borderlessMaster: true, metadataPolicy: "preserve", maxWidth: 0, maxHeight: 0 } }] }
   request.items.push({ ...structuredClone(request.items[0]), export: { ...request.items[0].export, outputPath: path.join(output, "fff-batch-second.tif") } })
   evidence.preflight = await api("/api/export-preflight", request)
   assert.equal(evidence.preflight.status, "ready", JSON.stringify(evidence.preflight))
+  const exportStarted = performance.now()
   const accepted = await api("/api/render-jobs", request)
   evidence.jobId = accepted.jobId
   const job = await wait("完整导出", () => api(`/api/render-jobs/${accepted.jobId}`), j => ["completed", "failed", "cancelled", "partially-completed"].includes(j.status), 600000)
+  evidence.batchExportMs = Math.round(performance.now() - exportStarted)
   evidence.job = job
   assert.equal(job.status, "completed", JSON.stringify(job))
   for (const item of job.items) {
@@ -174,6 +172,8 @@ try {
     await capture("corrected-exposure.png")
     evidence.exposure = { suggestedDensityMax: Number(hint), correctedFilmBase: lastRecipe?.imageProcessing?.negative?.filmBase }
 
+    await click("底片")
+    await wait("曝光滑杆", () => evalPage(`!!document.querySelector('[aria-label="曝光 EV滑杆"]')`))
     const slider = await evalPage(`(() => {
       const input = document.querySelector('[aria-label="曝光 EV滑杆"]')
       input.scrollIntoView({block:"center"})
@@ -198,6 +198,10 @@ try {
       quality: request.previewQuality, exposureEv: request.recipe.imageProcessing.positive.exposureEv
     }))
   }
+  await client.call("Page.reload")
+  await wait("重启恢复", () => evalPage("document.body.innerText.includes('个人校色配方')"))
+  await wait("预设恢复", () => evalPage(`document.body.innerText.includes(${JSON.stringify(name)})`))
+  console.log("已完成阶段"); evidence.steps.push("独立观感配方经磁盘存储与页面重载恢复")
   assert.equal(failure, null)
   evidence.status = "PASS"
 } catch (e) { evidence.status = "FAIL"; evidence.error = String(e.stack ?? e); process.exitCode = 1 }

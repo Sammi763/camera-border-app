@@ -153,6 +153,12 @@ public final class Java2DImageRenderService implements ImageRenderService {
     }
 
     @Override
+    public byte[] toInteractivePng(final BufferedImage image) {
+        return imageEncoder.toInteractivePng(image);
+    }
+
+
+    @Override
     public ImageEncoder.ExportResult writeToFile(final BufferedImage image, final ExportSettings export) {
         return imageEncoder.writeToFile(image, export.getOutputPath(), export);
     }

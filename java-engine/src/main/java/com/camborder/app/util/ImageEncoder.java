@@ -95,6 +95,31 @@ public final class ImageEncoder {
         }
     }
 
+    /** 快显已经是显示用 sRGB，使用较低压缩级别缩短拖动时的编码等待。 */
+    public byte[] toInteractivePng(final BufferedImage image) {
+        final java.util.Iterator<javax.imageio.ImageWriter> writers = ImageIO.getImageWritersByFormatName("png");
+        if (!writers.hasNext()) throw new IllegalStateException("no PNG writer available");
+        final javax.imageio.ImageWriter writer = writers.next();
+        final ByteArrayOutputStream output = new ByteArrayOutputStream();
+        try (javax.imageio.stream.ImageOutputStream stream = new javax.imageio.stream.MemoryCacheImageOutputStream(output)) {
+            writer.setOutput(stream);
+            final javax.imageio.ImageWriteParam parameters = writer.getDefaultWriteParam();
+            if (parameters.canWriteCompressed()) {
+                parameters.setCompressionMode(javax.imageio.ImageWriteParam.MODE_EXPLICIT);
+                final String[] types = parameters.getCompressionTypes();
+                if (types != null && types.length > 0) parameters.setCompressionType(types[0]);
+                parameters.setCompressionQuality(0.85f);
+            }
+            writer.write(null, new javax.imageio.IIOImage(image, null, null), parameters);
+            stream.flush();
+            return injectPngIcc(output.toByteArray(), actualIccProfile(image));
+        } catch (IOException e) {
+            throw new IllegalStateException("failed to encode interactive preview PNG", e);
+        } finally {
+            writer.dispose();
+        }
+    }
+
     /** 预览 PNG 使用与像素缓冲区相同的 ICC；无 profile 的 Java 图像按 sRGB 处理。 */
     public static byte[] actualIccProfile(final BufferedImage image) {
         try {

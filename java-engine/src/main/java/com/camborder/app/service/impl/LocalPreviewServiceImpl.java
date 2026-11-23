@@ -82,10 +82,12 @@ public final class LocalPreviewServiceImpl implements PreviewService {
                 if (request.isActualPixels() && Math.max(rendered.getWidth(), rendered.getHeight()) > 8192)
                     throw new com.camborder.app.exception.FilmProcessingException("完整像素超过检查预算，请切回适应窗口",
                             org.springframework.http.HttpStatus.BAD_REQUEST, "FILM_ACTUAL_PIXELS_TOO_LARGE");
-                outcome = new ImageRenderService.ComposeOutcome(FloatImageOps.toBufferedImage16(rendered),
+                outcome = new ImageRenderService.ComposeOutcome(
+                        interactive ? FloatImageOps.toBufferedImage8(rendered) : FloatImageOps.toBufferedImage16(rendered),
                         processed.getSourceDecode(), processed.getSourceInfo());
                 // 编码也发生在预算租约内，覆盖预览的完整生命周期。
-                pngBytes = imageRenderService.toPng(outcome.getImage());
+                pngBytes = interactive ? imageRenderService.toInteractivePng(outcome.getImage())
+                        : imageRenderService.toPng(outcome.getImage());
             }
         } else {
             outcome = imageRenderService.compose(

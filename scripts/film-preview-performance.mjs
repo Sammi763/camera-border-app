@@ -9,6 +9,8 @@ import { CdpClient } from "./packaged-e2e.mjs"
 import { ProcessMemoryRecorder, readProcesses, processTree } from "./process-memory.mjs"
 
 const [app, output, quality, ...samples] = process.argv.slice(2)
+const warmCount = Number(process.env.CAMBORDER_PREVIEW_WARM_COUNT ?? 30)
+assert(Number.isInteger(warmCount) && warmCount >= 1 && warmCount <= 100, "热预览次数必须为 1–100")
 assert(app && output && ["exact", "interactive"].includes(quality) && samples.length,
   "用法：node scripts/film-preview-performance.mjs <绝对.app路径> <结果.json> <exact|interactive> <样片...>")
 const freePort = () => new Promise((resolve) => {
@@ -50,7 +52,7 @@ const benchmark = async (sample, iteration) => {
     const evaluate = async (expression) => {
       const response = await client.call("Runtime.evaluate", {
         expression, awaitPromise: true, returnByValue: true
-      }, 600000)
+      }, 1800000)
       if (response.exceptionDetails) throw new Error(JSON.stringify(response.exceptionDetails))
       return response.result?.value
     }
@@ -92,26 +94,29 @@ const benchmark = async (sample, iteration) => {
         config.positive.exposureEv = ev
         const start = performance.now()
         const result = await api("/api/preview", {recipe,maxWidth:1280,maxHeight:1280,previewQuality:mode})
+        const generated = performance.now()
         image.src = result.previewUrl
         await image.decode()
+        const decoded = performance.now()
         await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
-        const elapsed = performance.now() - start
-        return {elapsed, actualQuality:result.previewQuality ?? "exact", url:result.previewUrl}
+        return {elapsed:performance.now()-start, generateMs:generated-start, loadMs:decoded-generated,
+          presentMs:performance.now()-decoded, actualQuality:result.previewQuality ?? "exact", url:result.previewUrl}
       }
       const cold = await frame(0, "exact")
       const firstTune = await frame(0.1, quality)
-      const warm = []
-      for (let index = 0; index < ${iteration === 1 ? 30 : 0}; index++) {
+      const warm = [], warmPhases = []
+      for (let index = 0; index < ${iteration === 1 ? warmCount : 0}; index++) {
         const next = await frame((index + 2) / 100, quality)
         if (next.actualQuality !== quality) throw Error("预览实际质量与目标不一致")
         warm.push(next.elapsed)
+        warmPhases.push({generateMs:next.generateMs,loadMs:next.loadMs,presentMs:next.presentMs})
       }
       const refined = await frame(0.33, "exact")
       const pixels = await (await fetch(refined.url)).arrayBuffer()
       const exactPngSha256 = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",pixels)),
         n => n.toString(16).padStart(2,"0")).join("")
       return {probe:{width:probe.width,height:probe.height,source},coldMs:cold.elapsed,
-        firstTuningMs:firstTune.elapsed,warmMs:warm,refineMs:refined.elapsed,exactPngSha256}
+        firstTuningMs:firstTune.elapsed,warmMs:warm,warmPhases,refineMs:refined.elapsed,exactPngSha256}
     })()`)
     return { sample, iteration, ...results, cacheBefore, cacheAfter: await stats(), memory: memory.snapshot() }
   } catch (error) {

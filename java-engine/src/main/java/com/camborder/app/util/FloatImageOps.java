@@ -350,7 +350,7 @@ public final class FloatImageOps {
         return image;
     }
 
-    /** 输出阶段：工作图 -> sRGB 编码 8-bit BufferedImage（Jr 预览/分享测试用）。 */
+    /** 将快显工作图转换成显示用 8-bit sRGB。 */
     public static BufferedImage toBufferedImage8(final FloatRgbImage source) {
         final BufferedImage image = new BufferedImage(
                 source.getWidth(), source.getHeight(), BufferedImage.TYPE_INT_RGB);
