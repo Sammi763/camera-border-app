@@ -137,6 +137,7 @@ export type RenderRecipe = {
 }
 
 export type PreviewRequest = {
+  readonly previewQuality?: "interactive" | "exact"
   readonly actualPixels?: boolean
   readonly clientId?: string
   readonly generation?: number
@@ -148,6 +149,7 @@ export type PreviewRequest = {
 }
 
 export type PreviewResponse = {
+  readonly previewQuality?: "interactive" | "exact"
   readonly status: string
   readonly message: string
   readonly previewAvailable: boolean

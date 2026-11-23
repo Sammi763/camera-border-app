@@ -42,6 +42,17 @@ final class PreviewControllerTest extends AbstractControllerTest {
                 .andExpect(status().isBadRequest());
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"interactive", "unknown"})
+    void previewQualityRejectsOrdinaryInteractiveAndUnknownValues(final String quality) throws Exception {
+        final PreviewRequest request = new PreviewRequest(
+                new RenderRecipe(writeTempImage(), null, null, null, false), 100, 100);
+        request.setPreviewQuality(quality);
+        mockMvc.perform(post("/api/preview").contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest());
+    }
+
     @Test
     void shouldReturnPreviewForValidRequest() throws Exception {
         PreviewRequest request = new PreviewRequest(

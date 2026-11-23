@@ -44,7 +44,42 @@ public final class FilmCompositor {
         if (borderless) return FloatImageOps.fitWithin(photo, maxWidth, maxHeight);
         final int fullWidth = photo.getWidth();
         photo = FloatImageOps.fitWithin(photo, maxWidth, maxHeight);
-        final double scale = (double) photo.getWidth() / fullWidth;
+        return decorate(photo, recipe, color, (double) photo.getWidth() / fullWidth);
+    }
+
+    /** 深裁切的细节由精确路径提供。 */
+    public boolean canComposeInteractive(final RenderRecipe recipe) {
+        if (recipe.getImageProcessing() == null) return false;
+        final com.camborder.app.model.ImageProcessingConfig.SourceGeometry geometry =
+                recipe.getImageProcessing().getSourceGeometry();
+        final com.camborder.app.model.ImageProcessingConfig.NormalizedCrop crop =
+                geometry == null ? null : geometry.getCrop();
+        return crop == null || (crop.getWidth() >= 0.25 && crop.getHeight() >= 0.25);
+    }
+
+    public FloatRgbImage composeInteractive(final FloatRgbImage proxy,
+            final com.camborder.app.dto.SourceDecode decode, final RenderRecipe recipe,
+            final int maxWidth, final int maxHeight) {
+        final int sourceWidth = decode.getFullWidth();
+        final int sourceHeight = decode.getFullHeight();
+        final com.camborder.app.model.ImageProcessingConfig.SourceGeometry geometry =
+                recipe.getImageProcessing().getSourceGeometry();
+        final int[] bounds = FloatImageOps.sourceGeometryBounds(sourceWidth, sourceHeight, geometry);
+        final ImagePlacementRenderer.Geometry placed = new ImagePlacementRenderer()
+                .calculate(bounds[4], bounds[5], recipe.getImagePlacement());
+        final int fullWidth = Math.max(1, (int) Math.round(placed.targetWidth()));
+        final int fullHeight = Math.max(1, (int) Math.round(placed.targetHeight()));
+        final double scale = Math.min(1, Math.min((double) maxWidth / fullWidth, (double) maxHeight / fullHeight));
+        final int width = Math.max(1, (int) Math.round(fullWidth * scale));
+        final int height = Math.max(1, (int) Math.round(fullHeight * scale));
+        final java.awt.Color color = ColorParser.parse(recipe.getBorder() == null ? null : recipe.getBorder().getColor(), "#ffffff");
+        final FloatRgbImage photo = FloatImageOps.placePreview(proxy, sourceWidth, sourceHeight, bounds,
+                geometry == null ? 0 : geometry.getRotationDegrees(), placed, color, width, height);
+        return decorate(photo, recipe, color, (double) width / fullWidth);
+    }
+
+    private FloatRgbImage decorate(final FloatRgbImage photo, final RenderRecipe recipe,
+                                    final java.awt.Color color, final double scale) {
         final int[] margins = BorderComposer.insets(recipe.getBorder(), scale);
         final int width = Math.addExact(photo.getWidth(), Math.addExact(margins[2], margins[3]));
         final int height = Math.addExact(photo.getHeight(), Math.addExact(margins[0], margins[1]));

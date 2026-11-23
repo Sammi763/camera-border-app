@@ -112,8 +112,7 @@ public final class FilmNegativeProcessor {
                     HttpStatus.BAD_REQUEST, CODE_INVALID_DENSITY);
         }
         final double[] gain = resolveLightGain(config.getLightSource());
-        final FloatRgbImage calibrated = applyGain(input, gain);
-        final double[] base = resolveBase(calibrated, config.getFilmBase());
+        final double[] base = resolveBase(input, config.getFilmBase(), gain);
 
         final FloatRgbImage positive = new FloatRgbImage(input.getWidth(), input.getHeight());
         long lowClip = 0;
@@ -129,7 +128,9 @@ public final class FilmNegativeProcessor {
                         throw new FilmProcessingException("片基参考值非法",
                                 HttpStatus.BAD_REQUEST, CODE_INVALID_BASE);
                     }
-                    double transmittance = calibrated.get(x, y, channel) / baseValue;
+                    // 保留原增益缓冲的 float32 舍入点。
+                    final float calibrated = (float) (input.get(x, y, channel) * gain[channel]);
+                    double transmittance = calibrated / baseValue;
                     if (!Double.isFinite(transmittance)) {
                         throw new FilmProcessingException("负片透过率非有限值",
                                 HttpStatus.BAD_REQUEST, CODE_INVALID_BASE);
@@ -193,23 +194,9 @@ public final class FilmNegativeProcessor {
         return gain.clone();
     }
 
-    private static FloatRgbImage applyGain(final FloatRgbImage input, final double[] gain) {
-        final FloatRgbImage result = input.copy();
-        if (gain[0] == 1 && gain[1] == 1 && gain[2] == 1) return result;
-        for (int y = 0; y < result.getHeight(); y++) {
-            FilmRequestGuard.check();
-            for (int x = 0; x < result.getWidth(); x++) {
-                for (int channel = 0; channel < 3; channel++) {
-                    result.set(x, y, channel,
-                            (float) (result.get(x, y, channel) * gain[channel]));
-                }
-            }
-        }
-        return result;
-    }
-
     private static double[] resolveBase(final FloatRgbImage image,
-                                        final ImageProcessingConfig.FilmBaseConfig base) {
+                                        final ImageProcessingConfig.FilmBaseConfig base,
+                                        final double[] gain) {
         if (base == null || base.getKind() == null) {
             throw new FilmProcessingException("片基配置缺失",
                     HttpStatus.BAD_REQUEST, CODE_INVALID_BASE);
@@ -224,7 +211,7 @@ public final class FilmNegativeProcessor {
                 throw new FilmProcessingException("片基 ROI 缺失",
                         HttpStatus.BAD_REQUEST, CODE_INVALID_BASE);
             }
-            return medianOfRoi(image, base.getRoi());
+            return medianOfRoi(image, base.getRoi(), gain);
         }
         if ("manual".equals(base.getKind())) {
             final double[] rgb = base.getRgb();
@@ -251,6 +238,12 @@ public final class FilmNegativeProcessor {
 
     public static double[] medianOfRoi(final FloatRgbImage image,
                                         final ImageProcessingConfig.NormalizedCrop roi) {
+        return medianOfRoi(image, roi, new double[]{1, 1, 1});
+    }
+
+    private static double[] medianOfRoi(final FloatRgbImage image,
+                                       final ImageProcessingConfig.NormalizedCrop roi,
+                                       final double[] gain) {
         final int left = Math.max(0, (int) Math.floor(roi.getX() * image.getWidth()));
         final int top = Math.max(0, (int) Math.floor(roi.getY() * image.getHeight()));
         final int right = Math.min(image.getWidth(),
@@ -262,22 +255,14 @@ public final class FilmNegativeProcessor {
                     HttpStatus.BAD_REQUEST, CODE_INVALID_BASE);
         }
         final int pixels = (right - left) * (bottom - top);
-        final double[][] values = new double[3][pixels];
-        int index = 0;
-        for (int y = top; y < bottom; y++) {
-            for (int x = left; x < right; x++) {
-                for (int channel = 0; channel < 3; channel++) {
-                    values[channel][index] = image.get(x, y, channel);
-                }
-                index++;
-            }
-        }
         final double[] result = new double[3];
+        final int[] buckets = new int[256];
         for (int channel = 0; channel < 3; channel++) {
-            Arrays.sort(values[channel]);
-            final double median = pixels % 2 == 1
-                    ? values[channel][pixels / 2]
-                    : (values[channel][pixels / 2 - 1] + values[channel][pixels / 2]) / 2.0;
+            final float lower = selectRank(image, left, top, right, bottom, channel,
+                    gain[channel], (pixels - 1) / 2, buckets);
+            final double median = pixels % 2 == 1 ? lower
+                    : ((double) lower + selectRank(image, left, top, right, bottom, channel,
+                            gain[channel], pixels / 2, buckets)) / 2.0;
             if (!Double.isFinite(median) || median <= EPSILON) {
                 throw new FilmProcessingException("片基 ROI 中位数非法",
                         HttpStatus.BAD_REQUEST, CODE_INVALID_BASE);
@@ -286,4 +271,31 @@ public final class FilmNegativeProcessor {
         }
         return result;
     }
+
+    /** 按 IEEE float 的有序位逐字节定位秩，只保留 256 个桶。 */
+    private static float selectRank(final FloatRgbImage image, final int left, final int top,
+                                    final int right, final int bottom, final int channel,
+                                    final double gain, int rank, final int[] buckets) {
+        int prefix = 0;
+        int mask = 0;
+        final float[] pixels = image.getRgb();
+        for (int shift = 24; shift >= 0; shift -= 8) {
+            Arrays.fill(buckets, 0);
+            for (int y = top; y < bottom; y++) {
+                FilmRequestGuard.check();
+                int index = (y * image.getWidth() + left) * 3 + channel;
+                for (int x = left; x < right; x++, index += 3) {
+                    final int bits = Float.floatToIntBits((float) (pixels[index] * gain));
+                    final int ordered = bits ^ (bits < 0 ? -1 : Integer.MIN_VALUE);
+                    if ((ordered & mask) == prefix) buckets[(ordered >>> shift) & 255]++;
+                }
+            }
+            int bucket = 0;
+            while (rank >= buckets[bucket]) rank -= buckets[bucket++];
+            prefix |= bucket << shift;
+            mask |= 255 << shift;
+        }
+        return Float.intBitsToFloat(prefix ^ (prefix < 0 ? Integer.MIN_VALUE : -1));
+    }
+
 }

@@ -187,6 +187,29 @@ describe("usePreview 底片模式（T10）", () => {
     )
   })
 
+  it("正片调整先快显，松手以相同配方精算，再发布可供分析的快照", async () => {
+    requestPreviewMock.mockImplementation(async (request) => ({
+      status: "ok", message: "ok", previewAvailable: true,
+      previewUrl: "data:image/png;base64,film",
+      previewQuality: request.previewQuality ?? "exact"
+    }))
+    const { result, rerender } = renderHook(
+      ({ config }) => usePreview("/photos/quality.tif", settings, 1, null, null, null, config),
+      { initialProps: { config: processing } }
+    )
+    await waitFor(() => expect(requestPreviewMock).toHaveBeenCalledTimes(1))
+    rerender({ config: { ...processing, positive: { exposureEv: 0.6 } } })
+    await waitFor(() => {
+      expect(result.current.kind === "active" && result.current.engineResponse?.previewQuality).toBe("interactive")
+    })
+    expect(result.current.kind === "active" && result.current.engineGeneration).toBeNull()
+    await act(async () => window.dispatchEvent(new Event("pointerup")))
+    await waitFor(() => expect(requestPreviewMock.mock.calls.map(([req]) => req.previewQuality))
+      .toEqual(["exact", "interactive", "exact"]))
+    await waitFor(() => expect(result.current.kind === "active" && result.current.engineSyncStatus).toBe("synced"))
+    expect(requestPreviewMock.mock.calls.at(-1)?.[0].recipe.imageProcessing?.positive?.exposureEv).toBe(0.6)
+  })
+
   it("取消或被替代不展示引擎不可达", async () => {
     requestPreviewMock.mockRejectedValue({ status: 408, code: "FILM_REQUEST_CANCELLED" })
     const { result } = renderHook(() => usePreview("/photos/film3.tif", settings, 1, null, null, null, processing))

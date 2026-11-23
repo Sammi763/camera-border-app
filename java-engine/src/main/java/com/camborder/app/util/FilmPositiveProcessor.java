@@ -31,13 +31,25 @@ public final class FilmPositiveProcessor {
                     HttpStatus.BAD_REQUEST, CODE_INVALID_RANGE);
         }
         if (adjustments == null) {
-            return input.copy();
+            return input;
         }
         validate(adjustments);
+        final double[] balance = adjustments.getRgbBalanceEv();
+        if (adjustments.getExposureEv() == 0 && balance[0] == 0 && balance[1] == 0
+                && balance[2] == 0 && adjustments.getBlackPoint() == 0
+                && adjustments.getWhitePoint() == 1 && adjustments.getSaturation() == 1
+                && adjustments.getMasterCurve() == null && adjustments.getRedCurve() == null
+                && adjustments.getGreenCurve() == null && adjustments.getBlueCurve() == null) {
+            // 返回只读上游；显式曲线仍须运行，以保持端点裁切。
+            if (input.hasNonFinite()) {
+                throw new FilmProcessingException("正片调整产生非有限值",
+                        HttpStatus.INTERNAL_SERVER_ERROR, CODE_INVALID_RANGE);
+            }
+            return input;
+        }
 
         final float[] exposure = new float[3];
         final double global = Math.pow(2.0, adjustments.getExposureEv());
-        final double[] balance = adjustments.getRgbBalanceEv();
         exposure[0] = (float) (global * Math.pow(2.0, balance[0]));
         exposure[1] = (float) (global * Math.pow(2.0, balance[1]));
         exposure[2] = (float) (global * Math.pow(2.0, balance[2]));

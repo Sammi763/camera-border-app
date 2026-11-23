@@ -41,6 +41,18 @@ public final class FilmMemoryEstimator {
         private boolean borderless;
         private boolean analysis;
         private int outputBitDepth = 8;
+        private boolean interactive;
+        private String cachedStage;
+
+        public Workload interactive(final boolean value) {
+            this.interactive = value;
+            return this;
+        }
+
+        public Workload cachedStage(final String value) {
+            this.cachedStage = value;
+            return this;
+        }
 
         public Workload source(final int width, final int height) {
             this.sourceWidth = width;
@@ -161,28 +173,35 @@ public final class FilmMemoryEstimator {
         final long sourceRgb16 = multiply(sourcePixels, BYTES_PER_RGB16_PIXEL);
         final long referenceFloat = multiply(referencePixels, BYTES_PER_FLOAT_RGB_PIXEL);
         final long referenceRgb16 = multiply(referencePixels, BYTES_PER_RGB16_PIXEL);
-        final long nativeHelper = workload.sensorRaw
-                ? multiply(add(sourcePixels, referencePixels), 16L) : 0L;
+        final long nativeHelper = workload.sensorRaw && !cachedBase(workload)
+                ? multiply(add(workload.cachedStage == null ? sourcePixels : 0, referencePixels), 16L) : 0L;
 
         // RAW：helper 输出 RGB16 + 两份 float（解码图与方向重排临时图）。
         final long rawJava = workload.encodedRaster
                 ? add(sourceRgb16, multiply(sourceFloat, 4L))
                 : add(sourceRgb16, multiply(sourceFloat, 2L));
 
-        // 基础转正：下游需要 RAW 工作图 + 光源增益副本 + 转正输出；参考帧独立解码。
-        final long baseJava = add(add(sourceFloat, multiply(sourceFloat, 2L)),
+        // 基础转正只保留 RAW 工作图和转正输出；参考帧独立解码。
+        final long baseJava = add(multiply(sourceFloat, 2L),
                 add(multiply(referenceFloat, 2L), referenceRgb16));
 
-        // 当前正片：基础正片 + 正片输出。
-        final long currentJava = multiply(sourceFloat, 2L);
+        // 快显仅在创建预览层时保留全幅基础图。横向重采样仍可能需要一个中间缓冲。
+        final long photoFloat = workload.interactive
+                ? multiply(Math.min(sourcePixels, 1024L * 1024L), BYTES_PER_FLOAT_RGB_PIXEL)
+                : sourceFloat;
+        final boolean previewHit = "interactive-base".equals(workload.cachedStage);
+        final long currentJava = "current-positive".equals(workload.cachedStage) ? photoFloat
+                : workload.interactive && !previewHit ? add(multiply(sourceFloat, 2), multiply(photoFloat, 2))
+                : multiply(photoFloat, 2L);
 
         // 合成/编码：当前正片保留，同时创建几何/放置结果、画布、装饰与编码缓冲。
         final long outputFloat = multiply(outputPixels, BYTES_PER_FLOAT_RGB_PIXEL);
         final long outputArgb = multiply(outputPixels, BYTES_PER_ARGB_PIXEL);
         final long encode = multiply(outputPixels, workload.outputBitDepth >= 16 ? 8L : 5L);
-        long composeJava = sourceFloat;
-        if (workload.sourceGeometry) composeJava = add(composeJava, sourceFloat);
-        if (workload.placementTransform) composeJava = add(composeJava, sourceFloat);
+        long composeJava = photoFloat;
+        if (!workload.interactive && workload.sourceGeometry) composeJava = add(composeJava, sourceFloat);
+        if (!workload.interactive && workload.placementTransform) composeJava = add(composeJava, sourceFloat);
+        if (workload.interactive) composeJava = add(composeJava, outputFloat);
         if (!workload.borderless) composeJava = add(composeJava, outputFloat);
         if (workload.border) composeJava = add(composeJava, outputFloat);
         if (workload.decorations) composeJava = add(composeJava, outputArgb);
@@ -190,13 +209,19 @@ public final class FilmMemoryEstimator {
         composeJava = add(composeJava, encode);
 
         final long analysisJava = workload.analysis ? add(currentJava, ANALYSIS_OVERHEAD) : 0L;
-        final long maxJava = max(max(rawJava, baseJava), max(currentJava,
+        final long decodeJava = workload.cachedStage == null ? rawJava : 0;
+        final long inversionJava = cachedBase(workload) ? 0 : baseJava;
+        final long maxJava = max(max(decodeJava, inversionJava), max(currentJava,
                 max(composeJava, analysisJava)));
         // 总预算包含原生 helper；即使当前阶段 Java 峰值更高，也要把 helper 计入总量。
-        final long totalWithoutMargin = add(add(max(maxJava, rawJava), nativeHelper),
+        final long totalWithoutMargin = add(add(maxJava, nativeHelper),
                 FIXED_OVERHEAD);
         return new Estimate(withMargin(maxJava, margin), withMargin(totalWithoutMargin, margin),
                 nativeHelper, sourceFloat);
+    }
+
+    private static boolean cachedBase(final Workload workload) {
+        return workload.cachedStage != null && !"raw-linear".equals(workload.cachedStage);
     }
 
     public static long floatImageBytes(final int width, final int height) {

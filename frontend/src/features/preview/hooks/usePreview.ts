@@ -94,11 +94,12 @@ export const usePreview = (
 ): PreviewState => {
   const requestClient = useRef(`preview_${Math.random().toString(36).slice(2)}`)
   const schedulerRef = useRef<TuningScheduler | null>(null)
-  const filmModeRef = useRef(false)
   const flushRequestedRef = useRef(false)
+  const refineRef = useRef<(() => void) | null>(null)
+  const refineTimer = useRef<number | null>(null)
+  const lastFilmSnapshot = useRef<{ key: string; basis: string } | null>(null)
   const [state, setState] = useState<PreviewState>({ kind: "idle" })
   const filmMode = imageProcessing !== null && imageProcessing !== undefined
-  filmModeRef.current = filmMode
   const imageProcessingSignature = imageProcessing === null || imageProcessing === undefined
     ? ""
     : JSON.stringify(imageProcessing)
@@ -277,11 +278,13 @@ export const usePreview = (
 
   // 每个“文件 + 模式”创建一个调度器；切换图片/关闭底片模式/卸载视图时取消后端旧代次。
   useEffect(() => {
+    const clientId = `preview_${Math.random().toString(36).slice(2)}`
+    requestClient.current = clientId
     const scheduler = new TuningScheduler({
       throttleMs: 250,
       onSupersede: (generation) => {
-        if (filmModeRef.current) {
-          void cancelFilmRequests(requestClient.current, generation).catch(() => {
+        if (filmMode) {
+          void cancelFilmRequests(clientId, generation).catch(() => {
             // 取消是尽力而为；不把旧任务取消失败展示成引擎不可达。
           })
         }
@@ -290,11 +293,15 @@ export const usePreview = (
     schedulerRef.current = scheduler
     return () => {
       const generation = scheduler.dispose()
+      lastFilmSnapshot.current = null
+      refineRef.current = null
+      if (refineTimer.current !== null) window.clearTimeout(refineTimer.current)
+      refineTimer.current = null
       if (schedulerRef.current === scheduler) {
         schedulerRef.current = null
       }
       if (filmMode) {
-        void cancelFilmRequests(requestClient.current, generation).catch(() => {
+        void cancelFilmRequests(clientId, generation).catch(() => {
           // 切图/卸载时引擎可能已退出；旧任务不会写回新视图。
         })
       }
@@ -305,7 +312,8 @@ export const usePreview = (
   useEffect(() => {
     const flush = (): void => {
       flushRequestedRef.current = true
-      schedulerRef.current?.flush()
+      if (refineRef.current !== null) refineRef.current()
+      else schedulerRef.current?.flush()
     }
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key === "Enter") flush()
@@ -342,101 +350,112 @@ export const usePreview = (
     )
     const snapshotKey = `${selectedFilePath}|${filmMode ? "film" : "plain"}|`
       + `${hashRenderRecipe(plainEngineRequest.recipe)}|${PREVIEW_MAX_WIDTH}x${PREVIEW_MAX_HEIGHT}`
-    const immediate = flushRequestedRef.current
-    flushRequestedRef.current = false
-
-    const scheduled = scheduler.schedule(snapshotKey, async (generation, signal) => {
-      const engineRequest: PreviewRequest = filmMode
-        ? { ...plainEngineRequest, clientId: requestClient.current, generation }
-        : plainEngineRequest
-      try {
-        const versions = await getImageFileVersions([selectedFilePath])
-        if (signal.aborted) return
-        const cacheKey = createPreviewCacheKey({
-          imagePath: selectedFilePath,
-          maxWidth: PREVIEW_MAX_WIDTH,
-          maxHeight: PREVIEW_MAX_HEIGHT,
-          modifiedAtMs: versions[0]?.mtimeMs ?? null,
-          sourceSizeBytes: versions[0]?.sizeBytes ?? null,
-          recipeHash: hashRenderRecipe(engineRequest.recipe)
-        })
-        const cachedUrl = previewUrlCache.get(cacheKey)
-        if (cachedUrl !== null) {
-          if (generation !== scheduler.generation) return
-          setState((prev) => {
-            if (prev.kind !== "active" || prev.filePath !== selectedFilePath) return prev
-            return { ...prev, engineDisplayUrl: cachedUrl, engineSyncStatus: "synced" }
-          })
-          return
-        }
-        const response = await requestPreviewWithStartupRetry(engineRequest, signal)
-        if (signal.aborted || generation !== scheduler.generation) return
-        const displayUrl = response.previewAvailable
-          ? resolveDisplayUrl(response.previewUrl)
-          : null
-        if (displayUrl !== null) previewUrlCache.set(cacheKey, displayUrl)
-        setState((prev) => {
-          if (prev.kind !== "active" || prev.filePath !== selectedFilePath) {
-            return prev
-          }
-          return {
-            ...prev,
-            engineDisplayUrl: displayUrl,
-            engineSyncStatus: "synced",
-            engineResponse: response
-          }
-        })
-      } catch (error: unknown) {
-        if (signal.aborted || generation !== scheduler.generation) {
-          throw error
-        }
-        if (filmMode && isFilmCancellation(error)) {
-          // 取消/被替代是正常状态：保留上一张正确画面，继续显示同步中。
-          setState((prev) => {
-            if (prev.kind !== "active" || prev.filePath !== selectedFilePath) return prev
-            return { ...prev, engineSyncStatus: "syncing" }
-          })
-          throw error
-        }
-        setState((prev) => {
-          if (prev.kind !== "active" || prev.filePath !== selectedFilePath) {
-            return prev
-          }
-          return {
-            ...prev,
-            engineSyncStatus: "error",
-            engineResponse: {
-              status: "error",
-              message: toErrorMessage(error),
-              previewAvailable: false,
-              previewUrl: ""
+    const clientId = requestClient.current
+    const submit = (quality: "interactive" | "exact", immediate: boolean): void => {
+      const interactive = quality === "interactive"
+      const scheduled = scheduler.schedule(`${snapshotKey}|${quality}`, async (generation, signal) => {
+        const engineRequest: PreviewRequest = filmMode
+          ? { ...plainEngineRequest, clientId, generation, previewQuality: quality }
+          : plainEngineRequest
+        const obsolete = (): boolean => signal.aborted || (!interactive && generation !== scheduler.generation)
+        try {
+          // 底片阶段以引擎核验的内容指纹为准，URL 缓存只用于普通模式。
+          let cacheKey: string | null = null
+          if (!filmMode) {
+            const versions = await getImageFileVersions([selectedFilePath])
+            if (obsolete()) return
+            cacheKey = createPreviewCacheKey({
+              imagePath: selectedFilePath,
+              maxWidth: PREVIEW_MAX_WIDTH,
+              maxHeight: PREVIEW_MAX_HEIGHT,
+              modifiedAtMs: versions[0]?.mtimeMs ?? null,
+              sourceSizeBytes: versions[0]?.sizeBytes ?? null,
+              recipeHash: hashRenderRecipe(engineRequest.recipe)
+            })
+            const cachedUrl = previewUrlCache.get(cacheKey)
+            if (cachedUrl !== null) {
+              setState((prev) => prev.kind !== "active" || prev.filePath !== selectedFilePath
+                ? prev : { ...prev, engineDisplayUrl: cachedUrl, engineSyncStatus: "synced" })
+              return
             }
           }
-        })
-        throw error
-      }
-    }, { immediate })
+          const response = await requestPreviewWithStartupRetry(engineRequest, signal)
+          if (obsolete()) return
+          const displayUrl = response.previewAvailable ? resolveDisplayUrl(response.previewUrl) : null
+          if (displayUrl !== null && cacheKey !== null) previewUrlCache.set(cacheKey, displayUrl)
+          setState((prev) => prev.kind !== "active" || prev.filePath !== selectedFilePath
+            ? prev : {
+              ...prev,
+              engineDisplayUrl: displayUrl,
+              engineSyncStatus: interactive ? "syncing" : "synced",
+              engineResponse: response
+            })
+        } catch (error: unknown) {
+          if (obsolete() || interactive || (filmMode && isFilmCancellation(error))) throw error
+          setState((prev) => prev.kind !== "active" || prev.filePath !== selectedFilePath
+            ? prev : {
+              ...prev,
+              engineSyncStatus: "error",
+              engineResponse: {
+                status: "error",
+                message: toErrorMessage(error),
+                previewAvailable: false,
+                previewUrl: ""
+              }
+            })
+          throw error
+        }
+      }, { immediate, coalesce: interactive })
 
-    if (scheduled !== "scheduled") {
+      if (scheduled !== "scheduled") return
+      setState((prev) => prev.kind !== "active" || prev.filePath !== selectedFilePath
+        ? prev : {
+          ...prev,
+          engineSyncStatus: "syncing",
+          ...(!filmMode ? {} : interactive
+            ? { engineRecipe: null, engineGeneration: null }
+            : {
+              engineRecipe: plainEngineRequest.recipe,
+              engineClientId: clientId,
+              engineGeneration: scheduler.generation
+            })
+        })
+    }
+
+    if (!filmMode) {
+      submit("exact", flushRequestedRef.current)
+      flushRequestedRef.current = false
       return
     }
-    const scheduledGeneration = scheduler.generation
-    setState((prev) => {
-      if (prev.kind !== "active" || prev.filePath !== selectedFilePath) {
-        return prev
-      }
-      return {
-        ...prev,
-        engineSyncStatus: "syncing",
-        ...(filmMode
-          ? {
-            engineRecipe: JSON.parse(JSON.stringify(plainEngineRequest.recipe)) as PreviewRequest["recipe"],
-            engineClientId: requestClient.current,
-            engineGeneration: scheduledGeneration
-          }
-          : {})
-      }
+
+    const basis = hashRenderRecipe({
+      ...plainEngineRequest.recipe,
+      imageProcessing: { ...imageProcessing, positive: null }
     })
+    const previous = lastFilmSnapshot.current
+    if (previous?.key === snapshotKey) return
+    lastFilmSnapshot.current = { key: snapshotKey, basis }
+    if (refineTimer.current !== null) window.clearTimeout(refineTimer.current)
+    refineTimer.current = null
+    refineRef.current = null
+
+    const immediate = flushRequestedRef.current
+    flushRequestedRef.current = false
+    if (previous?.basis !== basis || immediate) {
+      submit("exact", previous === null || immediate)
+      return
+    }
+
+    submit("interactive", false)
+    const refine = (): void => {
+      if (refineTimer.current !== null) window.clearTimeout(refineTimer.current)
+      refineTimer.current = null
+      refineRef.current = null
+      flushRequestedRef.current = false
+      submit("exact", true)
+    }
+    refineRef.current = refine
+    refineTimer.current = window.setTimeout(refine, 400)
   }, [
     selectedFilePath,
     filmMode,

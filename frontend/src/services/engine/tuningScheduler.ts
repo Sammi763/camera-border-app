@@ -17,12 +17,14 @@ type Pending = {
   key: string
   start: (generation: number, signal: AbortSignal) => Promise<void>
   immediate: boolean
+  coalesce: boolean
 }
 
 type InFlight = {
   key: string
   generation: number
   controller: AbortController
+  coalesce: boolean
 }
 
 export type TuningSchedulerOptions = {
@@ -70,7 +72,7 @@ export class TuningScheduler {
   public schedule(
     key: string,
     start: (generation: number, signal: AbortSignal) => Promise<void>,
-    options: { readonly immediate?: boolean } = {}
+    options: { readonly immediate?: boolean; readonly coalesce?: boolean } = {}
   ): ScheduleResult {
     if (this.disposed) return "disposed"
     if (this.inFlight !== null && this.inFlight.key === key) return "duplicate"
@@ -92,9 +94,10 @@ export class TuningScheduler {
     this.pending = {
       key,
       start,
-      immediate: options.immediate === true || this.pending?.immediate === true
+      immediate: options.immediate === true || this.pending?.immediate === true,
+      coalesce: options.coalesce === true
     }
-    if (this.inFlight !== null && this.inFlight.generation < generation) {
+    if (this.inFlight !== null && !(options.coalesce === true && this.inFlight.coalesce)) {
       // 只取消旧代次；不能用新代次取消，否则可能误伤刚开始的新任务。
       // 同时中止旧 HTTP 请求，保证响应不会乱序回写；后端由 DELETE 取消计算。
       this.onSupersede?.(generation - 1)
@@ -151,7 +154,7 @@ export class TuningScheduler {
     this.pending = null
     const controller = new AbortController()
     const generation = this.currentGeneration
-    this.inFlight = { key: item.key, generation, controller }
+    this.inFlight = { key: item.key, generation, controller, coalesce: item.coalesce }
     this.lastStartAt = this.now()
     void item.start(generation, controller.signal)
       .then(() => {

@@ -54,6 +54,18 @@ public final class PreviewController {
         if (recipe.getImageProcessing() == null && (request.getStage() != null || request.isSourceCoordinates()))
             throw new ApiException("底片对比选项需要 imageProcessing", HttpStatus.BAD_REQUEST);
 
+        final String quality = request.getPreviewQuality();
+        if (quality != null && !java.util.Set.of("interactive", "exact").contains(quality)) {
+            throw new ApiException("预览质量非法", HttpStatus.BAD_REQUEST);
+        }
+        if ("interactive".equals(quality) && (recipe.getImageProcessing() == null
+                || request.isSourceCoordinates() || request.isActualPixels()
+                || (request.getStage() != null && !"current-positive".equals(request.getStage()))
+                || request.getMaxWidth() <= 0 || request.getMaxHeight() <= 0
+                || request.getMaxWidth() > 2048 || request.getMaxHeight() > 2048)) {
+            throw new ApiException("快显需要当前正片及有效预览尺寸", HttpStatus.BAD_REQUEST);
+        }
+
         if (request.isActualPixels() && (request.getMaxWidth() != 0 || request.getMaxHeight() != 0))
             throw new ApiException("真实像素检查不能同时指定缩放尺寸", HttpStatus.BAD_REQUEST);
 

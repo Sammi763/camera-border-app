@@ -121,7 +121,7 @@ public final class FilmProcessingPipeline {
     }
 
     public SourceDescription describeSource(final RenderRecipe recipe) {
-        try (Processed processed = processInternal(recipe, "raw-linear", 0, 0, true, false)) {
+        try (Processed processed = processInternal(recipe, "raw-linear", 0, 0, true, false, false)) {
             SourceDescription description = descriptions.get(descriptionKey(recipe,
                     processed.getSourceVersion()));
             if (description == null) {
@@ -176,10 +176,6 @@ public final class FilmProcessingPipeline {
         public SourceImageInfo getSourceInfo() { return sourceInfo; }
         public double[] getResolvedFilmBase() { return resolvedFilmBase == null ? null : resolvedFilmBase.clone(); }
         public double[] getResolvedLightGain() { return resolvedLightGain == null ? null : resolvedLightGain.clone(); }
-
-        private Processed calibrated(final FilmNegativeProcessor.Result result) {
-            return calibrated(result.getBase(), result.getLightGain());
-        }
 
         private Processed calibrated(final double[] base, final double[] gain) {
             resolvedFilmBase = base == null ? null : base.clone();
@@ -242,19 +238,24 @@ public final class FilmProcessingPipeline {
 
     /** 分析/对比：完整源图坐标，不做输出合成。 */
     public Processed process(final RenderRecipe recipe, final String stage) {
-        return processInternal(recipe, stage, 0, 0, true, false);
+        return processInternal(recipe, stage, 0, 0, true, false, false);
     }
 
     /** 预览/导出：按输出上限估算合成、装饰和编码缓冲。 */
     public Processed processForOutput(final RenderRecipe recipe, final String stage,
                                       final int maxWidth, final int maxHeight,
                                       final boolean borderless) {
-        return processInternal(recipe, stage, maxWidth, maxHeight, borderless, true);
+        return processInternal(recipe, stage, maxWidth, maxHeight, borderless, true, false);
+    }
+
+    public Processed processInteractivePreview(final RenderRecipe recipe, final int maxWidth,
+                                               final int maxHeight) {
+        return processInternal(recipe, "current-positive", maxWidth, maxHeight, false, true, true);
     }
 
     private Processed processInternal(final RenderRecipe recipe, final String stage,
                                       final int maxWidth, final int maxHeight,
-                                      final boolean borderless, final boolean compose) {
+                                      final boolean borderless, final boolean compose, final boolean interactive) {
         if (recipe == null || recipe.getImageProcessing() == null) {
             throw new FilmProcessingException("底片处理配置缺失",
                     HttpStatus.BAD_REQUEST, CODE_NO_PROCESSING);
@@ -278,45 +279,52 @@ public final class FilmProcessingPipeline {
         final String baseKey = FilmStageKeys.baseKey(rawKey, config, referenceVersions);
         final String currentKey = FilmStageKeys.currentKey(baseKey, config);
 
+        final boolean rawStage = "raw-linear".equals(stage);
+        final boolean currentStage = "current-positive".equals(stage);
+        final String proxyKey = "interactive-base|1024|" + baseKey;
         final java.util.List<FilmStageCache.Lease> leases = new java.util.ArrayList<>();
         try {
-            final FilmStageCache.Lease rawLease = stageCache.acquire(rawKey);
-            if (rawLease != null) leases.add(rawLease);
-            FilmStageCache.Lease baseLease = null;
-            if ("base-positive".equals(stage) || "current-positive".equals(stage)) {
-                baseLease = stageCache.acquire(baseKey);
-                if (baseLease != null) leases.add(baseLease);
+            final FilmStageCache.Lease current = currentStage && !interactive ? stageCache.acquire(currentKey) : null;
+            final FilmStageCache.Lease proxy = interactive ? stageCache.acquire(proxyKey) : null;
+            final FilmStageCache.Lease base = !rawStage && current == null && proxy == null
+                    ? stageCache.acquire(baseKey) : null;
+            final FilmStageCache.Lease raw = current == null && proxy == null && base == null
+                    ? stageCache.acquire(rawKey) : null;
+            final FilmStageCache.Lease selected = current != null ? current : proxy != null ? proxy
+                    : base != null ? base : raw;
+            final Set<String> reusable;
+            if (selected == null) {
+                reusable = Collections.emptySet();
+            } else {
+                leases.add(selected);
+                reusable = Collections.singleton(selected.entry().getKey());
             }
-            FilmStageCache.Lease currentLease = null;
-            if ("current-positive".equals(stage)) {
-                currentLease = stageCache.acquire(currentKey);
-                if (currentLease != null) leases.add(currentLease);
-            }
-
-            final Set<String> reusable = new HashSet<>();
-            if (rawLease != null) reusable.add(rawKey);
-            if (baseLease != null) reusable.add(baseKey);
-            if (currentLease != null) reusable.add(currentKey);
 
             final FilmMemoryEstimator.Workload workload = workload(recipe, probed.getWidth(),
                     probed.getHeight(), maxWidth, maxHeight, borderless, compose, references);
-            final FilmMemoryEstimator.Estimate estimate = memoryBudget.estimate(workload);
-            final FilmMemoryBudgetService.Lease budgetLease = memoryBudget.acquire(estimate, reusable);
+            if (interactive) {
+                workload.interactive(true);
+            }
+            if (selected != null) {
+                workload.cachedStage(selected.entry().getStage());
+            }
+            final FilmMemoryBudgetService.Lease budgetLease =
+                    memoryBudget.acquire(memoryBudget.estimate(workload), reusable);
 
             try {
-                if ("raw-linear".equals(stage) && rawLease != null) {
-                    return fromEntry(rawLease.entry(), stage, config, budgetLease, leases);
+                if (current != null) return fromEntry(current.entry(), stage, config, budgetLease, leases);
+                if (proxy != null) {
+                    final Processed thumbnail = fromEntry(proxy.entry(), "base-positive", config, budgetLease, leases);
+                    return adjust(thumbnail, config, null, Collections.emptySet());
                 }
-                if ("base-positive".equals(stage) && baseLease != null) {
-                    return fromEntry(baseLease.entry(), stage, config, budgetLease, leases);
-                }
-                if ("current-positive".equals(stage) && currentLease != null) {
-                    return fromEntry(currentLease.entry(), stage, config, budgetLease, leases);
+                if (base != null) {
+                    final Processed basis = fromEntry(base.entry(), "base-positive", config, budgetLease, leases);
+                    return finish(basis, config, currentStage, interactive, proxyKey, baseKey, currentKey);
                 }
 
                 final Loaded loaded;
-                if (rawLease != null) {
-                    loaded = loadedFromEntry(rawLease.entry());
+                if (raw != null) {
+                    loaded = loadedFromEntry(raw.entry());
                 } else {
                     loaded = load(recipe, config, sourceVersion);
                     descriptions.put(descriptionKey(recipe, sourceVersion),
@@ -329,108 +337,48 @@ public final class FilmProcessingPipeline {
                             loaded.sourceDecode, loaded.sourceInfo, loaded.sensorClipping,
                             loaded.workingClipping, null, null);
                 }
-                if ("raw-linear".equals(stage)) {
-                    final Processed result = new Processed(loaded.image, stage,
-                            signature(config, stage), loaded.sourceVersion,
-                            loaded.sensorClipping, loaded.workingClipping, loaded.sourceDecode,
-                            loaded.sourceInfo, budgetLease, leases);
-                    return result;
+                if (rawStage) {
+                    return new Processed(loaded.image, stage, signature(config, stage),
+                            loaded.sourceVersion, loaded.sensorClipping, loaded.workingClipping,
+                            loaded.sourceDecode, loaded.sourceInfo, budgetLease, leases);
                 }
-                final boolean negativeEnabled = negativeEnabled(config);
-                if (!negativeEnabled) {
-                    // 只有 v2 正片/扫描成片可以跳过反相；v1 缺 negative 仍必须明确失败。
+
+                final FloatRgbImage baseImage;
+                final ClipCounts baseWorking;
+                final double[] resolvedBase;
+                final double[] resolvedGain;
+                if (negativeEnabled(config)) {
+                    synchronized (this) { baseComputeCount++; }
+                    final FilmNegativeProcessor.Result negative = new FilmNegativeProcessor().process(
+                            loaded.image, resolveReferences(config, loaded, references));
+                    baseImage = negative.getImage();
+                    baseWorking = workingClipping(baseImage);
+                    resolvedBase = negative.getBase();
+                    resolvedGain = negative.getLightGain();
+                } else {
                     if (!(config.getSchemaVersion() == ImageProcessingConfig.SCHEMA_VERSION_V2
                             && "positive".equals(config.getFilmPolarity()))) {
                         throw new FilmProcessingException("底片转正阶段需要启用的 negative 配置",
                                 HttpStatus.BAD_REQUEST, CODE_NEGATIVE_REQUIRED);
                     }
-                    final FloatRgbImage baseImage = loaded.image;
-                    final ClipCounts baseWorking = workingClipping(baseImage);
-                    store(baseKey, "base-positive", baseImage, loaded.sourceVersion,
-                            loaded.sourceDecode, loaded.sourceInfo, loaded.sensorClipping,
-                            baseWorking, null, null);
-                    if ("base-positive".equals(stage)) {
-                        return new Processed(baseImage, stage, signature(config, stage),
-                                loaded.sourceVersion, loaded.sensorClipping, baseWorking,
-                                loaded.sourceDecode, loaded.sourceInfo, budgetLease, leases);
-                    }
-                    synchronized (this) { positiveComputeCount++; }
-                    final FloatRgbImage positive = new FilmPositiveProcessor()
-                            .process(baseImage, config.getPositive());
-                    final ClipCounts positiveWorking = workingClipping(positive);
-                    store(currentKey, "current-positive", positive, loaded.sourceVersion,
-                            loaded.sourceDecode, loaded.sourceInfo, loaded.sensorClipping,
-                            positiveWorking, null, null);
-                    return new Processed(positive, stage, signature(config, stage),
-                            loaded.sourceVersion, loaded.sensorClipping, positiveWorking,
-                            loaded.sourceDecode, loaded.sourceInfo, budgetLease, leases);
+                    baseImage = loaded.image;
+                    baseWorking = loaded.workingClipping;
+                    resolvedBase = null;
+                    resolvedGain = null;
                 }
-                final FloatRgbImage baseImage;
-                final ClipCounts baseSensor;
-                final ClipCounts baseWorking;
-                final SourceDecode baseDecode;
-                final SourceImageInfo baseInfo;
-                final String baseSourceVersion;
-                final double[] resolvedBase;
-                final double[] resolvedGain;
-                if (baseLease != null) {
-                    final FilmStageCache.Entry entry = baseLease.entry();
-                    baseImage = entry.getImage();
-                    baseSourceVersion = entry.getSourceVersion();
-                    baseDecode = entry.getSourceDecode();
-                    baseInfo = entry.getSourceInfo();
-                    baseSensor = clipCounts(entry.isSensorClippingAvailable(), entry.getSensorLow(),
-                            entry.getSensorHigh(), entry.getSensorNote());
-                    baseWorking = clipCounts(true, entry.getWorkingLow(), entry.getWorkingHigh(),
-                            "工作图线性值 <=0 或 >=1 的计数");
-                    resolvedBase = entry.getResolvedFilmBase();
-                    resolvedGain = entry.getResolvedLightGain();
-                    final Processed base = new Processed(baseImage, "base-positive",
-                            signature(config, "base-positive"), baseSourceVersion, baseSensor,
-                            baseWorking, baseDecode, baseInfo, budgetLease, leases);
-                    base.resolvedFilmBase = resolvedBase;
-                    base.resolvedLightGain = resolvedGain;
-                    if ("base-positive".equals(stage)) {
-                        return base;
-                    }
-                    synchronized (this) { positiveComputeCount++; }
-                    final FloatRgbImage positive = new FilmPositiveProcessor()
-                            .process(baseImage, config.getPositive());
-                    final ClipCounts positiveWorking = workingClipping(positive);
-                    store(currentKey, "current-positive", positive, baseSourceVersion, baseDecode,
-                            baseInfo, baseSensor, positiveWorking, resolvedBase, resolvedGain);
-                    return new Processed(positive, stage, signature(config, stage), baseSourceVersion,
-                            baseSensor, positiveWorking, baseDecode, baseInfo, budgetLease, leases)
-                            .calibrated(resolvedBase, resolvedGain);
+                // 上游仍在本请求预算内，完成后释放其缓存固定，允许大图将唯一缓存位置交给基础正片。
+                if (raw != null) {
+                    raw.close();
+                    leases.remove(raw);
                 }
-
-                synchronized (this) { baseComputeCount++; }
-                final FilmNegativeProcessor.Result negative = new FilmNegativeProcessor().process(
-                        loaded.image, resolveReferences(config, loaded, references));
-                baseImage = negative.getImage();
-                baseSourceVersion = loaded.sourceVersion;
-                baseDecode = loaded.sourceDecode;
-                baseInfo = loaded.sourceInfo;
-                baseSensor = loaded.sensorClipping;
-                baseWorking = workingClipping(baseImage);
-                resolvedBase = negative.getBase();
-                resolvedGain = negative.getLightGain();
-                store(baseKey, "base-positive", baseImage, baseSourceVersion, baseDecode, baseInfo,
-                        baseSensor, baseWorking, resolvedBase, resolvedGain);
-                if ("base-positive".equals(stage)) {
-                    return new Processed(baseImage, stage, signature(config, stage),
-                            baseSourceVersion, baseSensor, baseWorking, baseDecode, baseInfo,
-                            budgetLease, leases).calibrated(resolvedBase, resolvedGain);
-                }
-                synchronized (this) { positiveComputeCount++; }
-                final FloatRgbImage positive = new FilmPositiveProcessor()
-                        .process(baseImage, config.getPositive());
-                final ClipCounts positiveWorking = workingClipping(positive);
-                store(currentKey, "current-positive", positive, baseSourceVersion, baseDecode,
-                        baseInfo, baseSensor, positiveWorking, resolvedBase, resolvedGain);
-                return new Processed(positive, stage, signature(config, stage), baseSourceVersion,
-                        baseSensor, positiveWorking, baseDecode, baseInfo, budgetLease, leases)
+                store(baseKey, "base-positive", baseImage, loaded.sourceVersion,
+                        loaded.sourceDecode, loaded.sourceInfo, loaded.sensorClipping,
+                        baseWorking, resolvedBase, resolvedGain);
+                final Processed basis = new Processed(baseImage, "base-positive",
+                        signature(config, "base-positive"), loaded.sourceVersion, loaded.sensorClipping,
+                        baseWorking, loaded.sourceDecode, loaded.sourceInfo, budgetLease, leases)
                         .calibrated(resolvedBase, resolvedGain);
+                return finish(basis, config, currentStage, interactive, proxyKey, baseKey, currentKey);
             } catch (RuntimeException | Error exception) {
                 budgetLease.close();
                 throw exception;
@@ -439,6 +387,39 @@ public final class FilmProcessingPipeline {
             for (FilmStageCache.Lease lease : leases) lease.close();
             throw exception;
         }
+    }
+
+    private Processed finish(final Processed basis, final ImageProcessingConfig config,
+                             final boolean current, final boolean interactive, final String proxyKey,
+                             final String baseKey, final String currentKey) {
+        if (!current) return basis;
+        if (!interactive) return adjust(basis, config, currentKey, Set.of(baseKey, proxyKey));
+
+        final FloatRgbImage proxy = FloatImageOps.fitWithin(basis.image, 1024, 1024);
+        store(proxyKey, FilmStageCache.STAGE_INTERACTIVE_BASE, proxy, basis.sourceVersion,
+                basis.sourceDecode, basis.sourceInfo, basis.sensorClipping, basis.workingClipping,
+                basis.resolvedFilmBase, basis.resolvedLightGain, Collections.singleton(baseKey));
+        final Processed thumbnail = new Processed(proxy, basis.stage, basis.recipeSignature,
+                basis.sourceVersion, basis.sensorClipping, basis.workingClipping, basis.sourceDecode,
+                basis.sourceInfo, basis.budgetLease, basis.cacheLeases)
+                .calibrated(basis.resolvedFilmBase, basis.resolvedLightGain);
+        return adjust(thumbnail, config, null, Collections.emptySet());
+    }
+
+    private Processed adjust(final Processed basis, final ImageProcessingConfig config,
+                             final String currentKey, final Set<String> keep) {
+        synchronized (this) { positiveComputeCount++; }
+        final FloatRgbImage positive = new FilmPositiveProcessor().process(basis.image, config.getPositive());
+        final ClipCounts clipping = positive == basis.image ? basis.workingClipping : workingClipping(positive);
+        if (currentKey != null) {
+            store(currentKey, "current-positive", positive, basis.sourceVersion,
+                    basis.sourceDecode, basis.sourceInfo, basis.sensorClipping, clipping,
+                    basis.resolvedFilmBase, basis.resolvedLightGain, keep);
+        }
+        return new Processed(positive, "current-positive", signature(config, "current-positive"),
+                basis.sourceVersion, basis.sensorClipping, clipping, basis.sourceDecode,
+                basis.sourceInfo, basis.budgetLease, basis.cacheLeases)
+                .calibrated(basis.resolvedFilmBase, basis.resolvedLightGain);
     }
 
     /** v1 由 negative.enabled 决定；v2 由 filmPolarity 决定，正片不进入反相阶段。 */
@@ -539,10 +520,19 @@ public final class FilmProcessingPipeline {
                        final String sourceVersion, final SourceDecode decode,
                        final SourceImageInfo info, final ClipCounts sensor,
                        final ClipCounts working, final double[] base, final double[] gain) {
+        store(key, stage, image, sourceVersion, decode, info, sensor, working, base, gain,
+                Collections.emptySet());
+    }
+
+    private void store(final String key, final String stage, final FloatRgbImage image,
+                       final String sourceVersion, final SourceDecode decode,
+                       final SourceImageInfo info, final ClipCounts sensor,
+                       final ClipCounts working, final double[] base, final double[] gain,
+                       final Set<String> keep) {
         if (stageCache == null || !stageCache.isEnabled()) return;
         stageCache.put(new FilmStageCache.Entry(key, stage, image, sourceVersion, decode, info,
                 sensor.isAvailable(), sensor.getLow(), sensor.getHigh(), sensor.getNote(),
-                working.getLow(), working.getHigh(), base, gain));
+                working.getLow(), working.getHigh(), base, gain), keep);
     }
 
     private static ClipCounts clipCounts(final boolean available, final long[] low,

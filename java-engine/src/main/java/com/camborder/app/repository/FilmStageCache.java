@@ -29,6 +29,8 @@ public final class FilmStageCache {
     public static final String STAGE_BASE = "base-positive";
     public static final String STAGE_CURRENT = "current-positive";
 
+    public static final String STAGE_INTERACTIVE_BASE = "interactive-base";
+
     private static final long DEFAULT_MAX_BYTES = 1536L * 1024L * 1024L;
     private static final long DEFAULT_IDLE_MILLIS = 120_000L;
 
@@ -36,6 +38,7 @@ public final class FilmStageCache {
     private final long idleMillis;
     private final java.util.function.LongSupplier clock;
     private final Map<String, Entry> entries = new LinkedHashMap<>();
+    private final Map<float[], Integer> buffers = new java.util.IdentityHashMap<>();
     private long maxBytes;
     private long bytes;
     private long accessSequence;
@@ -108,9 +111,10 @@ public final class FilmStageCache {
     public synchronized long bytesForKeys(final Set<String> keys) {
         if (keys == null || keys.isEmpty()) return 0;
         long total = 0;
+        final Set<float[]> seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
         for (String key : keys) {
             final Entry entry = entries.get(key);
-            if (entry != null) total += entry.bytes;
+            if (entry != null && seen.add(entry.image.getRgb())) total += entry.bytes;
         }
         return total;
     }
@@ -136,6 +140,10 @@ public final class FilmStageCache {
      * 返回是否真正入缓存。
      */
     public synchronized boolean put(final Entry entry) {
+        return put(entry, java.util.Collections.emptySet());
+    }
+
+    public synchronized boolean put(final Entry entry, final Set<String> keep) {
         if (!enabled || entry == null || entry.bytes <= 0 || entry.bytes > maxBytes) {
             skipped++;
             return false;
@@ -149,14 +157,18 @@ public final class FilmStageCache {
         if (existing != null) {
             removeLocked(existing);
         }
-        if (!evictToFit(entry.bytes, java.util.Collections.emptySet())) {
-            skipped++;
-            return false;
+        while (bytes + (buffers.containsKey(entry.image.getRgb()) ? 0 : entry.bytes) > maxBytes) {
+            final Entry victim = nextVictim(keep);
+            if (victim == null) {
+                skipped++;
+                return false;
+            }
+            removeLocked(victim);
         }
         entry.lastAccess = ++accessSequence;
         entry.lastAccessMillis = clock.getAsLong();
         entries.put(entry.key, entry);
-        bytes += entry.bytes;
+        if (buffers.merge(entry.image.getRgb(), 1, Integer::sum) == 1) bytes += entry.bytes;
         puts++;
         return true;
     }
@@ -169,8 +181,7 @@ public final class FilmStageCache {
             final Entry entry = iterator.next().getValue();
             if (entry.leaseCount == 0) {
                 iterator.remove();
-                bytes -= entry.bytes;
-                freed += entry.bytes;
+                freed += releaseBuffer(entry);
                 evictions++;
             }
         }
@@ -187,8 +198,7 @@ public final class FilmStageCache {
             final Entry entry = iterator.next().getValue();
             if (entry.leaseCount == 0 && (keep == null || !keep.contains(entry.key))) {
                 iterator.remove();
-                bytes -= entry.bytes;
-                freed += entry.bytes;
+                freed += releaseBuffer(entry);
                 evictions++;
             }
         }
@@ -202,6 +212,7 @@ public final class FilmStageCache {
 
     public synchronized void clear() {
         entries.clear();
+        buffers.clear();
         bytes = 0;
     }
 
@@ -235,8 +246,7 @@ public final class FilmStageCache {
             final Entry entry = iterator.next().getValue();
             if (entry.leaseCount == 0 && now - entry.lastAccessMillis >= idleMillis) {
                 iterator.remove();
-                bytes -= entry.bytes;
-                freed += entry.bytes;
+                freed += releaseBuffer(entry);
                 evictions++;
             }
         }
@@ -273,13 +283,25 @@ public final class FilmStageCache {
     private static int priority(final String stage) {
         if (STAGE_CURRENT.equals(stage)) return 0;
         if (STAGE_BASE.equals(stage)) return 1;
-        return 2;
+        return STAGE_INTERACTIVE_BASE.equals(stage) ? 3 : 2;
     }
 
     private void removeLocked(final Entry entry) {
         entries.remove(entry.key);
-        bytes -= entry.bytes;
+        releaseBuffer(entry);
         evictions++;
+    }
+
+    private long releaseBuffer(final Entry entry) {
+        final float[] pixels = entry.image.getRgb();
+        final int count = buffers.get(pixels);
+        if (count > 1) {
+            buffers.put(pixels, count - 1);
+            return 0;
+        }
+        buffers.remove(pixels);
+        bytes -= entry.bytes;
+        return entry.bytes;
     }
 
     private void release(final Entry entry) {

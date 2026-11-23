@@ -39,10 +39,11 @@ type NumberFieldProps = {
   readonly max: number
   readonly step?: number
   readonly disabled?: boolean
+  readonly slider?: boolean
   readonly onChange: (value: number) => void
 }
 
-const NumberField = ({ label, value, min, max, step = 0.01, disabled = false, onChange }: NumberFieldProps): JSX.Element => {
+const NumberField = ({ label, value, min, max, step = 0.01, disabled = false, slider = false, onChange }: NumberFieldProps): JSX.Element => {
   const [draft, setDraft] = useState(String(value))
   const [invalid, setInvalid] = useState(false)
   useEffect(() => { setDraft(String(value)); setInvalid(false) }, [value])
@@ -54,6 +55,8 @@ const NumberField = ({ label, value, min, max, step = 0.01, disabled = false, on
   return <label className="filmField"><span>{label}</span><input type="number" value={draft} min={min} max={max} step={step} disabled={disabled} aria-invalid={invalid}
     onChange={event => { setDraft(event.target.value); setInvalid(false) }} onBlur={submit}
     onKeyDown={event => { if (event.key === "Enter") submit(); if (event.key === "Escape") { setDraft(String(value)); setInvalid(false) } }} />
+    {slider && <input type="range" aria-label={`${label}滑杆`} value={value} min={min} max={max} step={step}
+      disabled={disabled} onChange={(event) => onChange(event.currentTarget.valueAsNumber)} />}
     {invalid && <span role="alert">请输入 {min} 至 {max} 的有效数值；原配方保持不变</span>}</label>
 }
 
@@ -400,7 +403,7 @@ export const FilmEditingPanel = ({
           <fieldset className="filmSection" disabled={disabled}>
             <legend>基础调整</legend>
             <div className="filmFieldGrid">
-              <NumberField label="曝光 EV" value={positive.exposureEv ?? 0} min={-5} max={5} step={0.01} disabled={disabled} onChange={(value) => config !== null && onChange(updatePositive(config, { exposureEv: value }), { historyTag: "positive:exposure", description: "调整曝光" })} />
+              <NumberField label="曝光 EV" value={positive.exposureEv ?? 0} min={-5} max={5} step={0.01} disabled={disabled} slider onChange={(value) => config !== null && onChange(updatePositive(config, { exposureEv: value }), { historyTag: "positive:exposure", description: "调整曝光" })} />
               {(["R", "G", "B"] as const).map((channel, index) => (
                 <NumberField
                   key={channel}
@@ -409,7 +412,7 @@ export const FilmEditingPanel = ({
                   min={-4}
                   max={4}
                   step={0.01}
-                  disabled={disabled}
+                  disabled={disabled} slider
                   onChange={(value) => {
                     if (config === null) return
                     const balance = [...(positive.rgbBalanceEv ?? [0, 0, 0])]
@@ -418,9 +421,9 @@ export const FilmEditingPanel = ({
                   }}
                 />
               ))}
-              <NumberField label="黑点" value={positive.blackPoint ?? 0} min={0} max={Math.min(0.99, (positive.whitePoint ?? 1) - 0.001)} disabled={disabled} onChange={(value) => config !== null && onChange(updatePositive(config, { blackPoint: value }), { historyTag: "positive:black", description: "调整黑点" })} />
-              <NumberField label="白点" value={positive.whitePoint ?? 1} min={Math.max(0.01, (positive.blackPoint ?? 0) + 0.001)} max={1} disabled={disabled} onChange={(value) => config !== null && onChange(updatePositive(config, { whitePoint: value }), { historyTag: "positive:white", description: "调整白点" })} />
-              <NumberField label="饱和度" value={positive.saturation ?? 1} min={0} max={2} step={0.01} disabled={disabled} onChange={(value) => config !== null && onChange(updatePositive(config, { saturation: value }), { historyTag: "positive:saturation", description: "调整饱和度" })} />
+              <NumberField label="黑点" value={positive.blackPoint ?? 0} min={0} max={Math.min(0.99, (positive.whitePoint ?? 1) - 0.001)} disabled={disabled} slider onChange={(value) => config !== null && onChange(updatePositive(config, { blackPoint: value }), { historyTag: "positive:black", description: "调整黑点" })} />
+              <NumberField label="白点" value={positive.whitePoint ?? 1} min={Math.max(0.01, (positive.blackPoint ?? 0) + 0.001)} max={1} disabled={disabled} slider onChange={(value) => config !== null && onChange(updatePositive(config, { whitePoint: value }), { historyTag: "positive:white", description: "调整白点" })} />
+              <NumberField label="饱和度" value={positive.saturation ?? 1} min={0} max={2} step={0.01} disabled={disabled} slider onChange={(value) => config !== null && onChange(updatePositive(config, { saturation: value }), { historyTag: "positive:saturation", description: "调整饱和度" })} />
             </div>
             <button type="button" className="ghostButton" disabled={disabled}
               onClick={() => config !== null && onChange(updatePositive(config, {

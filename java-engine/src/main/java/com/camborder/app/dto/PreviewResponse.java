@@ -5,6 +5,10 @@ package com.camborder.app.dto;
  */
 public final class PreviewResponse {
 
+    private String previewQuality;
+    public String getPreviewQuality() { return previewQuality; }
+    public void setPreviewQuality(final String value) { previewQuality = value; }
+
     private String status;
     private String message;
     private boolean previewAvailable;

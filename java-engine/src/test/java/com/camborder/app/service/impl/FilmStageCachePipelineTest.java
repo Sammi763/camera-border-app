@@ -56,6 +56,36 @@ final class FilmStageCachePipelineTest {
     }
 
     @Test
+    void basisSurvivesWithoutRawAndInteractiveNeverSuppliesExactPixels(@TempDir final Path tempDir) throws Exception {
+        final int width = 1100;
+        final int height = 40;
+        final Path path = FilmTestFixtures.writeLinearTiff(tempDir, width, height,
+                FilmTestFixtures.constantSamples(width * height, new int[]{16000, 16000, 16000}));
+        final ImageProcessingConfig config = FilmTestFixtures.linearProcessing();
+        config.setNegative(FilmTestFixtures.manualNegative(new double[]{0.5, 0.5, 0.5}));
+        final RenderRecipe recipe = FilmTestFixtures.recipe(path, config);
+        final FilmStageCache cache = cache();
+        final FilmProcessingPipeline pipeline = pipeline(cache);
+        cache.configureMaxBytes(FloatRgbImage.bytesFor(width, height));
+        try (FilmProcessingPipeline.Processed ignored = pipeline.process(recipe, "base-positive")) {
+            assertThat(cache.stages()).containsExactly("base-positive");
+        }
+        for (double exposure : new double[]{0.2, 0.4}) {
+            config.setPositive(positive(exposure));
+            try (FilmProcessingPipeline.Processed proxy = pipeline.processInteractivePreview(recipe, 1280, 1280)) {
+                assertThat(proxy.getImage().getWidth()).isEqualTo(1024);
+                assertThat(proxy.getSourceDecode().getFullWidth()).isEqualTo(width);
+            }
+            try (FilmProcessingPipeline.Processed exact = pipeline.process(recipe, "current-positive")) {
+                assertThat(exact.getImage().getWidth()).isEqualTo(width);
+            }
+        }
+        assertThat(pipeline.getRawDecodeCount()).isEqualTo(1);
+        assertThat(pipeline.getBaseComputeCount()).isEqualTo(1);
+        assertThat(cache.stages()).containsExactly("base-positive");
+    }
+
+    @Test
     void geometryChangesDoNotInvalidatePhotoStages(@TempDir final Path tempDir) throws Exception {
         final Path path = FilmTestFixtures.writeLinearTiff(tempDir, 4, 2,
                 FilmTestFixtures.constantSamples(8, new int[]{16000, 16000, 16000}));

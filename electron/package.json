@@ -1,7 +1,7 @@
 {
   "name": "electron",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "A local photo border and photography information tool.",
   "author": "Camera Border",
   "main": "dist/main/main.js",

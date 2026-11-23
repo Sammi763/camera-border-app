@@ -131,9 +131,59 @@ public final class FloatImageOps {
         return out;
     }
 
+    /** 将显示像素中心映射到原始版式、源裁切和缩略图，边距仍使用原版式缩放比。 */
+    static FloatRgbImage placePreview(final FloatRgbImage proxy, final int sourceWidth,
+            final int sourceHeight, final int[] crop, final double straighten,
+            final ImagePlacementRenderer.Geometry placement, final java.awt.Color background,
+            final int width, final int height) {
+        final int cropWidth = crop[2] - crop[0];
+        final int cropHeight = crop[3] - crop[1];
+        final double placeCos = Math.cos(Math.toRadians(placement.rotation()));
+        final double placeSin = Math.sin(Math.toRadians(placement.rotation()));
+        final double cropCos = Math.cos(Math.toRadians(straighten));
+        final double cropSin = Math.sin(Math.toRadians(straighten));
+        final double fullWidth = Math.round(placement.targetWidth());
+        final double fullHeight = Math.round(placement.targetHeight());
+        final double centerX = placement.offsetX() + placement.rotatedWidth() * placement.scale() / 2;
+        final double centerY = placement.offsetY() + placement.rotatedHeight() * placement.scale() / 2;
+        final double proxyX = (double) proxy.getWidth() / sourceWidth;
+        final double proxyY = (double) proxy.getHeight() / sourceHeight;
+        final FloatRgbImage photo = new FloatRgbImage(width, height);
+        final float[] fill = new float[3];
+        FilmColorSpace.linearSrgbToRec2020(new float[]{
+                (float) FilmColorSpace.encodedSrgbToLinear(background.getRed() / 255.0),
+                (float) FilmColorSpace.encodedSrgbToLinear(background.getGreen() / 255.0),
+                (float) FilmColorSpace.encodedSrgbToLinear(background.getBlue() / 255.0)}, fill);
+        final float[] sample = new float[3];
+        for (int y = 0; y < height; y++) {
+            FilmRequestGuard.check();
+            final double dy = ((y + 0.5) * fullHeight / height - centerY) / placement.scale();
+            for (int x = 0; x < width; x++) {
+                final double dx = ((x + 0.5) * fullWidth / width - centerX) / placement.scale();
+                final double px = placeCos * dx + placeSin * dy + crop[4] / 2.0 - 0.5;
+                final double py = -placeSin * dx + placeCos * dy + crop[5] / 2.0 - 0.5;
+                if (px < -0.5 || py < -0.5 || px >= crop[4] - 0.5 || py >= crop[5] - 0.5) {
+                    for (int c = 0; c < 3; c++) photo.set(x, y, c, fill[c]);
+                    continue;
+                }
+                final double gx = Math.max(0, Math.min(crop[4] - 1, px)) - (crop[4] - 1) / 2.0;
+                final double gy = Math.max(0, Math.min(crop[5] - 1, py)) - (crop[5] - 1) / 2.0;
+                final double sx = crop[0] + (cropWidth - 1) / 2.0 + cropCos * gx + cropSin * gy;
+                final double sy = crop[1] + (cropHeight - 1) / 2.0 - cropSin * gx + cropCos * gy;
+                final double ix = (Math.max(crop[0], Math.min(crop[2] - 1, sx)) + 0.5) * proxyX - 0.5;
+                final double iy = (Math.max(crop[1], Math.min(crop[3] - 1, sy)) + 0.5) * proxyY - 0.5;
+                sampleBilinear(proxy, Math.max(0, Math.min(proxy.getWidth() - 1, ix)),
+                        Math.max(0, Math.min(proxy.getHeight() - 1, iy)), sample);
+                for (int c = 0; c < 3; c++) photo.set(x, y, c, sample[c]);
+            }
+        }
+        return photo;
+    }
+
     /** 按 EXIF 方向重排浮点像素；保持原数值，不经过整数栅格。 */
     public static FloatRgbImage orient(final FloatRgbImage source, final int orientation) {
         if (orientation < 1 || orientation > 8) throw new IllegalArgumentException("方向必须在 1–8 之间");
+        if (orientation == 1) return source;
         final int w = source.getWidth();
         final int h = source.getHeight();
         final FloatRgbImage out = new FloatRgbImage(orientation >= 5 ? h : w, orientation >= 5 ? w : h);

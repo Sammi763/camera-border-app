@@ -32,11 +32,38 @@ const readSaved = (): SavedCalibration[] => {
   } catch { return [] }
 }
 
+/** 从未叠加曝光的线性正片找高光余量；密度已剪裁的区域无法可靠反推。 */
+const suggestDensityMaximum = (result: ImageAnalysisResponse, min: number, max: number): number => {
+  const count = result.stats.pixelCount
+  if (count < 100 || result.stats.clippedLow.some((n) => n > count * 0.2)) {
+    throw new Error("该区域有过多黑位剪裁。请先重新框选未曝光片基，再只框画面。")
+  }
+  const percentile = (buckets: readonly number[]): number => {
+    let remaining = Math.ceil(count * 0.98)
+    return buckets.findIndex((n) => (remaining -= n) <= 0)
+  }
+  const { red, green, blue } = result.histogram
+  const peak = Math.max(percentile(red), percentile(green), percentile(blue))
+  if (peak < 1 || peak >= result.bucketCount - 1) {
+    throw new Error("该区域的高光已到取样边界。请检查片基或先扩大密度范围。")
+  }
+  const span = (max - min) * (peak + 1) / result.bucketCount / 0.75
+  return Math.min(6, Math.ceil((min + Math.max(0.11, span)) * 100) / 100)
+}
+
 /** 对比、实际像素检查和取样共用引擎配方；取样模式切到完整源图，避免显示坐标混淆。 */
 export const FilmWorkspacePreview = ({ state, settings, config, onChange, onSourceVersion, viewportCommand }: Props): JSX.Element => {
   const [stage, setStage] = useState<ImageAnalysisStage>("current-positive")
   const [picking, setPicking] = useState(false)
   const [neutralPicking, setNeutralPicking] = useState(false)
+  const [densityPicking, setDensityPicking] = useState(false)
+  const [densitySuggestion, setDensitySuggestion] = useState<{
+    identity: string
+    sourceVersion: string
+    max: number
+  } | null>(null)
+  const positivePicking = neutralPicking || densityPicking
+  const sourcePicking = picking || positivePicking
   const [neutral, setNeutral] = useState<NeutralBalanceSuggestion | null>(null)
   const [neutralForSignature, setNeutralForSignature] = useState<string | null>(null)
   const [actual, setActual] = useState(false)
@@ -66,11 +93,11 @@ export const FilmWorkspacePreview = ({ state, settings, config, onChange, onSour
   const stableRecipe = state.engineRecipe ?? null
   const engineClientId = state.engineClientId ?? null
   const engineGeneration = state.engineGeneration ?? null
-  const effectiveStage: ImageAnalysisStage = neutralPicking ? "base-positive" : picking ? "raw-linear" : stage
-  const needStagePreview = effectiveStage !== "current-positive" || picking || neutralPicking || actual
-  useEffect(() => { setStage("current-positive"); setPicking(false); setNeutralPicking(false); setActual(false); setRoi(null); setStagePreviewDone(false); setNeutral(null); setNeutralForSignature(null); setReference(null); setError(null); operation.current++ }, [state.filePath])
-  useEffect(() => { setStagePreviewDone(false); setUrl(null); setAnalysis(null) }, [effectiveStage, picking, neutralPicking, actual, stableRecipe, engineGeneration])
-  useEffect(() => { setNeutral(null); setNeutralForSignature(null) ; operation.current++ }, [signature])
+  const effectiveStage: ImageAnalysisStage = positivePicking ? "base-positive" : picking ? "raw-linear" : stage
+  const needStagePreview = effectiveStage !== "current-positive" || sourcePicking || actual
+  useEffect(() => { setStage("current-positive"); setPicking(false); setNeutralPicking(false); setDensityPicking(false); setActual(false); setRoi(null); setStagePreviewDone(false); setNeutral(null); setNeutralForSignature(null); setReference(null); setError(null); operation.current++ }, [state.filePath])
+  useEffect(() => { setStagePreviewDone(false); setUrl(null); setAnalysis(null) }, [effectiveStage, picking, positivePicking, actual, stableRecipe, engineGeneration])
+  useEffect(() => { setNeutral(null); setNeutralForSignature(null); setDensitySuggestion(null); operation.current++ }, [signature])
 
   const begin = (): void => {
     pending.current += 1
@@ -102,7 +129,7 @@ export const FilmWorkspacePreview = ({ state, settings, config, onChange, onSour
       maxWidth: actual ? 0 : 1280,
       maxHeight: actual ? 0 : 1280,
       stage: effectiveStage,
-      sourceCoordinates: picking || neutralPicking,
+      sourceCoordinates: sourcePicking,
       actualPixels: actual,
       clientId: engineClientId,
       generation: engineGeneration
@@ -119,13 +146,13 @@ export const FilmWorkspacePreview = ({ state, settings, config, onChange, onSour
       })
       .finally(end)
     return () => { active = false; controller.abort() }
-  }, [stableRecipe, engineClientId, engineGeneration, effectiveStage, picking, neutralPicking, actual, needStagePreview])
+  }, [stableRecipe, engineClientId, engineGeneration, effectiveStage, sourcePicking, actual, needStagePreview])
 
   // 直方图：当前结果等待主预览同步后执行；阶段对比等待该阶段预览完成后再执行。
   useEffect(() => {
     if (config === null || stableRecipe === null || engineClientId === null || engineGeneration === null) return
     const ready = needStagePreview ? stagePreviewDone : state.engineSyncStatus === "synced"
-    if (!ready) return
+    if (!ready || densityPicking) return
     let active = true
     const controller = new AbortController()
     const identityAtStart = currentIdentity.current
@@ -150,7 +177,7 @@ export const FilmWorkspacePreview = ({ state, settings, config, onChange, onSour
       .finally(end)
     return () => { active = false; controller.abort() }
   }, [stableRecipe, engineClientId, engineGeneration, effectiveStage, needStagePreview,
-    stagePreviewDone, state.engineSyncStatus, settings.filmOutput])
+    stagePreviewDone, state.engineSyncStatus, settings.filmOutput, densityPicking])
 
   const point = (event: React.PointerEvent) => {
     const box = image.current?.getBoundingClientRect()
@@ -161,6 +188,29 @@ export const FilmWorkspacePreview = ({ state, settings, config, onChange, onSour
   const finish = () => {
     start.current = null
     if (roi === null || roi.width < 0.001 || roi.height < 0.001) return
+    if (densityPicking) {
+      const density = config?.negative?.density
+      if (stableRecipe === null || density == null) return
+      const requestedIdentity = currentIdentity.current
+      const requestNumber = ++operation.current
+      setDensityPicking(false)
+      setError(null)
+      begin()
+      void analyzeImage({
+        recipe: stableRecipe,
+        stage: "base-positive",
+        roi,
+        ...(engineClientId === null ? {} : { clientId: engineClientId }),
+        ...(engineGeneration === null ? {} : { generation: engineGeneration })
+      }).then((result) => {
+        if (currentIdentity.current !== requestedIdentity || requestNumber !== operation.current) return
+        const max = suggestDensityMaximum(result, density.min ?? 0, density.max ?? 3)
+        setDensitySuggestion({ identity: requestedIdentity, sourceVersion: result.sourceVersion, max })
+      }).catch((e: unknown) => {
+        if (currentIdentity.current === requestedIdentity && requestNumber === operation.current) setError(message(e))
+      }).finally(end)
+      return
+    }
     if (neutralPicking) {
       setNeutralPicking(false)
       if (stableRecipe === null) return
@@ -183,6 +233,8 @@ export const FilmWorkspacePreview = ({ state, settings, config, onChange, onSour
       return
     }
     if (config?.negative == null) return
+    setPicking(false)
+    setStage("current-positive")
     onChange?.({ ...config, negative: { ...config.negative, filmBase: { kind: "roi", stage: "linear-working", roi } } },
       { description: "从负片源图选取片基" })
   }
@@ -240,6 +292,22 @@ export const FilmWorkspacePreview = ({ state, settings, config, onChange, onSour
       { description: kind === "base" ? "选择同卷片基参考" : "选择翻拍光源参考" })
     } catch (e) { setError(message(e)) }
   }
+  const applyDensity = async (): Promise<void> => {
+    if (config?.negative?.density == null || densitySuggestion === null || densitySuggestion.identity !== identity) return
+    const suggestion = densitySuggestion
+    begin()
+    try {
+      const fresh = await probeImage({ imagePath: state.filePath })
+      if (currentIdentity.current !== suggestion.identity) return
+      if (fresh.sourceVersion !== suggestion.sourceVersion) throw new Error("源文件已变化，请重新框选画面")
+      setDensitySuggestion(null)
+      setStage("current-positive")
+      onChange?.({ ...config, negative: { ...config.negative,
+        density: { ...config.negative.density, max: suggestion.max } } }, { description: "应用画面密度建议" })
+    } catch (e) {
+      if (currentIdentity.current === suggestion.identity) setError(message(e))
+    } finally { end() }
+  }
   const save = () => {
     if (config?.negative == null || stableRecipe === null || analysis?.calibrationSpaceKey == null || !name.trim()) return
     // 保存引擎实际解析的片基/光源数值，避免把 ROI 坐标或可变参考路径盲套到其他照片。
@@ -261,7 +329,7 @@ export const FilmWorkspacePreview = ({ state, settings, config, onChange, onSour
     }
     void saveConfig().catch((e: unknown) => setError(message(e)))
   }
-  const displayUrl = effectiveStage === "current-positive" && !picking && !neutralPicking && !actual ? state.engineDisplayUrl : url
+  const displayUrl = effectiveStage === "current-positive" && !sourcePicking && !actual ? state.engineDisplayUrl : url
   const histogram = analysis?.histogram
   const maximum = Math.max(1, ...(histogram?.red ?? []), ...(histogram?.green ?? []), ...(histogram?.blue ?? []))
   const overBudget = actual && Math.max(state.engineResponse?.sourceDecode?.fullWidth ?? 0, state.engineResponse?.sourceDecode?.fullHeight ?? 0) > 8192
@@ -271,15 +339,26 @@ export const FilmWorkspacePreview = ({ state, settings, config, onChange, onSour
       {([ ["raw-linear", config?.filmPolarity === "positive" ? "原图" : "原始负片"],
         ["base-positive", config?.filmPolarity === "positive" ? "基础正片" : "基础转正"],
         ["current-positive", "当前结果"] ] as const).map(([value, label]) =>
-        <button key={value} type="button" aria-pressed={stage === value && !picking && !neutralPicking} onClick={() => { setStage(value); setPicking(false); setNeutralPicking(false) }}>{label}</button>)}
-      <button type="button" aria-pressed={picking} disabled={onChange === undefined || config?.negative == null} onClick={() => { setPicking(!picking); setNeutralPicking(false); setActual(false) }}>框选片基</button>
-      <button type="button" aria-pressed={neutralPicking} disabled={onChange === undefined} onClick={() => { setNeutralPicking(!neutralPicking); setPicking(false); setActual(false) }}>中性取样</button>
+        <button key={value} type="button" aria-pressed={stage === value && !sourcePicking} onClick={() => { setStage(value); setPicking(false); setNeutralPicking(false); setDensityPicking(false) }}>{label}</button>)}
+      <button type="button" aria-pressed={picking} disabled={onChange === undefined || config?.negative == null} onClick={() => { setPicking(!picking); setNeutralPicking(false); setDensityPicking(false); setActual(false) }}>框选片基</button>
+      <button type="button" aria-pressed={neutralPicking} disabled={onChange === undefined} onClick={() => { setNeutralPicking(!neutralPicking); setPicking(false); setDensityPicking(false); setActual(false) }}>中性取样</button>
+      {config?.negative?.density != null && <button type="button" aria-pressed={densityPicking}
+        disabled={onChange === undefined || stableRecipe === null}
+        onClick={() => {
+          setDensityPicking(!densityPicking); setDensitySuggestion(null)
+          setPicking(false); setNeutralPicking(false); setActual(false)
+        }}>框选画面建议密度</button>}
       <button type="button" aria-pressed={actual} onClick={() => setActual(!actual)}>100% 像素</button>
       <button type="button" disabled={typeof window.desktop?.selectImageFiles !== "function"}
         onClick={() => void pickReference()}>选择参考图</button>
     </div>
-    {picking && <p>正在显示完整有向负片。拖动框选未曝光片边；取样坐标不受裁切和校平影响。</p>}
+    {picking && <p>正在显示完整有向负片。拖动框选未曝光片边的均匀橙色区域，避开画面、扫描仪边框和编号。</p>}
     {neutralPicking && <p>正在显示基础正片。拖动框选中性区域；过暗、近剪裁样本会被过滤，建议不会自动应用。</p>}
+    {densityPicking && <p>先确认片基，再框选一格画面，避开片边、帧间空隙和编号。建议用这格画面的高光估算密度上限。</p>}
+    {densitySuggestion !== null && densitySuggestion.identity === identity && <div className="filmCalibrationTools" role="status">
+      <span>建议密度上限 {densitySuggestion.max.toFixed(2)}（当前 {(config?.negative?.density?.max ?? 3).toFixed(2)}）</span>
+      <button type="button" disabled={busy} onClick={() => void applyDensity()}>应用密度建议</button>
+    </div>}
     {neutral !== null && <div className="filmCalibrationTools" role="status">
       {neutral.available
         ? <><span>中性建议 RGB 平衡：{neutral.suggestedRgbBalanceEv?.map((value) => value.toFixed(3)).join(" / ")} EV · 样本 {neutral.sampleCount} · 置信 {neutral.confidence}</span>
@@ -288,7 +367,7 @@ export const FilmWorkspacePreview = ({ state, settings, config, onChange, onSour
     </div>}
     {overBudget ? <p role="alert">完整像素超过检查预算，请切回适应窗口。</p> : <div className="filmImageScroll">
       <div className="filmImageBoard" onPointerDown={(event) => {
-        if ((!picking && !neutralPicking) || displayUrl === null || loadedUrl !== displayUrl) return
+        if (!sourcePicking || displayUrl === null || loadedUrl !== displayUrl) return
         start.current = point(event); setRoi(null)
         event.currentTarget.setPointerCapture?.(event.pointerId)
       }} onPointerMove={(event) => {
@@ -299,10 +378,11 @@ export const FilmWorkspacePreview = ({ state, settings, config, onChange, onSour
         {displayUrl !== null ? <img ref={image} src={displayUrl} alt="底片校色预览" draggable={false} onLoad={(event) => setLoadedUrl(event.currentTarget.getAttribute("src"))}
           style={actual ? { maxWidth: "none", maxHeight: "none" } : { maxWidth: "100%", maxHeight: "52vh" }} />
           : <p role={state.engineSyncStatus === "error" ? "alert" : "status"}>{state.engineSyncStatus === "error" ? state.engineResponse?.message ?? "底片预览不可用" : "正在等待引擎校色结果"}</p>}
-        {(picking || neutralPicking) && roi !== null && <span className="filmRoi" style={{ left: `${roi.x * 100}%`, top: `${roi.y * 100}%`, width: `${roi.width * 100}%`, height: `${roi.height * 100}%` }} />}
+        {sourcePicking && roi !== null && <span className="filmRoi" style={{ left: `${roi.x * 100}%`, top: `${roi.y * 100}%`, width: `${roi.width * 100}%`, height: `${roi.height * 100}%` }} />}
       </div>
     </div>}
-    <p role="status">{busy || state.engineSyncStatus === "syncing" ? "引擎同步中" : "引擎结果"}{actual ? " · 100%（一个图像像素对应一个 CSS 像素）" : ""}</p>
+    <p role="status">{!needStagePreview && state.engineResponse?.previewQuality === "interactive" && state.engineSyncStatus !== "synced"
+      ? "快速预览 · 等待精算" : busy || state.engineSyncStatus === "syncing" ? "引擎同步中" : "引擎结果"}{actual ? " · 100%（一个图像像素对应一个 CSS 像素）" : ""}</p>
     {reference !== null && <figure className="filmReferenceCompare">
       <img src={reference.url} alt="参考图对照" draggable={false} />
       <figcaption>参考图（仅人工对照，不进入片基/光源/配方）· {reference.path}</figcaption>

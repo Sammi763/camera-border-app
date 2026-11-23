@@ -7,6 +7,10 @@ import com.camborder.app.model.RenderRecipe;
  */
 public final class PreviewRequest {
 
+    private String previewQuality;
+    public String getPreviewQuality() { return previewQuality; }
+    public void setPreviewQuality(final String value) { previewQuality = value; }
+
     private String clientId;
     private long generation;
     public String getClientId() { return clientId; }
