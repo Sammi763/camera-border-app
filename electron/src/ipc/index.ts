@@ -9,7 +9,7 @@ import { registerLocalImagePreviewIpc } from "./localImagePreview.js"
 import { registerFilePresenceIpc, registerImageFileVersionIpc } from "./filePresence.js"
 import { registerWindowStateIpc } from "./windowState.js"
 import { registerPackageCapabilitiesIpc } from "./packageCapabilities.js"
-import { registerAiGatewayIpc } from "./aiGateway.js"
+import { registerAiGatewayCredentialsIpc } from "./aiGateway.js"
 import { registerFilmArchiveIpc } from "./filmArchive.js"
 
 /**
@@ -37,6 +37,5 @@ export const registerAllIpc = (): void => {
   registerImageFileVersionIpc()
   // FilmArchive：只读目录选择、固定白名单根与受控打开；解析在 Java 引擎。
   registerFilmArchiveIpc()
-  // AI 网关（联通国际 Uni Token）：V2 AI 能力预留；密钥未配置时调用返回 key-missing 错误。
-  registerAiGatewayIpc()
+  registerAiGatewayCredentialsIpc()
 }

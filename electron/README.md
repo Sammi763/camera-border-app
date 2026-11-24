@@ -75,6 +75,7 @@ JavaBridge 的实际端口只存在于主进程，不通过 preload、IPC 或运
 | 日志打开 | `openLogFile` | 在系统默认应用中直接打开引擎日志**文件**；仅允许 `userData/logs` 下的**常规文件**（`resolve` 规范化拦截 `../` 穿越、`realpath` 拦截符号链接/大小写绕过、`stat` 确认是普通文件），不存在或打开失败返回 `false` |
 | 引擎诊断 | `getEngineDiagnostics` / `retryEngineStart` | 托管模式失败分类（jar 缺失 / 随包运行时缺失损坏 / 运行时被安全软件阻止 / 启动失败 / 端口占用 / 启动中 / 健康超时）、日志路径与重试 |
 | 引擎请求 | `app://app/api/**` / `app://app/previews/**` | 生产模式由主进程安全代理转发到当前托管 JavaBridge；Renderer 只发 `/api/**` 与 `/previews/**` 同源相对请求 |
+| AI 网关凭据 | `getAiGatewayStatus` / `saveAiGatewayApiKey` / `deleteAiGatewayApiKey` | 查询脱敏状态，或保存、删除本地 API Key。保存和删除返回 `{ ok: boolean }` |
 
 > 前端有独立的类型副本（`frontend/src/types/runtime.ts`），不跨包导入本文件；字段名必须保持一致。
 
@@ -127,3 +128,7 @@ JavaBridge 的实际端口只存在于主进程，不通过 preload、IPC 或运
 ## 个人校色观感存储
 
 `readFilmColorPresets` / `writeFilmColorPresets` 只访问 `userData/film-color-presets.json`，写入受大小及数量限制并通过同目录临时文件原子替换。读取失败向上传递，避免空列表覆盖旧数据；前端负责版本、参数范围及曲线合法性。
+
+## 可选 AI 网关凭据
+
+主进程按 `UNI_TOKEN_API_KEY`、Electron 应用目录下的 `ai-gateway.local.json`、`userData/ai-gateway.json` 的顺序读取凭据状态。保存与删除只作用于 `userData/ai-gateway.json`，状态中的密钥预览经过脱敏。Electron 已移除旧的网关请求通道。

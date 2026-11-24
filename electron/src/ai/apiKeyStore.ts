@@ -4,19 +4,17 @@
  * 密钥来源优先级（高到低）：
  * 1. 环境变量 AI_GATEWAY_ENV_KEY —— CI/联调场景
  * 2. 开发期本地文件 <electron 包根>/ai-gateway.local.json 的 apiKey 字段
- *    —— 已加入 .gitignore，直接编辑即可，重启后生效
  * 3. 运行时保存文件 <userData>/ai-gateway.json
- *    —— 打包版由设置页经 IPC 写入，权限 0600，随应用数据存放
+ *    —— 经凭据配置 IPC 写入，权限 0600，随应用数据存放
  *
  * 任何来源都不回传明文密钥到渲染进程；对外只暴露 configured/source/maskedKey。
- * 密钥缺失不是错误：由调用方决定是否发起请求（发起时 fail-fast 抛 KeyMissing）。
  */
 import { app } from "electron"
 import fs from "node:fs"
 import path from "node:path"
 import { AI_GATEWAY_ENV_KEY } from "../config/aiGatewayConfig.js"
 
-/** 开发期本地密钥文件名（相对 electron 包根，进 .gitignore）。 */
+/** 开发期本地密钥文件名（相对 Electron 应用目录）。 */
 const LOCAL_KEY_FILE = "ai-gateway.local.json"
 
 /** 运行时保存的密钥文件名（位于 userData）。 */
@@ -63,30 +61,10 @@ const maskKey = (key: string): string => {
 }
 
 /** 开发期本地密钥文件绝对路径（electron 包根）。 */
-export const getLocalKeyFilePath = (): string => path.join(app.getAppPath(), LOCAL_KEY_FILE)
+const getLocalKeyFilePath = (): string => path.join(app.getAppPath(), LOCAL_KEY_FILE)
 
 /** 运行时保存密钥文件绝对路径（userData）。 */
-export const getUserDataKeyFilePath = (): string => path.join(app.getPath("userData"), USER_DATA_KEY_FILE)
-
-/**
- * 按优先级解析当前生效的 API Key。
- * 返回 null 表示所有来源均未配置；"invalid" 情况下也返回 null（状态层单独呈现）。
- */
-export const resolveApiKey = (): string | null => {
-  const fromEnv = process.env[AI_GATEWAY_ENV_KEY]?.trim()
-  if (fromEnv) {
-    return fromEnv
-  }
-  const fromLocalFile = readJsonFile(getLocalKeyFilePath())
-  if (typeof fromLocalFile === "string" && fromLocalFile.length > 0) {
-    return fromLocalFile
-  }
-  const fromUserData = readJsonFile(getUserDataKeyFilePath())
-  if (typeof fromUserData === "string" && fromUserData.length > 0) {
-    return fromUserData
-  }
-  return null
-}
+const getUserDataKeyFilePath = (): string => path.join(app.getPath("userData"), USER_DATA_KEY_FILE)
 
 /** 读取脱敏密钥状态（供 IPC get-status 使用）。 */
 export const getApiKeyStatus = (): AiGatewayKeyStatus => {
