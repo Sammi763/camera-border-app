@@ -1,5 +1,5 @@
 import { toDirPath } from "../../../utils/fileName"
-import type { ExportController } from "../hooks/useExportController"
+import { BATCH_SKIPPED, type ExportController } from "../hooks/useExportController"
 import type { PreviewState } from "../types"
 import type { OperationScope } from "../../queue/types"
 import type { FidelityReport } from "../../../types/preview"
@@ -88,7 +88,7 @@ export const ExportDock = ({
     lastPreflight = null
   } = exportController
   const canExport = state.kind === "active" && (state.filmMode === true
-    ? state.engineSyncStatus === "synced" && state.engineDisplayUrl !== null
+    ? state.engineSyncStatus === "synced" && state.engineDisplayUrl !== null && state.showingUncalibratedSource !== true
     : state.currentImage !== null)
   const workspaceMode = operationScope !== undefined && onOperationScopeChange !== undefined
   // 工作台模式下按范围只保留一个主命令；独立模式（operationScope 未传）保持旧契约。
@@ -111,6 +111,7 @@ export const ExportDock = ({
   const batchIsTerminal = batchExport.kind === "completed" || batchExport.kind === "cancelled"
   // 「状态待确认」：单图与批量共用同一组恢复动作（重新查询 / 打开输出目录核对）。
   // 单图待确认只有输出文件路径：openDirectory IPC 只接受目录，这里取其父目录。
+  const skippedCount = batchIsTerminal ? batchExport.results.filter(result => result.error === BATCH_SKIPPED).length : 0
   const unconfirmed = exportJob.kind === "unconfirmed"
     ? {
       jobId: exportJob.jobId,
@@ -140,44 +141,6 @@ export const ExportDock = ({
             </button>
           ))}
         </div>
-      )}
-
-      {showSingleButton && (
-        <button
-          type="button"
-          className="primaryButton exportDockButton"
-          data-testid="export-single"
-          disabled={!canExport || isExporting || isBatchExporting || !engineAvailable || tierUnavailableReason !== null}
-          title={exportDisabledReason ?? undefined}
-          onClick={() => void startSingleExport()}
-        >
-          {workspaceMode
-            ? exportJob.kind === "preparing" ? "准备中…" : isExporting ? "渲染中…" : "导出当前图片"
-            : exportJob.kind === "preparing" ? "准备中…" : isExporting ? "渲染中…" : "导出原图"}
-        </button>
-      )}
-      {showBatchButton && (
-        <button
-          type="button"
-          className={`exportDockButton ${workspaceMode ? "primaryButton" : "ghostButton"}`}
-          data-testid="export-batch"
-          disabled={isBatchExporting || isExporting || !engineAvailable || batchDisabledByEmptySelection || tierUnavailableReason !== null}
-          title={batchDisabledByEmptySelection
-            ? operationScope === "checked"
-              ? "没有勾选的图片：在队列中按空格键勾选后可批量导出"
-              : "队列为空：请先导入照片"
-            : exportDisabledReason ?? undefined}
-          onClick={() => void startBatchExport()}
-        >
-          {batchExport.kind === "preparing" ? "读取 EXIF…" : isBatchExporting && batchExport.kind === "running"
-            ? `批量导出中 ${batchExport.current}/${batchExport.total}…`
-            : primaryBatchLabel}
-        </button>
-      )}
-      {(isExporting || isBatchExporting) && (
-        <button type="button" className="ghostButton exportDockButton" data-testid="export-cancel" onClick={() => void cancelActiveExport()}>
-          取消导出
-        </button>
       )}
 
       <span className="exportDockStatus" aria-live="polite" data-testid="export-status">
@@ -230,13 +193,13 @@ export const ExportDock = ({
         {batchIsTerminal && (
           <>
             <span className={batchExport.failed > 0 ? "previewExportError" : "previewExportSuccess"}>
-              {batchExport.kind === "cancelled" ? "批量导出已取消" : "批量导出完成"}：共 {batchExport.total} 张，成功 {batchExport.success}，失败 {batchExport.failed}
+              {batchExport.kind === "cancelled" ? "批量导出已取消" : "批量导出完成"}：共 {batchExport.total} 张，成功 {batchExport.success}，失败 {batchExport.failed}{skippedCount > 0 ? `，跳过 ${skippedCount}` : ""}
               {batchExport.kind === "cancelled" ? `，未执行 ${batchExport.cancelled}` : ""}
             </span>
             {/* U13：逐文件详情放可展开列表，Dock 只保留紧凑摘要 */}
             {batchExport.results.some((result) => !result.success) && (
               <details className="previewBatchDetails">
-                <summary>失败文件（{batchExport.results.filter((result) => !result.success).length}）</summary>
+                <summary>未导出文件（{batchExport.results.filter((result) => !result.success).length}）</summary>
                 <span className="previewBatchFailures">
                   {batchExport.results.filter((result) => !result.success).map((result, index) => (
                     <span key={`${result.fileName}-${index}`}>{index > 0 && "；"}{result.fileName}{result.error === null ? "" : `（${result.error}）`}</span>
@@ -256,7 +219,7 @@ export const ExportDock = ({
             )}
             <span className="previewBatchActions">
               {window.desktop?.openDirectory !== undefined && <button type="button" className="ghostButton previewBatchActionBtn" onClick={() => openExportDirectory(batchExport.dirPath)}>打开目录</button>}
-              {batchExport.results.some((result) => !result.success) && <button type="button" className="ghostButton previewBatchActionBtn" onClick={() => void retryFailed()}>重试失败项</button>}
+              {batchExport.results.some((result) => !result.success && result.error !== BATCH_SKIPPED) && <button type="button" className="ghostButton previewBatchActionBtn" onClick={() => void retryFailed()}>重试失败项</button>}
             </span>
           </>
         )}
@@ -279,6 +242,44 @@ export const ExportDock = ({
           </span>
         )}
       </span>
+
+      {showSingleButton && (
+        <button
+          type="button"
+          className="primaryButton exportDockButton"
+          data-testid="export-single"
+          disabled={!canExport || isExporting || isBatchExporting || !engineAvailable || tierUnavailableReason !== null}
+          title={exportDisabledReason ?? undefined}
+          onClick={() => void startSingleExport()}
+        >
+          {workspaceMode
+            ? exportJob.kind === "preparing" ? "准备中…" : isExporting ? "渲染中…" : "导出当前图片"
+            : exportJob.kind === "preparing" ? "准备中…" : isExporting ? "渲染中…" : "导出原图"}
+        </button>
+      )}
+      {showBatchButton && (
+        <button
+          type="button"
+          className={`exportDockButton ${workspaceMode ? "primaryButton" : "ghostButton"}`}
+          data-testid="export-batch"
+          disabled={isBatchExporting || isExporting || !engineAvailable || batchDisabledByEmptySelection || tierUnavailableReason !== null}
+          title={batchDisabledByEmptySelection
+            ? operationScope === "checked"
+              ? "没有勾选的图片：在队列中按空格键勾选后可批量导出"
+              : "队列为空：请先导入照片"
+            : exportDisabledReason ?? undefined}
+          onClick={() => void startBatchExport()}
+        >
+          {batchExport.kind === "preparing" ? "读取 EXIF…" : isBatchExporting && batchExport.kind === "running"
+            ? `批量导出中 ${batchExport.current}/${batchExport.total}…`
+            : primaryBatchLabel}
+        </button>
+      )}
+      {(isExporting || isBatchExporting) && (
+        <button type="button" className="ghostButton exportDockButton" data-testid="export-cancel" onClick={() => void cancelActiveExport()}>
+          取消导出
+        </button>
+      )}
     </div>
   )
 }

@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { filmSourceOnly, isFilmBasePending } from "../../editing/defaults"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { requestPreview } from "../../../services/engine/previewApi"
 import { EngineHttpError } from "../../../services/engine/engineClient"
 import { cancelFilmRequests, isFilmCancellation } from "../../../services/engine/filmRequestsApi"
@@ -98,6 +99,12 @@ export const usePreview = (
   const refineRef = useRef<(() => void) | null>(null)
   const refineTimer = useRef<number | null>(null)
   const lastFilmSnapshot = useRef<{ key: string; basis: string } | null>(null)
+  const [retryRevision, setRetryRevision] = useState(0)
+  const retry = useCallback(() => {
+    lastFilmSnapshot.current = null
+    flushRequestedRef.current = true
+    setRetryRevision((previous) => previous + 1)
+  }, [])
   const [state, setState] = useState<PreviewState>({ kind: "idle" })
   const filmMode = imageProcessing !== null && imageProcessing !== undefined
   const imageProcessingSignature = imageProcessing === null || imageProcessing === undefined
@@ -344,18 +351,23 @@ export const usePreview = (
       return
     }
 
+    const pendingBase = isFilmBasePending(imageProcessing)
+    const sourceProcessing = pendingBase && imageProcessing != null
+      ? filmSourceOnly(imageProcessing)
+      : imageProcessing
     const plainEngineRequest = buildPreviewRequest(
       selectedFilePath, settings, PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT,
-      textOverride, stableResolvedTextLayers, resolvedBrand, imageProcessing
+      textOverride, stableResolvedTextLayers, resolvedBrand, sourceProcessing
     )
     const snapshotKey = `${selectedFilePath}|${filmMode ? "film" : "plain"}|`
-      + `${hashRenderRecipe(plainEngineRequest.recipe)}|${PREVIEW_MAX_WIDTH}x${PREVIEW_MAX_HEIGHT}`
+      + `${hashRenderRecipe(plainEngineRequest.recipe)}|${PREVIEW_MAX_WIDTH}x${PREVIEW_MAX_HEIGHT}|${retryRevision}|${pendingBase}`
     const clientId = requestClient.current
     const submit = (quality: "interactive" | "exact", immediate: boolean): void => {
       const interactive = quality === "interactive"
       const scheduled = scheduler.schedule(`${snapshotKey}|${quality}`, async (generation, signal) => {
         const engineRequest: PreviewRequest = filmMode
-          ? { ...plainEngineRequest, clientId, generation, previewQuality: quality }
+          ? { ...plainEngineRequest, clientId, generation, previewQuality: quality,
+            ...(pendingBase ? { stage: "raw-linear" as const, sourceCoordinates: true } : {}) }
           : plainEngineRequest
         const obsolete = (): boolean => signal.aborted || (!interactive && generation !== scheduler.generation)
         try {
@@ -382,11 +394,13 @@ export const usePreview = (
           const response = await requestPreviewWithStartupRetry(engineRequest, signal)
           if (obsolete()) return
           const displayUrl = response.previewAvailable ? resolveDisplayUrl(response.previewUrl) : null
+          if (filmMode && displayUrl === null) throw new Error(response.message || "引擎未返回当前预览")
           if (displayUrl !== null && cacheKey !== null) previewUrlCache.set(cacheKey, displayUrl)
           setState((prev) => prev.kind !== "active" || prev.filePath !== selectedFilePath
             ? prev : {
               ...prev,
               engineDisplayUrl: displayUrl,
+              lastExactDisplayUrl: interactive ? prev.lastExactDisplayUrl : displayUrl,
               engineSyncStatus: interactive ? "syncing" : "synced",
               engineResponse: response
             })
@@ -395,6 +409,7 @@ export const usePreview = (
           setState((prev) => prev.kind !== "active" || prev.filePath !== selectedFilePath
             ? prev : {
               ...prev,
+              engineDisplayUrl: filmMode ? prev.lastExactDisplayUrl ?? null : prev.engineDisplayUrl,
               engineSyncStatus: "error",
               engineResponse: {
                 status: "error",
@@ -412,6 +427,9 @@ export const usePreview = (
         ? prev : {
           ...prev,
           engineSyncStatus: "syncing",
+          ...(filmMode && (prev.showingUncalibratedSource === true) !== pendingBase
+            ? { engineDisplayUrl: null, lastExactDisplayUrl: null } : {}),
+          ...(filmMode ? { showingUncalibratedSource: pendingBase } : {}),
           ...(!filmMode ? {} : interactive
             ? { engineRecipe: null, engineGeneration: null }
             : {
@@ -441,7 +459,7 @@ export const usePreview = (
 
     const immediate = flushRequestedRef.current
     flushRequestedRef.current = false
-    if (previous?.basis !== basis || immediate) {
+    if (pendingBase || previous?.basis !== basis || immediate) {
       submit("exact", previous === null || immediate)
       return
     }
@@ -465,8 +483,9 @@ export const usePreview = (
     textLayersSignature,
     resolvedBrand,
     imageProcessing,
-    imageProcessingSignature
+    imageProcessingSignature,
+    retryRevision
   ])
 
-  return state
+  return state.kind === "active" && filmMode ? { ...state, retry } : state
 }

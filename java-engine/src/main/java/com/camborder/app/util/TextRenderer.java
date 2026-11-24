@@ -1,5 +1,8 @@
 package com.camborder.app.util;
 
+import com.camborder.app.dto.PreviewResponse.TextBounds;
+import java.util.function.Consumer;
+
 import com.camborder.app.exception.PreviewGenerationException;
 import com.camborder.app.model.BorderConfig;
 import com.camborder.app.model.TextItem;
@@ -75,6 +78,12 @@ public final class TextRenderer {
     public void draw(final BufferedImage canvas, final List<TextItem> texts,
                      final BorderConfig border, final int imageWidth, final int imageHeight,
                      final double renderScale) {
+        draw(canvas, texts, border, imageWidth, imageHeight, renderScale, null);
+    }
+
+    public void draw(final BufferedImage canvas, final List<TextItem> texts,
+                     final BorderConfig border, final int imageWidth, final int imageHeight,
+                     final double renderScale, final Consumer<TextBounds> onBounds) {
         if (texts == null || texts.isEmpty()) {
             return;
         }
@@ -97,7 +106,8 @@ public final class TextRenderer {
             graphics.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING,
                     RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
 
-            for (TextItem text : texts) {
+            for (int index = 0; index < texts.size(); index++) {
+                final TextItem text = texts.get(index);
                 if (text == null) {
                     continue;
                 }
@@ -110,10 +120,14 @@ public final class TextRenderer {
                     continue;
                 }
 
-                drawSingleText(graphics, text, placement, content,
+                final java.awt.Rectangle bounds = drawSingleText(graphics, text, placement, content,
                         imageX, imageY, imageWidth, imageHeight,
                         borderTop, borderBottom, borderLeft, borderRight,
                         canvasWidth, canvasHeight, scale);
+                if (onBounds != null && bounds.width > 0 && bounds.height > 0) {
+                    onBounds.accept(new TextBounds(index, (double) bounds.x / canvasWidth, (double) bounds.y / canvasHeight,
+                            (double) bounds.width / canvasWidth, (double) bounds.height / canvasHeight));
+                }
             }
         } finally {
             graphics.dispose();
@@ -124,7 +138,7 @@ public final class TextRenderer {
      * 绘制单段文字：计算坐标 -> 画背景条 -> 画阴影 -> 画描边 -> 画正文。
      * scale 为渲染比例：字号、边距、字距、行距、背景内边距、阴影与描边按其缩放。
      */
-    private void drawSingleText(final Graphics2D graphics, final TextItem text,
+    private java.awt.Rectangle drawSingleText(final Graphics2D graphics, final TextItem text,
                                 final String placement, final String content,
                                 final int imageX, final int imageY,
                                 final int imageWidth, final int imageHeight,
@@ -289,6 +303,7 @@ public final class TextRenderer {
         graphics.setColor(ColorParser.parse(text.getColor(), "#000000"));
         drawSpacedLines(graphics, lines, x, firstY, lineHeight,
                 letterSpacing, false, font);
+        return new java.awt.Rectangle(textLeft, textTop, textWidth, textHeight);
     }
 
     private int spacedWidth(final FontMetrics metrics, final String text, final int letterSpacing) {

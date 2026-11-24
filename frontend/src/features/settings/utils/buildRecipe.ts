@@ -75,6 +75,7 @@ export const buildRecipeFromSettings = (
 
   return {
     imagePath: filePath,
+    ...(current.layoutScale === "photo-short-edge" ? { layoutScale: current.layoutScale } : {}),
     border: {
       top: current.borderTop,
       bottom: current.borderBottom,
@@ -87,7 +88,7 @@ export const buildRecipeFromSettings = (
     imagePlacement: recipeImagePlacement(current),
     logo,
     borderStyle: current.borderStyle,
-    ...(imageProcessing ? { imageProcessing } : {})
+    ...(imageProcessing ? { imageProcessing, borderlessMaster: current.borderlessMaster ?? false } : {})
   }
 }
 

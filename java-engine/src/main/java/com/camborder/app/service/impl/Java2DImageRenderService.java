@@ -74,10 +74,22 @@ public final class Java2DImageRenderService implements ImageRenderService {
 
     @Override
     public ComposeOutcome compose(final RenderRecipe recipe, final int maxWidth, final int maxHeight) {
-        // 预览在读取阶段按目标盒做 subsampling；导出传 0/0 则保持原图解码。
+        // 预览在读取阶段按目标盒采样。
         final ImageReader.ReadResult read = imageReader.readWithSource(
                 recipe.getImagePath(), maxWidth, maxHeight);
         return composeSource(read.getImage(), recipe, maxWidth, maxHeight,
+                read.getSourceDecode(), read.getSourceInfo());
+    }
+
+    @Override
+    public ComposeOutcome composeForExport(final RenderRecipe recipe, final int maxWidth, final int maxHeight) {
+        // 裁切会缩小目标照片区域，按未裁切尺寸提前采样可能使成品过小。
+        final ImageReader.ReadResult read = imageReader.readWithSource(recipe.getImagePath());
+        final BufferedImage source = read.getImage();
+        final ImagePlacementRenderer.OutputLayout layout = imagePlacementRenderer.calculateOutputLayout(
+                source.getWidth(), source.getHeight(), recipe, maxWidth, maxHeight);
+        final BufferedImage photo = imagePlacementRenderer.renderOutput(source, layout, borderColor(recipe));
+        return new ComposeOutcome(decorate(photo, recipe, layout.decorationScale()),
                 read.getSourceDecode(), read.getSourceInfo());
     }
 
@@ -96,18 +108,24 @@ public final class Java2DImageRenderService implements ImageRenderService {
                                          final int maxWidth, final int maxHeight,
                                          final SourceDecode sourceDecode,
                                          final SourceImageInfo sourceInfo) {
-        BufferedImage source = sourceImage;
-        final java.awt.Color borderColor = ColorParser.parse(
-                recipe.getBorder() == null ? null : recipe.getBorder().getColor(), "#FFFFFF");
         BufferedImage placed = imagePlacementRenderer.render(
-                source, recipe.getImagePlacement(), borderColor);
+                sourceImage, recipe.getImagePlacement(), borderColor(recipe));
         BufferedImage scaled = imageScaler.scale(placed, maxWidth, maxHeight);
         // 配方像素语义（边框、字号、Logo、装饰线宽）以全分辨率有向源图为基准。
         // 预览与档位导出把照片等比缩小时，所有装饰参数必须按同一 renderScale 缩放，
         // 保证「边框:照片」构图比例与原图尺寸导出一致（预览与导出同源一致）。
-        final double renderScale = resolveRenderScale(
+        final double pixelScale = resolveRenderScale(
                 recipe.getImagePlacement(), sourceDecode, scaled.getWidth(),
                 maxWidth, maxHeight);
+        final double renderScale = BorderComposer.decorationScale(recipe, scaled.getWidth(), scaled.getHeight(), pixelScale);
+        return new ComposeOutcome(decorate(scaled, recipe, renderScale), sourceDecode, sourceInfo);
+    }
+
+    private static java.awt.Color borderColor(final RenderRecipe recipe) {
+        return ColorParser.parse(recipe.getBorder() == null ? null : recipe.getBorder().getColor(), "#FFFFFF");
+    }
+
+    private BufferedImage decorate(final BufferedImage scaled, final RenderRecipe recipe, final double renderScale) {
         BufferedImage canvas = borderComposer.compose(scaled, recipe.getBorder(), recipe.getGradient(), renderScale);
         // 边框风格装饰：绘制在边框背景之上、文字与品牌标识之下；
         // 未识别的风格 id 或 null 时保持原始行为
@@ -118,7 +136,7 @@ public final class Java2DImageRenderService implements ImageRenderService {
                 scaled.getWidth(), scaled.getHeight(), renderScale);
         // 品牌标识绘制（如果启用）
         logoRenderer.draw(canvas, recipe.getLogo(), recipe.getBorder(), renderScale);
-        return new ComposeOutcome(canvas, sourceDecode, sourceInfo);
+        return canvas;
     }
 
     /**

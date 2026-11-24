@@ -38,6 +38,11 @@ public final class FilmExportService {
         this.pipeline = pipeline; this.imageEncoder = encoder; this.compositor = compositor;
     }
 
+    private static boolean isBorderless(final RenderRecipe recipe, final ExportSettings export) {
+        final Boolean borderless = recipe.getBorderlessMaster();
+        return borderless == null ? export.isBorderlessMaster() : borderless;
+    }
+
     /** 预期事实独立于完成报告；未编码时始终 verified=false。 */
     public com.camborder.app.dto.FidelityReport preflight(final RenderRecipe recipe, final ExportSettings export,
                                                         final String expectedSourceVersion) {
@@ -45,8 +50,8 @@ public final class FilmExportService {
             final FilmProcessingPipeline.SourceDescription source = pipeline.describeSource(recipe);
             if (expectedSourceVersion != null && !expectedSourceVersion.equals(source.sourceVersion))
                 throw new FilmProcessingException("源图已变化，请刷新预览", HttpStatus.CONFLICT, "FILM_SOURCE_CHANGED");
-            final int[] size = compositor.dimensions(source.decode.getFullWidth(), source.decode.getFullHeight(), recipe,
-                    export.getMaxWidth(), export.getMaxHeight(), export.isBorderlessMaster());
+            final int[] size = com.camborder.app.util.FilmCompositor.dimensions(source.decode.getFullWidth(), source.decode.getFullHeight(), recipe,
+                    export.getMaxWidth(), export.getMaxHeight(), isBorderless(recipe, export));
             if ((long) size[0] * size[1] > 200_000_000L) throw new IllegalArgumentException("合成画布超过像素上限");
             final com.camborder.app.dto.FidelityReport report = com.camborder.app.dto.FidelityReport.preflight("custom", export.getFormat());
             report.setFidelityScope("processed"); report.setPixelSource(source.info.getPixelSource());
@@ -96,15 +101,16 @@ public final class FilmExportService {
                     HttpStatus.BAD_REQUEST, CODE_OUTPUT_INVALID);
         }
         ImageProcessingValidator.validateFilmOutput(export, recipe.getImageProcessing(), "");
+        final boolean borderless = isBorderless(recipe, export);
         try (FilmProcessingPipeline.Processed processed = pipeline.processForOutput(recipe,
                 "current-positive", export.getMaxWidth(), export.getMaxHeight(),
-                export.isBorderlessMaster())) {
+                borderless)) {
             if (expectedSourceVersion != null && !expectedSourceVersion.equals(processed.getSourceVersion())) {
                 throw new FilmProcessingException("读取时源文件已变化，请刷新并重新预检",
                         HttpStatus.CONFLICT, "FILM_SOURCE_CHANGED");
             }
             final FloatRgbImage image = compositor.compose(processed.getImage(), recipe,
-                    export.getMaxWidth(), export.getMaxHeight(), export.isBorderlessMaster());
+                    export.getMaxWidth(), export.getMaxHeight(), borderless);
             final byte[] srgbIcc = srgbIcc();
             final byte[] outputIcc;
             final BufferedImage outputImage;

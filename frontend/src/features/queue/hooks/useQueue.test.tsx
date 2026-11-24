@@ -829,12 +829,66 @@ it("同步探测期间编辑和取消均不会被旧结果覆盖", async () => {
 })
 
 it("负片同步按真实校准空间跳过不兼容目标，并隔离调度标识", async () => {
-  vi.mocked(analyzeImage).mockImplementation(async request => ({ calibrationSpaceKey: request.recipe.imagePath.endsWith("b.ARW") ? "other" : "same", sourceVersion: "sha256:mock" }) as Awaited<ReturnType<typeof analyzeImage>>)
+  vi.mocked(analyzeImage).mockImplementation(async request => {
+    // 对齐 FilmRequestGuard，避免 mock 掩盖实际请求会被拒绝的问题。
+    if (!/^[A-Za-z0-9_-]{1,80}$/.test(request.clientId ?? "")) throw new Error("非法 clientId")
+    return { calibrationSpaceKey: request.recipe.imagePath.endsWith("b.ARW") ? "other" : "same", sourceVersion: "sha256:mock" } as Awaited<ReturnType<typeof analyzeImage>>
+  })
   const { result } = renderHook(() => useQueue())
   await act(async () => { await result.current.addFromPaths(["/a.ARW", "/b.ARW"]) })
   act(() => result.current.setActive(result.current.items[0]!.id))
   const source: ImageProcessingConfig = { schemaVersion: 2, algorithmVersion: "film-color-v2", inputSource: "camera-raw", filmPolarity: "color-negative", raw: {}, negative: { enabled: true, filmBase: { kind: "manual", stage: "linear-working", rgb: [1,1,1] } } }
-  await act(async () => { const report = await result.current.syncImageProcessing("all", source, ["filmBase"]); expect(report.skipped).toHaveLength(1); expect(report.applied).toHaveLength(1) })
+  await act(async () => {
+    const report = await result.current.syncImageProcessing("all", source, ["filmBase"])
+    expect(report.skipped).toHaveLength(1)
+    expect(report.applied).toHaveLength(1)
+    expect(report.failed).toHaveLength(0)
+  })
   expect(new Set(vi.mocked(analyzeImage).mock.calls.slice(-3).map(([request]) => request.clientId)).size).toBe(3)
   expect(result.current.items[1]?.imageProcessing).toBeNull()
+})
+
+
+it("等待源文件检查期间重排队列时，按 ID 与原路径回填", async () => {
+  const items = ["a", "b"].map(id => ({
+    id, fileName: `${id}.jpg`, filePath: `/photos/${id}.jpg`, sourcePath: `/photos/${id}.jpg`,
+    sourceFormat: "jpg", converted: false, workingFormat: "jpg"
+  }))
+  localStorage.setItem("workspace.queue-session.v1", JSON.stringify({ items, activeItemId: "a", checkedItemIds: [] }))
+  let finishCheck!: (exists: readonly boolean[]) => void
+  ;(window as unknown as { desktop?: unknown }).desktop = {
+    checkImagePaths: () => new Promise(resolve => { finishCheck = resolve })
+  }
+  try {
+    const { result } = renderHook(() => useQueue())
+    act(() => result.current.sortByName("desc"))
+    await act(async () => { finishCheck([true, false]) })
+    expect(result.current.items.map(item => [item.id, item.filePath, item.missing])).toEqual([
+      ["b", "/photos/b.jpg", true], ["a", "/photos/a.jpg", false]
+    ])
+  } finally {
+    delete (window as unknown as { desktop?: unknown }).desktop
+    localStorage.clear()
+  }
+})
+
+it("两张丢失的同名照片不会自动共享一个候选文件", async () => {
+  const items = ["a", "b"].map(id => ({
+    id, fileName: "IMG_0001.jpg", sourcePath: `/${id}/IMG_0001.jpg`, filePath: `/${id}/IMG_0001.jpg`,
+    sourceFormat: "jpg", converted: false, workingFormat: "jpg", missing: true
+  }))
+  localStorage.setItem("workspace.queue-session.v1", JSON.stringify({ items, activeItemId: "a", checkedItemIds: [] }))
+  try {
+    const { result } = renderHook(() => useQueue())
+    await act(async () => {
+      const outcome = await result.current.relocateMissingFromFolder(["/new/IMG_0001.jpg"])
+      expect(outcome.relocated).toBe(0)
+      expect(outcome.ambiguous.map(entry => entry.itemId)).toEqual(["a", "b"])
+      expect(await result.current.relocateItemToCandidate("a", "/new/IMG_0001.jpg")).toBe(true)
+      expect(await result.current.relocateItemToCandidate("b", "/new/IMG_0001.jpg")).toBe(false)
+    })
+    expect(result.current.missingCount).toBe(1)
+  } finally {
+    localStorage.clear()
+  }
 })

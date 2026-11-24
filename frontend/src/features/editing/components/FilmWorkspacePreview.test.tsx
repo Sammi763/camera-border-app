@@ -23,6 +23,7 @@ describe("底片预览工具", () => {
     vi.mocked(analyzeImage).mockResolvedValue(analysis)
     vi.mocked(requestPreview).mockResolvedValue({ status: "ok", message: "", previewAvailable: true, previewUrl: "/previews/base" })
     render(<FilmWorkspacePreview state={state} settings={DEFAULT_SETTINGS} config={config} onChange={vi.fn()} />)
+    fireEvent.click(screen.getByText("工具"))
     fireEvent.click(screen.getByRole("button", { name: "中性取样" }))
     await waitFor(() => expect(screen.getByRole("img", { name: "底片校色预览" }).getAttribute("src")).toBe("/previews/base"))
     expect(requestPreview).toHaveBeenCalledWith(expect.objectContaining({ stage: "base-positive", sourceCoordinates: true }), undefined, expect.any(AbortSignal))
@@ -32,7 +33,10 @@ describe("底片预览工具", () => {
     vi.mocked(analyzeImage).mockResolvedValue(analysis)
     vi.mocked(requestPreview).mockResolvedValue({ status: "ok", message: "", previewAvailable: true, previewUrl: "/previews/compare" })
     render(<FilmWorkspacePreview state={state} settings={DEFAULT_SETTINGS} config={config} onChange={vi.fn()} />)
-    await screen.findByRole("img", { name: "RGB 直方图" })
+    const analysisSummary = await screen.findByText("分析 · 当前结果")
+    expect(analysisSummary.closest("details")?.open).toBe(false)
+    fireEvent.click(analysisSummary)
+    expect(await screen.findByRole("img", { name: "RGB 直方图" })).toBeTruthy()
     fireEvent.click(screen.getByRole("button", { name: "基础转正" }))
     await waitFor(() => expect(requestPreview).toHaveBeenCalledWith(expect.objectContaining({ stage: "base-positive", recipe: expect.objectContaining({ imageProcessing: config }) }), undefined, expect.any(AbortSignal)))
     fireEvent.click(screen.getByRole("button", { name: "100% 像素" }))
@@ -42,6 +46,7 @@ describe("底片预览工具", () => {
     vi.mocked(analyzeImage).mockResolvedValue(analysis)
     vi.mocked(requestPreview).mockResolvedValue({ status: "ok", message: "", previewAvailable: true, previewUrl: "/previews/raw" })
     render(<FilmWorkspacePreview state={state} settings={DEFAULT_SETTINGS} config={config} onChange={vi.fn()} />)
+    fireEvent.click(screen.getByText("工具"))
     fireEvent.click(screen.getByRole("button", { name: "框选片基" }))
     await waitFor(() => expect(requestPreview).toHaveBeenCalledWith(expect.objectContaining({ stage: "raw-linear", sourceCoordinates: true }), undefined, expect.any(AbortSignal)))
     expect(screen.getByText(/拖动框选未曝光片边/)).toBeTruthy()
@@ -58,6 +63,7 @@ describe("底片预览工具", () => {
     vi.mocked(analyzeImage).mockResolvedValue(analysis)
     const onChange = vi.fn()
     const view = render(<FilmWorkspacePreview state={state} settings={DEFAULT_SETTINGS} config={config} onChange={onChange} />)
+    fireEvent.click(screen.getByText("校准"))
     fireEvent.click(screen.getByRole("button", { name: "选择同卷片基参考帧" }))
     view.rerender(<FilmWorkspacePreview state={{...state,filePath:"/photos/b.ARW"}} settings={DEFAULT_SETTINGS} config={config} onChange={onChange} />)
     await act(async () => { resolvePick(["/photos/reference.ARW"]); await Promise.resolve() })
@@ -70,6 +76,7 @@ describe("底片预览工具", () => {
       resolvedFilmBase: [0.8, 0.7, 0.6], resolvedLightGain: [1.1, 1, 0.9] })
     render(<FilmWorkspacePreview state={state} settings={DEFAULT_SETTINGS} config={config} onChange={onChange} />)
     await screen.findByRole("img", { name: "RGB 直方图" })
+    fireEvent.click(screen.getByText("校准"))
     fireEvent.change(screen.getByRole("textbox", { name: "校准名称" }), { target: { value: "同卷日光" } })
     fireEvent.click(screen.getByRole("button", { name: "保存校准" }))
     await screen.findByRole("option", { name: "同卷日光" })
@@ -95,8 +102,26 @@ it("阶段预览被替代后同步状态能恢复，基础视图取样重新请�
   await waitFor(() => expect(screen.queryByText("引擎同步中")).toBeNull())
   fireEvent.click(screen.getByRole("button", { name: "基础转正" }))
   await waitFor(() => expect(requestPreview).toHaveBeenLastCalledWith(expect.objectContaining({ sourceCoordinates: false }), undefined, expect.any(AbortSignal)))
+  fireEvent.click(screen.getByText("工具"))
   fireEvent.click(screen.getByRole("button", { name: "中性取样" }))
   await waitFor(() => expect(requestPreview).toHaveBeenLastCalledWith(expect.objectContaining({ stage: "base-positive", sourceCoordinates: true }), undefined, expect.any(AbortSignal)))
   fireEvent.click(screen.getByRole("button", { name: "当前结果" }))
   expect(screen.queryByText(/正在显示基础正片/)).toBeNull()
+})
+
+
+it("分通道直方图保留上游总曲线，移除当前曲线和饱和度", async () => {
+  const curve = { interpolation: "linear" as const, points: [{ x: 0, y: 0 }, { x: 1, y: 1 }] }
+  const processing = { ...config, positive: { masterCurve: curve, redCurve: curve, exposureEv: 0.5, saturation: 0.6 } }
+  const onSampled = vi.fn()
+  vi.mocked(analyzeImage).mockResolvedValue(analysis)
+  render(<FilmWorkspacePreview state={{ ...state, engineRecipe: { ...stableRecipe, imageProcessing: processing } }}
+    settings={DEFAULT_SETTINGS} config={processing}
+    curveTools={{ channel: "red", picking: false, onSampled, finishPicking: vi.fn() }} />)
+  await waitFor(() => expect(onSampled).toHaveBeenCalledWith(expect.objectContaining({ channel: "red", histogram: [1, 1] })))
+  expect(vi.mocked(analyzeImage).mock.calls.some(([request]) =>
+    request.recipe.imageProcessing?.positive?.masterCurve === curve &&
+    request.recipe.imageProcessing.positive.redCurve === null &&
+    request.recipe.imageProcessing.positive.saturation === 1 &&
+    request.recipe.imageProcessing.positive.exposureEv === 0.5)).toBe(true)
 })

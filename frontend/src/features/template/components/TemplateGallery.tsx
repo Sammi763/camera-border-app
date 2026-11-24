@@ -59,6 +59,7 @@ const readExpandedPreference = (): boolean => {
 
 const mergedSettingsFor = (currentSettings: RenderSettings, template: BuiltInTemplate): RenderSettings => ({
   ...currentSettings,
+  layoutScale: "pixels",
   ...normalizeTemplatePatch(template.settingsPatch)
 })
 

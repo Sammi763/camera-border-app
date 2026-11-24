@@ -12,6 +12,8 @@ import java.util.List;
 public final class RenderRecipe {
 
     private String imagePath;
+    /** 比例版式以照片区域短边的千分之一为装饰单位。 */
+    private String layoutScale;
     private BorderConfig border;
     private GradientConfig gradient;
     private List<TextItem> texts;
@@ -21,6 +23,8 @@ public final class RenderRecipe {
     private BorderStyle borderStyle;
     /** 可选底片数字化处理；null/缺省时保持普通模式。 */
     private ImageProcessingConfig imageProcessing;
+    /** 缺省时导出仍接受旧请求中的 export.borderlessMaster。 */
+    private Boolean borderlessMaster;
 
     public RenderRecipe() {
     }
@@ -61,6 +65,9 @@ public final class RenderRecipe {
         this.logo = logo;
         this.borderStyle = null;
     }
+
+    public String getLayoutScale() { return layoutScale; }
+    public void setLayoutScale(final String layoutScale) { this.layoutScale = layoutScale; }
 
     public String getImagePath() {
         return imagePath;
@@ -124,5 +131,13 @@ public final class RenderRecipe {
 
     public void setImageProcessing(final ImageProcessingConfig imageProcessing) {
         this.imageProcessing = imageProcessing;
+    }
+
+    public Boolean getBorderlessMaster() {
+        return borderlessMaster;
+    }
+
+    public void setBorderlessMaster(final Boolean borderlessMaster) {
+        this.borderlessMaster = borderlessMaster;
     }
 }

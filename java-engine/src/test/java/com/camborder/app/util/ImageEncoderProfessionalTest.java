@@ -2,7 +2,10 @@ package com.camborder.app.util;
 
 import com.camborder.app.dto.ExportSettings;
 import com.camborder.app.dto.FidelityReport;
+import com.camborder.app.exception.RenderOutputConflictException;
 import com.camborder.app.service.ExifToolService;
+import com.sun.jna.Platform;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -71,6 +74,50 @@ final class ImageEncoderProfessionalTest {
         assertThat(Files.exists(output)).isFalse();
     }
 
+    @Test
+    void fileCreatedDuringMetadataRewriteIsPreserved(@TempDir final Path tempDir) throws IOException {
+        final Path source = writeSource(tempDir.resolve("source.png"));
+        final Path output = tempDir.resolve("competing.jpg");
+        final FakeExifTool tool = new FakeExifTool(16, 12, 8) {
+            @Override
+            public void rewrite(final Path input, final Path staging, final String policy,
+                                final byte[] icc, final int width, final int height,
+                                final int bitDepth, final String colorSpace) {
+                super.rewrite(input, staging, policy, icc, width, height, bitDepth, colorSpace);
+                try {
+                    Files.writeString(output, "外部创建的文件");
+                } catch (IOException exception) {
+                    throw new AssertionError(exception);
+                }
+            }
+        };
+        assertThatThrownBy(() -> new ImageEncoder(tool).writeToFile(
+                ImageIO.read(source.toFile()), output.toString(),
+                settings(output, "standard-delivery", "jpeg", "8"), source.toString(), sourceInfo(source, 8)))
+                .isInstanceOf(RenderOutputConflictException.class);
+        assertThat(Files.readString(output)).isEqualTo("外部创建的文件");
+        try (java.util.stream.Stream<Path> files = Files.list(tempDir)) {
+            assertThat(files).containsExactlyInAnyOrder(source, output);
+        }
+    }
+
+    @Test
+    void nativeExclusiveRenamePreservesExistingDestination(@TempDir final Path tempDir) throws IOException {
+        Assumptions.assumeTrue(Platform.isMac() || Platform.isWindows());
+        final Path staging = Files.writeString(tempDir.resolve("待发布.tmp"), "编码成品");
+        final Path target = Files.writeString(tempDir.resolve("目标.jpg"), "已有文件");
+
+        assertThatThrownBy(() -> OutputPathValidator.renameExclusive(staging, target))
+                .isInstanceOf(RenderOutputConflictException.class);
+        assertThat(Files.readString(target)).isEqualTo("已有文件");
+        assertThat(Files.readString(staging)).isEqualTo("编码成品");
+
+        Files.delete(target);
+        OutputPathValidator.renameExclusive(staging, target);
+        assertThat(Files.readString(target)).isEqualTo("编码成品");
+        assertThat(staging).doesNotExist();
+    }
+
     private static ExportSettings settings(final Path output, final String tier,
                                            final String format, final String bitDepth) {
         ExportSettings settings = new ExportSettings(output.toString(), format, 95);
@@ -101,7 +148,7 @@ final class ImageEncoderProfessionalTest {
                                       final int bitDepth, final String colorSpace) { }
     }
 
-    private static final class FakeExifTool implements ExifToolService {
+    private static class FakeExifTool implements ExifToolService {
         private final int width;
         private final int height;
         private final int bitDepth;

@@ -159,6 +159,7 @@ export type TextLayerSettings = {
  * - 当 textLayers 为空数组时，回退到旧单段文字逻辑
  */
 export type RenderSettings = {
+  readonly layoutScale?: "pixels" | "photo-short-edge"
   readonly borderColor: string
   /** 上边框宽度（px）。 */
   readonly borderTop: number

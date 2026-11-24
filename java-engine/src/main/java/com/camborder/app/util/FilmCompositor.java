@@ -1,6 +1,8 @@
 package com.camborder.app.util;
 
+import com.camborder.app.dto.PreviewResponse.TextBounds;
 import com.camborder.app.model.RenderRecipe;
+import java.util.function.Consumer;
 import org.springframework.stereotype.Component;
 import java.awt.image.BufferedImage;
 
@@ -18,7 +20,7 @@ public final class FilmCompositor {
     }
 
     /** 仅计算尺寸，不分配全幅缓冲；与 compose 共用几何及边距计算。 */
-    public int[] dimensions(final int width, final int height, final RenderRecipe recipe,
+    public static int[] dimensions(final int width, final int height, final RenderRecipe recipe,
                             final int maxWidth, final int maxHeight, final boolean borderless) {
         final int[] bounds = FloatImageOps.sourceGeometryBounds(width, height,
                 recipe.getImageProcessing().getSourceGeometry());
@@ -31,20 +33,27 @@ public final class FilmCompositor {
         if (maxHeight > 0) scale = Math.min(scale, (double) maxHeight / fullHeight);
         final int fittedWidth = Math.max(1, (int) Math.round(fullWidth * scale));
         final int fittedHeight = Math.max(1, (int) Math.round(fullHeight * scale));
-        final int[] margins = borderless ? new int[4] : BorderComposer.insets(recipe.getBorder(), (double) fittedWidth / fullWidth);
+        final int[] margins = borderless ? new int[4] : BorderComposer.insets(recipe.getBorder(),
+                BorderComposer.decorationScale(recipe, fittedWidth, fittedHeight, (double) fittedWidth / fullWidth));
         return new int[]{Math.addExact(fittedWidth, Math.addExact(margins[2], margins[3])),
                 Math.addExact(fittedHeight, Math.addExact(margins[0], margins[1]))};
     }
 
     public FloatRgbImage compose(final FloatRgbImage input, final RenderRecipe recipe,
                                  final int maxWidth, final int maxHeight, final boolean borderless) {
+        return compose(input, recipe, maxWidth, maxHeight, borderless, null);
+    }
+
+    public FloatRgbImage compose(final FloatRgbImage input, final RenderRecipe recipe,
+                                 final int maxWidth, final int maxHeight, final boolean borderless,
+                                 final Consumer<TextBounds> onTextBounds) {
         FloatRgbImage photo = FloatImageOps.sourceGeometry(input, recipe.getImageProcessing().getSourceGeometry());
         final java.awt.Color color = ColorParser.parse(recipe.getBorder() == null ? null : recipe.getBorder().getColor(), "#ffffff");
         photo = FloatImageOps.place(photo, recipe.getImagePlacement(), color);
         if (borderless) return FloatImageOps.fitWithin(photo, maxWidth, maxHeight);
         final int fullWidth = photo.getWidth();
         photo = FloatImageOps.fitWithin(photo, maxWidth, maxHeight);
-        return decorate(photo, recipe, color, (double) photo.getWidth() / fullWidth);
+        return decorate(photo, recipe, color, (double) photo.getWidth() / fullWidth, onTextBounds);
     }
 
     /** 深裁切的细节由精确路径提供。 */
@@ -59,7 +68,7 @@ public final class FilmCompositor {
 
     public FloatRgbImage composeInteractive(final FloatRgbImage proxy,
             final com.camborder.app.dto.SourceDecode decode, final RenderRecipe recipe,
-            final int maxWidth, final int maxHeight) {
+            final int maxWidth, final int maxHeight, final boolean borderless) {
         final int sourceWidth = decode.getFullWidth();
         final int sourceHeight = decode.getFullHeight();
         final com.camborder.app.model.ImageProcessingConfig.SourceGeometry geometry =
@@ -75,11 +84,12 @@ public final class FilmCompositor {
         final java.awt.Color color = ColorParser.parse(recipe.getBorder() == null ? null : recipe.getBorder().getColor(), "#ffffff");
         final FloatRgbImage photo = FloatImageOps.placePreview(proxy, sourceWidth, sourceHeight, bounds,
                 geometry == null ? 0 : geometry.getRotationDegrees(), placed, color, width, height);
-        return decorate(photo, recipe, color, (double) width / fullWidth);
+        return borderless ? photo : decorate(photo, recipe, color, (double) width / fullWidth, null);
     }
 
     private FloatRgbImage decorate(final FloatRgbImage photo, final RenderRecipe recipe,
-                                    final java.awt.Color color, final double scale) {
+                                    final java.awt.Color color, final double pixelScale, final Consumer<TextBounds> onTextBounds) {
+        final double scale = BorderComposer.decorationScale(recipe, photo.getWidth(), photo.getHeight(), pixelScale);
         final int[] margins = BorderComposer.insets(recipe.getBorder(), scale);
         final int width = Math.addExact(photo.getWidth(), Math.addExact(margins[2], margins[3]));
         final int height = Math.addExact(photo.getHeight(), Math.addExact(margins[0], margins[1]));
@@ -103,7 +113,7 @@ public final class FilmCompositor {
                 && (recipe.getLogo() == null || !recipe.getLogo().isEnabled())) return canvas;
         final BufferedImage decorations = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
         styles.draw(decorations, recipe.getBorderStyle(), recipe.getBorder(), photo.getWidth(), photo.getHeight(), scale);
-        texts.draw(decorations, recipe.getTexts(), recipe.getBorder(), photo.getWidth(), photo.getHeight(), scale);
+        texts.draw(decorations, recipe.getTexts(), recipe.getBorder(), photo.getWidth(), photo.getHeight(), scale, onTextBounds);
         logos.draw(decorations, recipe.getLogo(), recipe.getBorder(), scale);
         return FloatImageOps.compositeOverInPlace(canvas, decorations);
     }

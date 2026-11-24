@@ -296,13 +296,16 @@ export const calculateOutputPixelDimensions = (
   )
   // 边框属于配方像素语义，与照片按同一比例缩放（引擎 BorderComposer.insets(border, renderScale)）；
   // 原图尺寸档位 scale=1，行为不变。逐边取整与引擎保持一致。
-  const borderLeft = Math.round(Math.max(0, settings.borderLeft) * scale)
-  const borderRight = Math.round(Math.max(0, settings.borderRight) * scale)
-  const borderTop = Math.round(Math.max(0, settings.borderTop) * scale)
-  const borderBottom = Math.round(Math.max(0, settings.borderBottom) * scale)
+  const fittedWidth = Math.max(1, Math.round(placedWidth * scale))
+  const fittedHeight = Math.max(1, Math.round(placedHeight * scale))
+  const borderScale = settings.layoutScale === "photo-short-edge" ? Math.min(fittedWidth, fittedHeight) / 1000 : scale
+  const borderLeft = Math.round(Math.max(0, settings.borderLeft) * borderScale)
+  const borderRight = Math.round(Math.max(0, settings.borderRight) * borderScale)
+  const borderTop = Math.round(Math.max(0, settings.borderTop) * borderScale)
+  const borderBottom = Math.round(Math.max(0, settings.borderBottom) * borderScale)
   return {
-    width: Math.max(1, Math.round(placedWidth * scale) + borderLeft + borderRight),
-    height: Math.max(1, Math.round(placedHeight * scale) + borderTop + borderBottom)
+    width: Math.max(1, fittedWidth + borderLeft + borderRight),
+    height: Math.max(1, fittedHeight + borderTop + borderBottom)
   }
 }
 

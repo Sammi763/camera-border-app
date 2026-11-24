@@ -47,7 +47,7 @@ export const BuiltInTemplatePanel = ({
     if (currentSettings === undefined) {
       return null
     }
-    return { ...currentSettings, ...normalizeTemplatePatch(template.settingsPatch) }
+    return { ...currentSettings, layoutScale: "pixels" as const, ...normalizeTemplatePatch(template.settingsPatch) }
   }, [currentSettings])
 
   return (

@@ -1,6 +1,7 @@
 package com.camborder.app.service.impl;
 
 import com.camborder.app.dto.ExportSettings;
+import com.camborder.app.dto.PreviewRequest;
 import com.camborder.app.exception.ApiException;
 import com.camborder.app.exception.FilmProcessingException;
 import com.camborder.app.model.BorderConfig;
@@ -9,6 +10,8 @@ import com.camborder.app.model.RenderRecipe;
 import com.camborder.app.util.FilmRawDecoder;
 import com.camborder.app.util.FilmInputProbe;
 import com.camborder.app.repository.FilmStageCache;
+import com.camborder.app.repository.PreviewStore;
+import com.camborder.app.service.ImageRenderService;
 import com.camborder.app.util.FilmTestFixtures;
 import com.camborder.app.util.BorderComposer;
 import com.camborder.app.util.BorderStyleRenderer;
@@ -33,6 +36,9 @@ import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /** T11 底片导出：sRGB JPEG、16-bit sRGB/Rec.2020 TIFF、不带框母版和错误组合。 */
 final class FilmExportServiceTest {
@@ -113,6 +119,59 @@ final class FilmExportServiceTest {
         assertThat(readBack.getWidth()).isEqualTo(2);
         assertThat(readBack.getHeight()).isEqualTo(1);
         assertThat(ImageMetadataPayload.read(output.toString()).hasIcc()).isTrue();
+    }
+
+    @Test
+    void borderlessRecipeMatchesCurrentPreviewAndExport(@TempDir final Path tempDir) throws Exception {
+        final RenderRecipe recipe = recipe(tempDir, false);
+        final ImageRenderService renderer = mock(ImageRenderService.class);
+        when(renderer.toPng(any())).thenReturn(new byte[]{1});
+        when(renderer.toInteractivePng(any())).thenReturn(new byte[]{1});
+        final LocalPreviewServiceImpl preview = new LocalPreviewServiceImpl(renderer, new PreviewStore(4),
+                new FilmProcessingPipeline(new FilmRawDecoder("", mapper), mapper));
+        final PreviewRequest request = new PreviewRequest(recipe, 400, 400);
+        final Path output = tempDir.resolve("shared-master.tif");
+        final ExportSettings legacyExport = filmExport(output, "tiff", "tiff16-srgb", true);
+        assertThat(preview.generatePreview(request).getFidelityReport().getOutput().getWidth()).isEqualTo(202);
+        assertThat(service.preflight(recipe, legacyExport, null).getOutput().getWidth()).isEqualTo(2);
+
+        recipe.setBorderlessMaster(true);
+        final ExportSettings export = filmExport(output, "tiff", "tiff16-srgb", false);
+        final int width = service.preflight(recipe, export, null).getOutput().getWidth();
+        service.export(recipe, export);
+        assertThat(width).isEqualTo(2);
+        assertThat(ImageIO.read(output.toFile()).getWidth()).isEqualTo(width);
+        assertThat(preview.generatePreview(request).getFidelityReport().getOutput().getWidth()).isEqualTo(width);
+        request.setPreviewQuality("interactive");
+        assertThat(preview.generatePreview(request).getFidelityReport().getOutput().getWidth()).isEqualTo(width);
+        request.setSourceCoordinates(true);
+        recipe.setBorderlessMaster(false);
+        assertThat(service.preflight(recipe, legacyExport, null).getOutput().getWidth()).isEqualTo(202);
+        final com.camborder.app.dto.PreviewResponse sampling = preview.generatePreview(request);
+        assertThat(sampling.getPreviewQuality()).isEqualTo("exact");
+        assertThat(sampling.getFidelityReport().getOutput().getWidth()).isEqualTo(2);
+    }
+
+    @Test
+    void decoratedFilmPreviewReportsDrawnTextBoundsOnlyOnComposedFrame(@TempDir final Path tempDir) throws Exception {
+        final RenderRecipe recipe = recipe(tempDir, false);
+        recipe.setTexts(java.util.List.of(new com.camborder.app.model.TextItem(
+                "Archive", "SansSerif", 16, "#000000", "border-bottom-center", 0, 0)));
+        final ImageRenderService renderer = mock(ImageRenderService.class);
+        when(renderer.toPng(any())).thenReturn(new byte[]{1});
+        final LocalPreviewServiceImpl preview = new LocalPreviewServiceImpl(renderer, new PreviewStore(4),
+                new FilmProcessingPipeline(new FilmRawDecoder("", mapper), mapper));
+        final PreviewRequest request = new PreviewRequest(recipe, 400, 400);
+        assertThat(preview.generatePreview(request).getTextBounds()).singleElement().satisfies(bounds -> {
+            assertThat(bounds.index).isZero();
+            assertThat(bounds.width).isBetween(0.01, 0.99);
+            assertThat(bounds.y).isBetween(0.5, 0.99);
+        });
+        request.setSourceCoordinates(true);
+        assertThat(preview.generatePreview(request).getTextBounds()).isNull();
+        request.setSourceCoordinates(false);
+        recipe.setBorderlessMaster(true);
+        assertThat(preview.generatePreview(request).getTextBounds()).isNull();
     }
 
     @Test

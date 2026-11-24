@@ -18,8 +18,8 @@ describe("CurveEditor（T09 曲线拖动）", () => {
 
     const middle = screen.getByTestId("总曲线-curve-point-1")
     fireEvent.pointerDown(middle, { pointerId: 1 })
-    fireEvent.pointerMove(svg, { clientX: 90, clientY: 30 })
-    fireEvent.pointerUp(svg)
+    fireEvent.pointerMove(svg, { pointerId: 1, clientX: 92.4, clientY: 27.6 })
+    fireEvent.pointerUp(svg, { pointerId: 1 })
 
     expect(onChange).toHaveBeenCalled()
     const next = onChange.mock.calls.at(-1)![0]
@@ -41,7 +41,7 @@ describe("CurveEditor（T09 曲线拖动）", () => {
 
     fireEvent.pointerDown(screen.getByTestId("R-curve-point-0"), { pointerId: 1 })
     fireEvent.pointerMove(svg, { clientX: 100, clientY: 100 })
-    fireEvent.pointerUp(svg)
+    fireEvent.pointerUp(svg, { pointerId: 1 })
 
     expect(onChange).not.toHaveBeenCalled()
   })
@@ -57,11 +57,37 @@ describe("CurveEditor（T09 曲线拖动）", () => {
     expect(onChange.mock.calls.at(-1)![0].points).toHaveLength(2)
     const svg = screen.getByRole("application")
     vi.spyOn(svg,"getBoundingClientRect").mockReturnValue({ left:0,top:0,width:120,height:120 } as DOMRect)
-    const point=screen.getByTestId("R-curve-point-1")
-    fireEvent.pointerDown(point,{pointerId:1});fireEvent.pointerMove(svg,{clientX:70,clientY:50});fireEvent.pointerUp(svg)
-    const first=onChange.mock.calls.at(-1)![1]
-    fireEvent.pointerDown(point,{pointerId:2});fireEvent.pointerMove(svg,{clientX:80,clientY:40});fireEvent.pointerUp(svg)
+    const point = screen.getByTestId("R-curve-point-1")
+    fireEvent.pointerDown(point, { pointerId: 1 })
+    fireEvent.pointerMove(svg, { pointerId: 2, clientX: 80, clientY: 40 })
+    expect(onChange.mock.calls.at(-1)![1]).toContain(":delete:")
+    fireEvent.pointerMove(svg, { pointerId: 1, clientX: 70, clientY: 50 })
+    const first = onChange.mock.calls.at(-1)![1]
+    fireEvent.pointerMove(svg, { pointerId: 1, clientX: 73, clientY: 45 })
+    expect(onChange.mock.calls.at(-1)![1]).toBe(first)
+    fireEvent.pointerUp(svg, { pointerId: 1 })
+    fireEvent.pointerDown(point, { pointerId: 2 })
+    fireEvent.pointerMove(svg, { pointerId: 2, clientX: 80, clientY: 40 })
+    fireEvent.pointerUp(svg, { pointerId: 2 })
     expect(onChange.mock.calls.at(-1)![1]).not.toBe(first)
   })
 
+  it("满 17 点时拒绝再次添加，组件禁用后也拒绝键盘修改", () => {
+    const onChange = vi.fn()
+    const curve = {
+      interpolation: "linear" as const,
+      points: Array.from({ length: 17 }, (_, index) => ({ x: index / 16, y: index / 16 }))
+    }
+    const { rerender } = render(<CurveEditor label="R" curve={curve} onChange={onChange} />)
+    const add = screen.getByRole<HTMLButtonElement>("button", { name: "R添加控制点" })
+    expect(add.disabled).toBe(true)
+    const svg = screen.getByRole("application")
+    vi.spyOn(svg, "getBoundingClientRect").mockReturnValue({ left: 0, top: 0, width: 120, height: 120 } as DOMRect)
+    fireEvent.doubleClick(svg, { clientX: 63.375, clientY: 56.625 })
+    expect(onChange).not.toHaveBeenCalled()
+
+    rerender(<CurveEditor label="R" curve={curve} onChange={onChange} disabled />)
+    fireEvent.keyDown(screen.getByRole("slider", { name: "R控制点8" }), { key: "ArrowUp" })
+    expect(onChange).not.toHaveBeenCalled()
+  })
 })

@@ -10,6 +10,7 @@ import com.camborder.app.exception.ApiException;
 import com.camborder.app.model.ImageProcessingConfig;
 import com.camborder.app.service.CapabilitiesService;
 import com.camborder.app.service.ExportPreflightService;
+import com.camborder.app.util.ImagePlacementRenderer;
 import com.camborder.app.util.ImageReader;
 import com.camborder.app.util.OutputPathValidator;
 import com.camborder.app.util.RenderRecipeValidator;
@@ -37,6 +38,7 @@ public final class DefaultExportPreflightService implements ExportPreflightServi
     private final CapabilitiesService capabilitiesService;
     private final FilmExportService filmExportService;
     private final com.camborder.app.service.FilmTaskScheduler filmTaskScheduler;
+    private final ImagePlacementRenderer imagePlacementRenderer = new ImagePlacementRenderer();
 
     public DefaultExportPreflightService(final ImageReader imageReader,
                                          final CapabilitiesService capabilitiesService) {
@@ -91,9 +93,6 @@ public final class DefaultExportPreflightService implements ExportPreflightServi
         com.camborder.app.util.ImageProcessingValidator.validateFilmOutput(
                 export, snapshot.getRecipe().getImageProcessing(), "items[" + index + "] ");
         final Path imagePath = path(imagePathValue, "imagePath", index);
-        if (!Files.isRegularFile(imagePath) || !Files.isReadable(imagePath)) {
-            throw new ApiException("items[" + index + "] imagePath must point to a readable file", HttpStatus.BAD_REQUEST);
-        }
         final Path outputPath = path(export.getOutputPath(), "outputPath", index);
         final ExportPreflightResponse.Item item = new ExportPreflightResponse.Item();
         item.setIndex(index);
@@ -103,6 +102,11 @@ public final class DefaultExportPreflightService implements ExportPreflightServi
                 effectiveTier(export), effectiveFormat(export));
         item.setReport(report);
         final List<String> reasons = new ArrayList<>();
+        if (!Files.isRegularFile(imagePath) || !Files.isReadable(imagePath)) {
+            reasons.add(Files.notExists(imagePath) ? "源照片缺失，请在队列中重新定位文件"
+                    : "源照片不可读，请在队列中检查文件");
+            return finishItem(item, reasons);
+        }
 
         final ImageProcessingConfig imageProcessing = snapshot.getRecipe().getImageProcessing();
         if (imageProcessing != null) {
@@ -150,10 +154,7 @@ public final class DefaultExportPreflightService implements ExportPreflightServi
                     reasons.add("底片源图预检失败：" + exception.getMessage());
                 }
             }
-            item.getReport().getBlockingReasons().addAll(reasons);
-            item.setBlockingReasons(reasons);
-            item.setStatus(reasons.isEmpty() ? "ready" : "blocked");
-            return item;
+            return finishItem(item, reasons);
         }
 
         try {
@@ -163,6 +164,14 @@ public final class DefaultExportPreflightService implements ExportPreflightServi
             report.setMetadataSource(source.getMetadataSource());
             report.setSource(source.toFacts());
             validateTier(export, source, reasons);
+            final ImagePlacementRenderer.OutputLayout layout = imagePlacementRenderer.calculateOutputLayout(
+                    read.getImage().getWidth(), read.getImage().getHeight(), snapshot.getRecipe(),
+                    export.getMaxWidth(), export.getMaxHeight());
+            final FidelityReport.Facts output = new FidelityReport.Facts();
+            output.setWidth(layout.canvasWidth());
+            output.setHeight(layout.canvasHeight());
+            output.setBitDepth(requestedBitDepth(export, report.getSource().getBitDepth()));
+            report.setOutput(output);
         } catch (RuntimeException exception) {
             reasons.add("源图读取失败");
         }
@@ -188,9 +197,12 @@ public final class DefaultExportPreflightService implements ExportPreflightServi
         if (imagePath.equals(outputPath)) reasons.add("输出路径不能覆盖源图");
         if (Files.exists(outputPath)) reasons.add("输出路径已存在");
         if (!isWritableParent(outputPath)) reasons.add("输出目录不可写");
-        try {
-            report.getBlockingReasons().addAll(reasons);
-        } catch (RuntimeException ignored) { }
+        return finishItem(item, reasons);
+    }
+
+    private static ExportPreflightResponse.Item finishItem(final ExportPreflightResponse.Item item,
+                                                            final List<String> reasons) {
+        item.getReport().getBlockingReasons().addAll(reasons);
         item.setBlockingReasons(reasons);
         item.setStatus(reasons.isEmpty() ? "ready" : "blocked");
         return item;

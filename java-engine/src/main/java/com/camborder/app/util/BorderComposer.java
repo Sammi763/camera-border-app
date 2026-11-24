@@ -125,6 +125,13 @@ public final class BorderComposer {
         };
     }
 
+    /** 以当前照片区域的短边换算边框、字号和其他装饰尺寸。 */
+    public static double decorationScale(final com.camborder.app.model.RenderRecipe recipe,
+                                         final int width, final int height, final double pixelScale) {
+        return "photo-short-edge".equals(recipe.getLayoutScale())
+                ? Math.min(width, height) / 1000.0 : pixelScale;
+    }
+
     private static double safeScale(final double renderScale) {
         return Double.isFinite(renderScale) && renderScale > 0 ? renderScale : 1.0;
     }

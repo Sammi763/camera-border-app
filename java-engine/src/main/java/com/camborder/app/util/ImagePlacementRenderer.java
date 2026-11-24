@@ -1,9 +1,11 @@
 package com.camborder.app.util;
 
 import com.camborder.app.model.ImagePlacement;
+import com.camborder.app.model.RenderRecipe;
 import org.springframework.stereotype.Component;
 
 import java.awt.Color;
+import java.awt.Dimension;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.geom.AffineTransform;
@@ -76,6 +78,31 @@ public final class ImagePlacementRenderer {
         public String mode() { return mode; }
     }
 
+    public static final class OutputLayout {
+        private final Geometry geometry;
+        private final int photoWidth;
+        private final int photoHeight;
+        private final double decorationScale;
+        private final int canvasWidth;
+        private final int canvasHeight;
+
+        private OutputLayout(final Geometry geometry, final Dimension photo, final double decorationScale,
+                             final int[] insets) {
+            this.geometry = geometry;
+            this.photoWidth = photo.width;
+            this.photoHeight = photo.height;
+            this.decorationScale = decorationScale;
+            this.canvasWidth = Math.addExact(photoWidth, Math.addExact(insets[2], insets[3]));
+            this.canvasHeight = Math.addExact(photoHeight, Math.addExact(insets[0], insets[1]));
+        }
+
+        public int photoWidth() { return photoWidth; }
+        public int photoHeight() { return photoHeight; }
+        public double decorationScale() { return decorationScale; }
+        public int canvasWidth() { return canvasWidth; }
+        public int canvasHeight() { return canvasHeight; }
+    }
+
     /** 计算几何，供渲染器和测试复用。 */
     public Geometry calculate(final int sourceWidth, final int sourceHeight,
                               final ImagePlacement input) {
@@ -120,6 +147,17 @@ public final class ImagePlacementRenderer {
                 offsetX, offsetY, scale, rotation, focalX, focalY, mode);
     }
 
+    /** 按完整有向源图计算照片与成品尺寸。尺寸上限应用于放置后的照片区域。 */
+    public OutputLayout calculateOutputLayout(final int sourceWidth, final int sourceHeight,
+                                              final RenderRecipe recipe, final int maxWidth, final int maxHeight) {
+        final Geometry geometry = calculate(sourceWidth, sourceHeight, recipe.getImagePlacement());
+        final Dimension photo = ImageScaler.fitDimensions(
+                targetPixels(geometry.targetWidth()), targetPixels(geometry.targetHeight()), maxWidth, maxHeight);
+        final double pixelScale = maxWidth <= 0 && maxHeight <= 0 ? 1 : photo.width / geometry.targetWidth();
+        final double decorationScale = BorderComposer.decorationScale(recipe, photo.width, photo.height, pixelScale);
+        return new OutputLayout(geometry, photo, decorationScale, BorderComposer.insets(recipe.getBorder(), decorationScale));
+    }
+
     /** 按计算结果绘制到目标图片区域；fit 留白使用传入边框色填充。 */
     public BufferedImage render(final BufferedImage source, final ImagePlacement placement,
                                 final Color background) {
@@ -127,8 +165,31 @@ public final class ImagePlacementRenderer {
             throw new IllegalArgumentException("source must not be null");
         }
         final Geometry geometry = calculate(source.getWidth(), source.getHeight(), placement);
-        final int width = Math.max(1, (int) Math.round(geometry.targetWidth()));
-        final int height = Math.max(1, (int) Math.round(geometry.targetHeight()));
+        return render(source, geometry, targetPixels(geometry.targetWidth()), targetPixels(geometry.targetHeight()), background);
+    }
+
+    /** 一次完成放置与缩放，避免为限尺寸导出分配全尺寸的中间照片区域。 */
+    public BufferedImage renderOutput(final BufferedImage source, final OutputLayout layout,
+                                      final Color background) {
+        final Geometry geometry = layout.geometry;
+        final int baseWidth = targetPixels(geometry.targetWidth());
+        final int baseHeight = targetPixels(geometry.targetHeight());
+        final int width = layout.photoWidth();
+        final int height = layout.photoHeight();
+        final double drawnWidth = geometry.rotatedWidth() * geometry.scale() * width / baseWidth;
+        final double drawnHeight = geometry.rotatedHeight() * geometry.scale() * height / baseHeight;
+        // fit 缩到不足一像素时，直接绘制可能完全漏掉照片。保留原有的边缘混合，
+        // 同时限制中间画布面积，避免旋转全景图时分配远大于源图的缓冲区。
+        if ("fit".equals(geometry.mode()) && (width < baseWidth || height < baseHeight)
+                && Math.min(drawnWidth, drawnHeight) < 1
+                && (long) baseWidth * baseHeight <= (long) source.getWidth() * source.getHeight()) {
+            return ImageScaler.scaleTo(render(source, geometry, baseWidth, baseHeight, background), width, height);
+        }
+        return render(source, geometry, width, height, background);
+    }
+
+    private BufferedImage render(final BufferedImage source, final Geometry geometry,
+                                 final int width, final int height, final Color background) {
         final BufferedImage output = PixelBufferFactory.createLikeInSrgb(source, width, height);
 
         final Graphics2D graphics = output.createGraphics();
@@ -147,6 +208,8 @@ public final class ImagePlacementRenderer {
             final double centerX = geometry.offsetX() + (drawRotatedWidth / 2.0);
             final double centerY = geometry.offsetY() + (drawRotatedHeight / 2.0);
             final AffineTransform transform = new AffineTransform();
+            transform.scale((double) width / targetPixels(geometry.targetWidth()),
+                    (double) height / targetPixels(geometry.targetHeight()));
             transform.translate(centerX, centerY);
             transform.rotate(Math.toRadians(geometry.rotation()));
             transform.scale(scale, scale);
@@ -156,6 +219,10 @@ public final class ImagePlacementRenderer {
             graphics.dispose();
         }
         return output;
+    }
+
+    private static int targetPixels(final double size) {
+        return Math.max(1, Math.toIntExact(Math.round(size)));
     }
 
     private static double normalizeAngle(final double value) {

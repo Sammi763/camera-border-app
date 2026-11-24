@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { NumberInput } from "../../../components/form/NumberInput"
 import { useSystemFonts } from "../hooks/useSettings"
 import type { FontOption } from "../../../services/desktop/fontsApi"
@@ -8,6 +8,12 @@ import { normalizeTextPlacement, textPlacementOptions } from "../utils/textPlace
 
 type TextLayerEditorProps = {
   readonly controller: SettingsController
+  readonly compact?: boolean
+  readonly focusRequest?: { readonly id: string; readonly sequence: number } | null
+  readonly primaryText?: string
+  readonly onPrimaryTextChange?: (text: string) => void
+  readonly primaryOverridden?: boolean
+  readonly onRestorePrimary?: () => void
 }
 
 /**
@@ -24,7 +30,7 @@ type TextLayerEditorProps = {
  *
  * 每段可折叠/展开，减少首屏信息过载。
  */
-export const TextLayerEditor = ({ controller }: TextLayerEditorProps): JSX.Element => {
+export const TextLayerEditor = ({ controller, compact = false, focusRequest = null, primaryText, onPrimaryTextChange, primaryOverridden, onRestorePrimary }: TextLayerEditorProps): JSX.Element => {
   const { settings, updateTextLayer, resetTextLayers } = controller
   const { fonts } = useSystemFonts()
 
@@ -54,6 +60,12 @@ export const TextLayerEditor = ({ controller }: TextLayerEditorProps): JSX.Eleme
           layer={layer}
           index={index}
           fonts={fonts}
+          compact={compact}
+          relative={settings.layoutScale === "photo-short-edge"}
+          focusSequence={focusRequest?.id === layer.id ? focusRequest.sequence : undefined}
+          content={index === 0 ? primaryText ?? layer.content : layer.content}
+          onContentChange={index === 0 ? onPrimaryTextChange : undefined}
+          onRestore={index === 0 && primaryOverridden === true ? onRestorePrimary : undefined}
           onUpdate={(patch) => updateTextLayer(layer.id, patch)}
         />
       ))}
@@ -67,68 +79,41 @@ type TextLayerCardProps = {
   readonly layer: TextLayerSettings
   readonly index: number
   readonly fonts: readonly FontOption[]
+  readonly compact: boolean
+  readonly relative: boolean
+  readonly focusSequence?: number | undefined
+  readonly content: string
+  readonly onContentChange?: ((text: string) => void) | undefined
+  readonly onRestore?: (() => void) | undefined
   readonly onUpdate: (patch: Partial<TextLayerSettings>) => void
 }
 
-const TextLayerCard = ({ layer, index, fonts, onUpdate }: TextLayerCardProps): JSX.Element => {
+const TextLayerCard = ({ layer, index, fonts, onUpdate, compact, relative, focusSequence, content, onContentChange, onRestore }: TextLayerCardProps): JSX.Element => {
   const [expanded, setExpanded] = useState(index === 0)
+  const contentRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (focusSequence === undefined) return
+    setExpanded(true)
+    const frame = requestAnimationFrame(() => contentRef.current?.focus())
+    return () => cancelAnimationFrame(frame)
+  }, [focusSequence])
+  const editContent = onContentChange ?? ((text: string) => onUpdate({ content: text }))
   const normalizedPlacement = normalizeTextPlacement(layer.textArea, layer.placement)
   const availableFonts = fonts.filter((font) => font.engineAvailable)
   const selectedFont = availableFonts.some((font) => font.value === layer.fontFamily)
     ? layer.fontFamily
     : "sans-serif"
 
-  const title = `文字 ${index + 1}`
+  const unit = relative ? "‰" : "px"
+  const title = compact && index === 0 ? "主文字" : `文字 ${index + 1}`
   const summary = layer.enabled
-    ? (layer.content.length > 0 ? layer.content.slice(0, 30) : "（空内容）")
+    ? (content.length > 0 ? content.slice(0, 30) : "（空内容）")
     : "已禁用"
 
-  return (
-    <div className={`textLayerCard ${layer.enabled ? "" : "textLayerCardDisabled"}`}>
-      {/* 摘要行 */}
-      <div
-        className="textLayerCardHeader"
-        role="button"
-        tabIndex={0}
-        onClick={() => setExpanded(!expanded)}
-        onKeyDown={(e) => { if (e.key === "Enter") setExpanded(!expanded) }}
-      >
-        <label
-          className="settingCheckboxLabel"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <input
-            type="checkbox"
-            checked={layer.enabled}
-            onChange={(e) => onUpdate({ enabled: e.target.checked })}
-          />
-          <span>{title}</span>
-        </label>
-        <span className="textLayerCardSummary">{summary}</span>
-        <span className="textLayerCardToggle">{expanded ? "收起" : "展开"}</span>
-      </div>
-
-      {/* 展开后的编辑区 */}
-      {expanded && (
-        <div className="textLayerCardBody">
-          {/* 内容 */}
-          <div className="settingRow">
-            <label className="settingFieldLabel">
-              内容
-              <input
-                type="text"
-                className="settingTextInput"
-                placeholder="留空则不绘制该图层"
-                value={layer.content}
-                onChange={(e) => onUpdate({ content: e.target.value })}
-              />
-            </label>
-          </div>
-
-          {/* 变量插入 */}
+  const styling = <>
           <VariableHelpPanel
-            currentText={layer.content}
-            onTextChange={(text) => onUpdate({ content: text })}
+            currentText={content}
+            onTextChange={editContent}
           />
 
           {/* 字号 + 颜色 */}
@@ -221,7 +206,7 @@ const TextLayerCard = ({ layer, index, fonts, onUpdate }: TextLayerCardProps): J
           {/* 边距与字形间距 */}
           <div className="settingRow formInlineRow">
             <label className="settingFieldLabel">
-              水平边距 (px)
+              水平边距 ({unit})
               <NumberInput
                 className="settingNumberInput"
                 value={layer.marginX}
@@ -231,7 +216,7 @@ const TextLayerCard = ({ layer, index, fonts, onUpdate }: TextLayerCardProps): J
               />
             </label>
             <label className="settingFieldLabel">
-              垂直偏移 (px)
+              垂直偏移 ({unit})
               <NumberInput
                 className="settingNumberInput"
                 value={layer.marginY}
@@ -243,7 +228,7 @@ const TextLayerCard = ({ layer, index, fonts, onUpdate }: TextLayerCardProps): J
           </div>
           <div className="settingRow formInlineRow">
             <label className="settingFieldLabel">
-              行距 (px)
+              行距 ({unit})
               <NumberInput
                 className="settingNumberInput"
                 value={layer.lineSpacing ?? 0}
@@ -253,7 +238,7 @@ const TextLayerCard = ({ layer, index, fonts, onUpdate }: TextLayerCardProps): J
               />
             </label>
             <label className="settingFieldLabel">
-              字距 (px)
+              字距 ({unit})
               <NumberInput
                 className="settingNumberInput"
                 value={layer.letterSpacing ?? 0}
@@ -402,6 +387,47 @@ const TextLayerCard = ({ layer, index, fonts, onUpdate }: TextLayerCardProps): J
               </div>
             )}
           </div>
+  </>
+
+  return (
+    <div className={`textLayerCard ${layer.enabled ? "" : "textLayerCardDisabled"}`}>
+      {/* 摘要行 */}
+      <div className="textLayerCardHeader">
+        <label className="settingCheckboxLabel">
+          <input
+            type="checkbox"
+            checked={layer.enabled}
+            onChange={(event) => onUpdate({ enabled: event.target.checked })}
+          />
+          <span>{title}</span>
+        </label>
+        <button type="button" className="textLayerExpandButton" aria-expanded={expanded}
+          aria-label={`${expanded ? "收起" : "展开"}${title}`} onClick={() => setExpanded(!expanded)}>
+          {(!compact || !expanded) && <span className="textLayerCardSummary">{summary}</span>}
+          <span className="textLayerCardToggle">{expanded ? "收起" : "展开"}</span>
+        </button>
+      </div>
+
+      {/* 展开后的编辑区 */}
+      {expanded && (
+        <div className="textLayerCardBody">
+          {/* 内容 */}
+          <div className="settingRow">
+            <label className="settingFieldLabel">
+              {onRestore === undefined ? "内容" : "当前照片文字"}
+              <input
+                ref={contentRef}
+                type="text"
+                className="settingTextInput"
+                placeholder="留空则不绘制该图层"
+                value={content}
+                onChange={(e) => editContent(e.target.value)}
+              />
+            </label>
+          </div>
+
+          {onRestore !== undefined && <button type="button" className="ghostButton" onClick={onRestore}>恢复使用全局文字</button>}
+          {compact ? <details className="workspaceAdvancedStyles"><summary>文字样式和变量</summary>{styling}</details> : styling}
         </div>
       )}
     </div>

@@ -15,11 +15,12 @@ type NumberInputProps = {
   readonly min: number
   readonly max: number
   readonly className?: string
+  readonly precision?: number
   readonly onCommit: (value: number) => void
 }
 
-const clamp = (value: number, min: number, max: number): number => {
-  return Math.min(max, Math.max(min, Math.round(value)))
+const clamp = (value: number, min: number, max: number, precision: number): number => {
+  return Math.min(max, Math.max(min, Number(value.toFixed(precision))))
 }
 
 export const NumberInput = ({
@@ -27,6 +28,7 @@ export const NumberInput = ({
   min,
   max,
   className,
+  precision = 0,
   onCommit
 }: NumberInputProps): JSX.Element => {
   const [draft, setDraft] = useState(String(value))
@@ -50,11 +52,11 @@ export const NumberInput = ({
       setDraft(String(committedValue))
       return
     }
-    const clamped = clamp(parsed, min, max)
+    const clamped = clamp(parsed, min, max, precision)
     setDraft(String(clamped))
     setCommittedValue(clamped)
-    onCommit(clamped)
-  }, [draft, committedValue, min, max, onCommit])
+    if (clamped !== value) onCommit(clamped)
+  }, [draft, committedValue, min, max, onCommit, precision, value])
 
   const handleChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     setDraft(e.target.value)
@@ -70,8 +72,8 @@ export const NumberInput = ({
   return (
     <input
       type="text"
-      inputMode="numeric"
-      pattern="[0-9]*"
+      inputMode={precision === 0 ? "numeric" : "decimal"}
+      pattern={precision === 0 ? "[0-9]*" : undefined}
       className={className}
       value={draft}
       onChange={handleChange}

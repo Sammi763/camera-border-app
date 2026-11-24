@@ -14,6 +14,8 @@ import org.springframework.stereotype.Service;
 import java.awt.color.ICC_ColorSpace;
 import java.awt.image.BufferedImage;
 import java.security.MessageDigest;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * 本地单图预览服务实现（service.impl 层）。
@@ -60,25 +62,30 @@ public final class LocalPreviewServiceImpl implements PreviewService {
         // 预览使用 maxWidth/maxHeight 做等比缩小；导出不传缩放约束
         ImageRenderService.ComposeOutcome outcome;
         byte[] pngBytes;
+        final List<PreviewResponse.TextBounds> textBounds = new ArrayList<>();
+        final String stage = request.getStage() == null ? "current-positive" : request.getStage();
         final boolean interactive = "interactive".equals(request.getPreviewQuality())
+                && "current-positive".equals(stage) && !request.isSourceCoordinates()
                 && compositor.canComposeInteractive(request.getRecipe());
         if (request.getRecipe().getImageProcessing() != null) {
             if (filmProcessingPipeline == null) {
                 throw new PreviewGenerationException("底片处理管线未配置");
             }
-            final String stage = request.getStage() == null ? "current-positive" : request.getStage();
+            final boolean borderless = "current-positive".equals(stage)
+                    && Boolean.TRUE.equals(request.getRecipe().getBorderlessMaster());
             try (FilmProcessingPipeline.Processed processed = interactive
                     ? filmProcessingPipeline.processInteractivePreview(request.getRecipe(), request.getMaxWidth(), request.getMaxHeight())
                     : request.isSourceCoordinates()
                     ? filmProcessingPipeline.process(request.getRecipe(), stage)
                     : filmProcessingPipeline.processForOutput(request.getRecipe(), stage,
-                    request.getMaxWidth(), request.getMaxHeight(), false)) {
+                    request.getMaxWidth(), request.getMaxHeight(), borderless)) {
                 final com.camborder.app.util.FloatRgbImage rendered = request.isSourceCoordinates()
                         ? FloatImageOps.fitWithin(processed.getImage(), request.getMaxWidth(), request.getMaxHeight())
                         : interactive
                             ? compositor.composeInteractive(processed.getImage(), processed.getSourceDecode(), request.getRecipe(),
-                                    request.getMaxWidth(), request.getMaxHeight())
-                            : compositor.compose(processed.getImage(), request.getRecipe(), request.getMaxWidth(), request.getMaxHeight(), false);
+                                    request.getMaxWidth(), request.getMaxHeight(), borderless)
+                            : compositor.compose(processed.getImage(), request.getRecipe(), request.getMaxWidth(),
+                                    request.getMaxHeight(), borderless, "current-positive".equals(stage) ? textBounds::add : null);
                 if (request.isActualPixels() && Math.max(rendered.getWidth(), rendered.getHeight()) > 8192)
                     throw new com.camborder.app.exception.FilmProcessingException("完整像素超过检查预算，请切回适应窗口",
                             org.springframework.http.HttpStatus.BAD_REQUEST, "FILM_ACTUAL_PIXELS_TOO_LARGE");
@@ -105,6 +112,7 @@ public final class LocalPreviewServiceImpl implements PreviewService {
         // 解码来源随响应返回：RAW 只展示内嵌 JPEG 的受限像素来源说明。
         response.setSourceDecode(outcome.getSourceDecode());
         response.setPreviewQuality(interactive ? "interactive" : "exact");
+        if (!textBounds.isEmpty()) response.setTextBounds(textBounds);
         final FidelityReport report = FidelityReport.completed("preview", "png");
         report.setPixelSource(outcome.getSourceInfo() == null
                 ? "decoded-file" : outcome.getSourceInfo().getPixelSource());

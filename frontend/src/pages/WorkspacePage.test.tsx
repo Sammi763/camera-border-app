@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { WorkspacePage } from "./WorkspacePage"
+import { DEFAULT_SETTINGS } from "../features/settings/hooks/useSettings"
+import { createDefaultFilmColorProcessing } from "../features/editing/defaults"
 import type { DesktopRuntime } from "../types/runtime"
 
 /**
@@ -42,7 +44,7 @@ const FILM_FORMATS = [
 const PHOTO_A = "/photos/A.jpg" // 有 EXIF
 const PHOTO_B = "/photos/B.jpg" // 无 EXIF
 
-function setupWorkspace() {
+function setupWorkspace(disappearedPath?: string) {
   const renderJobs: RenderJobRecord[] = []
   const metadataRequests: string[] = []
   /** 统一调用日志：meta:<path> 与 job:<path>，用于断言「先读 EXIF 再导出」。 */
@@ -96,16 +98,20 @@ function setupWorkspace() {
     }
     if (url.endsWith("/api/export-preflight") && method === "POST") {
       const body = JSON.parse(String(init?.body)) as { items: readonly { recipe: { imagePath: string }; export: { outputPath: string } }[] }
+      const hasMissing = body.items.some(item => item.recipe.imagePath === disappearedPath)
       return jsonResponse({
-        status: "ready",
-        items: body.items.map((item, index) => ({
-          index,
-          imagePath: item.recipe.imagePath,
-          outputPath: item.export.outputPath,
-          status: "ready",
-          blockingReasons: [],
-          report: { phase: "preflight", verified: false, source: { width: 100, height: 100, bitDepth: 8, orientation: 1 } }
-        }))
+        status: hasMissing ? "blocked" : "ready",
+        items: body.items.map((item, index) => {
+          const missing = item.recipe.imagePath === disappearedPath
+          return {
+            index,
+            imagePath: item.recipe.imagePath,
+            outputPath: item.export.outputPath,
+            status: missing ? "blocked" : "ready",
+            blockingReasons: missing ? ["源照片缺失，请在队列中重新定位文件"] : [],
+            report: { phase: "preflight", verified: false, source: { width: 100, height: 100, bitDepth: 8, orientation: 1 } }
+          }
+        })
       })
     }
     if (url.endsWith("/api/render-jobs") && method === "POST") {
@@ -275,7 +281,7 @@ describe("WorkspacePage wiring（摄影预设 + EXIF 批量导出闭环）", () 
     render(<WorkspacePage runtime={runtime} />)
 
     // 统一工作台空态正常渲染；（无 Roll 面板、无扫描仪/实验室/冲洗工艺入口，不崩溃）
-    expect(await screen.findByText("把照片变成摄影作品卡")).toBeTruthy()
+    expect(await screen.findByText("导入照片")).toBeTruthy()
     expect(screen.queryByText(/Roll|扫描仪|实验室|冲洗工艺/)).toBeNull()
   })
 })
@@ -293,7 +299,7 @@ describe("WorkspacePage 统一工作台（首屏与默认模板）", () => {
     vi.restoreAllMocks()
   })
 
-  it("空队列显示欢迎页（Electron 模式）：选择照片 / 选择文件夹 / 拖入提示 / 价值提示，无加载样片", async () => {
+  it("空队列显示欢迎页（Electron 模式）：选择照片 / 选择文件夹 / 拖入提示 / 本机处理提示，无加载样片", async () => {
     setupWorkspace()
     render(<WorkspacePage runtime={runtime} />)
 
@@ -302,10 +308,7 @@ describe("WorkspacePage 统一工作台（首屏与默认模板）", () => {
     expect(screen.getByRole("button", { name: "选择文件夹" })).toBeTruthy()
     expect(screen.queryByRole("button", { name: "加载样片" })).toBeNull()
     expect(screen.getByText(/把照片拖进这个窗口/)).toBeTruthy()
-    // 价值提示
-    expect(screen.getByText("本地处理")).toBeTruthy()
-    expect(screen.getByText("无需登录")).toBeTruthy()
-    expect(screen.getByText("EXIF 自动读取")).toBeTruthy()
+    expect(screen.getByText("照片在本机处理。")).toBeTruthy()
   })
 
   it("浏览器降级模式欢迎页额外提供「加载样片」", async () => {
@@ -328,8 +331,8 @@ describe("WorkspacePage 统一工作台（首屏与默认模板）", () => {
       expect(screen.getByText("A.jpg")).toBeTruthy()
     })
 
-    // 默认模板自动应用：摄影信息卡卡片显示「已应用」
-    expect(await screen.findByText("已应用")).toBeTruthy()
+    // 默认模板自动应用：样式首屏显示摄影信息卡。
+    expect(await screen.findByText("摄影信息卡")).toBeTruthy()
   })
 
   it("用户手动选择过模板后，后续导入不再自动覆盖用户选择", async () => {
@@ -341,13 +344,14 @@ describe("WorkspacePage 统一工作台（首屏与默认模板）", () => {
     await waitFor(() => {
       expect(screen.getByText("A.jpg")).toBeTruthy()
     })
-    await screen.findByText("已应用")
+    await screen.findByText("摄影信息卡")
 
     // 手动应用「经典白边」
+    fireEvent.click(screen.getByRole("button", { name: "更换版式" }))
     const findClassicCard = (): HTMLElement =>
       screen.getByText("经典白边").closest(".templateGalleryCard") as HTMLElement
     fireEvent.click(within(findClassicCard()).getByRole("button", { name: "应用" }))
-    expect(within(findClassicCard()).getByRole("button", { name: "已应用" })).toBeTruthy()
+    expect(screen.getByText("经典白边")).toBeTruthy()
 
     // 清空并重新导入：仍保持经典白边，不自动覆盖回摄影信息卡
     // 清空已收进队列底部“更多”浮层，避免破坏性操作常驻。
@@ -357,7 +361,7 @@ describe("WorkspacePage 统一工作台（首屏与默认模板）", () => {
     await waitFor(() => {
       expect(screen.getByText("A.jpg")).toBeTruthy()
     })
-    expect(within(findClassicCard()).getByRole("button", { name: "已应用" })).toBeTruthy()
+    expect(screen.getByText("经典白边")).toBeTruthy()
   })
 
   it("有照片后固定显示四个页签、底部导出 Dock，并把管理入口放进抽屉", async () => {
@@ -409,6 +413,65 @@ describe("WorkspacePage 统一工作台（首屏与默认模板）", () => {
     expect(screen.getAllByRole("button", { name: "选择文件夹" })).toHaveLength(1)
   })
 
+  it("导出摘要随选片范围显示实际格式，并标明限制的是照片区域", async () => {
+    setupWorkspace()
+    const plain = { id: "plain", filePath: PHOTO_A, fileName: "A.jpg", sourcePath: PHOTO_A, sourceFormat: "jpg", converted: false, workingFormat: "jpg" }
+    const film = {
+      ...plain, id: "film", filePath: PHOTO_B, fileName: "B.jpg", sourcePath: PHOTO_B,
+      imageProcessing: createDefaultFilmColorProcessing(PHOTO_B, "positive")
+    }
+    localStorage.setItem("workspace.queue-session.v1", JSON.stringify({
+      items: [plain, film], activeItemId: plain.id, checkedItemIds: [film.id]
+    }))
+    localStorage.setItem("camborder-workspace-settings.v1", JSON.stringify({
+      schemaVersion: 1, settings: { ...DEFAULT_SETTINGS, exportFormat: "png", outputSizePreset: "2k" }
+    }))
+    render(<WorkspacePage runtime={runtime} />)
+    const summary = await screen.findByTestId("export-summary")
+    expect(summary.textContent).toContain("PNG")
+
+    fireEvent.click(screen.getByTestId("export-scope-checked"))
+    expect(summary.textContent).toContain("sRGB JPEG")
+    expect(summary.textContent).not.toContain("PNG")
+    expect(summary.textContent).toContain("照片区域长边 ≤ 2048 px")
+    fireEvent.click(screen.getByRole("tab", { name: "输出" }))
+    expect(within(screen.getByRole("tabpanel")).getByText("sRGB JPEG · 8-bit")).toBeTruthy()
+
+    fireEvent.click(screen.getByTestId("export-scope-all"))
+    expect(summary.textContent).toContain("PNG / sRGB JPEG")
+  })
+
+  it.each(["all", "checked"])("批量范围 %s 可分别跳过已标记缺失和预检发现缺失的照片", async (scope) => {
+    const knownMissingPath = "/photos/known-missing.jpg"
+    const { renderJobs, metadataRequests, fetchMock } = setupWorkspace(PHOTO_B)
+    const items = [PHOTO_A, knownMissingPath, PHOTO_B].map((filePath, index) => ({
+      id: String(index), filePath, fileName: filePath.split("/").at(-1), sourcePath: filePath,
+      sourceFormat: "jpg", converted: false, workingFormat: "jpg", missing: filePath === knownMissingPath
+    }))
+    localStorage.setItem("workspace.queue-session.v1", JSON.stringify({
+      items, activeItemId: items[0]?.id, checkedItemIds: items.map(item => item.id)
+    }))
+    render(<WorkspacePage runtime={runtime} />)
+    fireEvent.click(await screen.findByTestId(`export-scope-${scope}`))
+    const start = await screen.findByRole("button", { name: /导出(?:全部|已选) 3 张/ })
+    await waitFor(() => expect((start as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(start)
+
+    const review = within(await screen.findByRole("dialog", { name: "批量交付清单" }))
+    expect(renderJobs).toEqual([])
+    expect(metadataRequests).not.toContain(knownMissingPath)
+    expect(review.getAllByText("源照片缺失，请在队列中重新定位文件")).toHaveLength(2)
+    expect(review.getByText("known-missing-border.jpg")).toBeTruthy()
+    const preflight = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/api/export-preflight"))
+    expect(preflight?.[1]?.body).not.toContain(knownMissingPath)
+    fireEvent.change(review.getByRole("combobox", { name: "处理 known-missing.jpg" }), { target: { value: "skip" } })
+    fireEvent.change(review.getByRole("combobox", { name: "处理 B.jpg" }), { target: { value: "skip" } })
+    fireEvent.click(review.getByRole("button", { name: "导出 1 张" }))
+
+    await waitFor(() => expect(renderJobs.map(job => job.imagePath)).toEqual([PHOTO_A]))
+    expect(await screen.findByText(/成功 1，失败 0，跳过 2/)).toBeTruthy()
+  })
+
   it("焦点在按钮上时 Space/Delete 不被全局队列快捷键劫持", async () => {
     setupWorkspace()
     render(<WorkspacePage runtime={runtime} />)
@@ -417,11 +480,12 @@ describe("WorkspacePage 统一工作台（首屏与默认模板）", () => {
     await waitFor(() => {
       expect(screen.getByText("A.jpg")).toBeTruthy()
     })
-    await screen.findByText("已应用")
+    await screen.findByText("摄影信息卡")
     const checkbox = screen.getByLabelText("批量选中 A.jpg") as HTMLInputElement
     expect(checkbox.checked).toBe(false)
 
     // 模板“应用”按钮：Space 必须保留给按钮原生激活，全局层不能勾选当前图
+    fireEvent.click(screen.getByRole("button", { name: "更换版式" }))
     const classicCard = screen.getByText("经典白边").closest(".templateGalleryCard") as HTMLElement
     const applyButton = within(classicCard).getByRole("button", { name: "应用" })
     applyButton.focus()
@@ -430,6 +494,8 @@ describe("WorkspacePage 统一工作台（首屏与默认模板）", () => {
     expect(spaceEvent.defaultPrevented).toBe(false)
     expect(checkbox.checked).toBe(false)
     expect(screen.getByText("A.jpg")).toBeTruthy()
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭更换版式" }))
 
     // “更多”按钮：Delete 不能被全局层解释为删除当前图
     const moreButton = screen.getByRole("button", { name: "更多" })
@@ -449,7 +515,7 @@ describe("WorkspacePage 统一工作台（首屏与默认模板）", () => {
     await waitFor(() => {
       expect(screen.getByText("A.jpg")).toBeTruthy()
     })
-    await screen.findByText("已应用")
+    await screen.findByText("摄影信息卡")
 
     fireEvent.click(screen.getByRole("tab", { name: "输出" }))
     const formatSelect = await screen.findByLabelText("输出格式") as HTMLSelectElement
@@ -457,11 +523,11 @@ describe("WorkspacePage 统一工作台（首屏与默认模板）", () => {
     fireEvent.change(formatSelect, { target: { value: nextFormat } })
 
     fireEvent.click(screen.getByRole("tab", { name: "样式" }))
-    await waitFor(() => expect(screen.getByText("已应用")).toBeTruthy())
+    await waitFor(() => expect(screen.getByText("摄影信息卡")).toBeTruthy())
 
     // 视觉设置（边框颜色）变化才撤销模板标记
     fireEvent.change(screen.getByLabelText("边框颜色"), { target: { value: "#123456" } })
-    await waitFor(() => expect(screen.queryByText("已应用")).toBeNull())
+    await waitFor(() => expect(screen.getByText("自定义版式")).toBeTruthy())
   })
 
   it("设置撤销后不保留可能虚假的模板“已应用”状态", async () => {
@@ -472,14 +538,15 @@ describe("WorkspacePage 统一工作台（首屏与默认模板）", () => {
     await waitFor(() => {
       expect(screen.getByText("A.jpg")).toBeTruthy()
     })
-    await screen.findByText("已应用")
+    await screen.findByText("摄影信息卡")
 
+    fireEvent.click(screen.getByRole("button", { name: "更换版式" }))
     const classicCard = screen.getByText("经典白边").closest(".templateGalleryCard") as HTMLElement
     fireEvent.click(within(classicCard).getByRole("button", { name: "应用" }))
-    expect(within(classicCard).getByRole("button", { name: "已应用" })).toBeTruthy()
+    expect(screen.getByText("经典白边")).toBeTruthy()
 
     fireEvent.keyDown(document.body, { key: "z", ctrlKey: true })
-    await waitFor(() => expect(screen.queryByText("已应用")).toBeNull())
+    await waitFor(() => expect(screen.getByText("自定义版式")).toBeTruthy())
   })
 
   it("设置面板“撤销设置”后同样不保留虚假的模板“已应用”状态", async () => {
@@ -490,14 +557,15 @@ describe("WorkspacePage 统一工作台（首屏与默认模板）", () => {
     await waitFor(() => {
       expect(screen.getByText("A.jpg")).toBeTruthy()
     })
-    await screen.findByText("已应用")
+    await screen.findByText("摄影信息卡")
 
+    fireEvent.click(screen.getByRole("button", { name: "更换版式" }))
     const classicCard = screen.getByText("经典白边").closest(".templateGalleryCard") as HTMLElement
     fireEvent.click(within(classicCard).getByRole("button", { name: "应用" }))
-    expect(within(classicCard).getByRole("button", { name: "已应用" })).toBeTruthy()
+    expect(screen.getByText("经典白边")).toBeTruthy()
 
     fireEvent.click(screen.getByRole("button", { name: "撤销设置" }))
-    await waitFor(() => expect(screen.queryByText("已应用")).toBeNull())
+    await waitFor(() => expect(screen.getByText("自定义版式")).toBeTruthy())
   })
 
   it("保留已保存的主题偏好：localStorage 中的 dark 优先于默认跟随系统", async () => {
@@ -515,7 +583,7 @@ describe("WorkspacePage 统一工作台（首屏与默认模板）", () => {
     setupWorkspace()
     render(<WorkspacePage runtime={runtime} />)
     fireEvent.click(await screen.findByRole("button", { name: "选择照片" }))
-    await screen.findByText("已应用")
+    await screen.findByText("摄影信息卡")
     const colorInput = screen.getByLabelText("边框颜色") as HTMLInputElement
     const initialColor = colorInput.value
     const changeColor = (): void => {
@@ -556,7 +624,7 @@ describe("WorkspacePage 统一工作台（首屏与默认模板）", () => {
     setupWorkspace()
     render(<WorkspacePage runtime={runtime} />)
     fireEvent.click(await screen.findByRole("button", { name: "选择照片" }))
-    await screen.findByText("已应用")
+    await screen.findByText("摄影信息卡")
     const separator = screen.getByRole("separator", { name: example.label })
     const width = (): number => Number(separator.getAttribute("aria-valuenow"))
     expect(width()).toBe(example.initial)

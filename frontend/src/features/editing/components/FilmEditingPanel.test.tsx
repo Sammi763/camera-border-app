@@ -107,6 +107,7 @@ describe("FilmEditingPanel（T09 底片编辑面板）", () => {
     const manual = onChange.mock.calls[0]![0] as ImageProcessingConfig
     expect(manual.negative?.filmBase?.kind).toBe("manual")
 
+    fireEvent.click(screen.getByText("源图裁切与校平"))
     fireEvent.change(screen.getByLabelText("校平角度"), { target: { value: "2.5" } })
     fireEvent.blur(screen.getByLabelText("校平角度"))
     const rotated = onChange.mock.calls[1]![0] as ImageProcessingConfig
@@ -136,7 +137,7 @@ describe("FilmEditingPanel（T09 底片编辑面板）", () => {
       />
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "重置曲线" }))
+    fireEvent.click(screen.getByRole("button", { name: "重置当前通道" }))
 
     const next = onChange.mock.calls[0]![0] as ImageProcessingConfig
     expect(next.positive?.masterCurve).toBeNull()
@@ -158,6 +159,25 @@ describe("FilmEditingPanel（T09 底片编辑面板）", () => {
     expect(screen.getByRole("alert").textContent).toContain("版本不受支持")
     fireEvent.click(screen.getByRole("button", { name: "关闭底片处理" }))
     expect(onChange).toHaveBeenCalledWith(null, { description: "关闭底片处理" })
+  })
+
+  it("切换曲线通道清除选点，重置只写回当前通道", () => {
+    const points = [{ x: 0, y: 0 }, { x: 0.5, y: 0.7 }, { x: 1, y: 1 }]
+    const masterCurve = { interpolation: "linear" as const, points }
+    const redCurve = { ...masterCurve, points: points.map(point => ({ ...point, y: point.x })) }
+    const config = { ...enabledConfig(), positive: { masterCurve, redCurve } }
+    const onChange = vi.fn()
+    render(<FilmEditingPanel config={config} error={null} sourcePath="/scan.ARW" capabilities={capabilities(true)} onChange={onChange} />)
+
+    fireEvent.focus(screen.getByRole("slider", { name: "总曲线控制点1" }))
+    const remove = screen.getByRole<HTMLButtonElement>("button", { name: "删除控制点" })
+    expect(remove.disabled).toBe(false)
+    fireEvent.click(screen.getByRole("button", { name: "红色通道" }))
+    expect(remove.disabled).toBe(true)
+    expect(onChange).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole("button", { name: "重置当前通道" }))
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ positive: { masterCurve, redCurve: null } }), expect.anything())
   })
 })
 
@@ -221,7 +241,7 @@ describe("FilmEditingPanel v2 胶片校色", () => {
     fireEvent.blur(screen.getByLabelText("处理分支"))
     const config = onChange.mock.calls[0]![0] as ImageProcessingConfig
     expect(config.filmPolarity).toBe("color-negative")
-    expect(config.negative?.filmBase?.kind).toBe("roi")
+    expect(config.negative).toMatchObject({ enabled: false, filmBase: null })
   })
 })
 

@@ -1,3 +1,4 @@
+import { awaitFilmBase, isFilmBasePending } from "../defaults"
 import { useEffect, useMemo, useRef, useState } from "react"
 import type {
   ImageProcessingConfig,
@@ -8,12 +9,13 @@ import type {
 } from "../../../types/imageProcessing"
 import type { CapabilitiesResponse } from "../../../types/preview"
 import type { FilmSyncField, FilmSyncResult, FilmSyncOptions, OperationScope } from "../../queue/types"
-import { CurveEditor } from "./CurveEditor"
+import { CurveEditor, type CurveChannel } from "./CurveEditor"
 import {
   createDefaultFilmColorProcessing,
   createDefaultFilmProcessing,
   isColorGradingCapablePath,
-  isFilmCapablePath
+  isFilmCapablePath,
+  isLinearTiffPath
 } from "../defaults"
 import { isRawFile } from "../../metadata/constants/rawExtensions"
 import { probeImage } from "../../../services/engine/imageProbeApi"
@@ -21,6 +23,14 @@ import { probeImage } from "../../../services/engine/imageProbeApi"
 type FilmEditingPanelProps = {
   readonly config: ImageProcessingConfig | null
   readonly error: string | null
+  readonly curveTools?: {
+    readonly channel: CurveChannel
+    readonly setChannel: (channel: CurveChannel) => void
+    readonly histogram?: readonly number[]
+    readonly sampledTones?: readonly number[]
+    readonly picking: boolean
+    readonly togglePicking: () => void
+  } | undefined
   readonly sourcePath: string | null
   readonly capabilities: CapabilitiesResponse | null
   readonly onChange: (
@@ -52,7 +62,7 @@ const NumberField = ({ label, value, min, max, step = 0.01, disabled = false, sl
     if (!draft.trim() || !Number.isFinite(next) || next < min || next > max) { setInvalid(true); return }
     setInvalid(false); onChange(next)
   }
-  return <label className="filmField"><span>{label}</span><input type="number" value={draft} min={min} max={max} step={step} disabled={disabled} aria-invalid={invalid}
+  return <label className={slider ? "filmField filmSliderRow" : "filmField"}><span>{label}</span><input type="number" value={draft} min={min} max={max} step={step} disabled={disabled} aria-invalid={invalid}
     onChange={event => { setDraft(event.target.value); setInvalid(false) }} onBlur={submit}
     onKeyDown={event => { if (event.key === "Enter") submit(); if (event.key === "Escape") { setDraft(String(value)); setInvalid(false) } }} />
     {slider && <input type="range" aria-label={`${label}滑杆`} value={value} min={min} max={max} step={step}
@@ -87,6 +97,7 @@ export const FilmEditingPanel = ({
   config,
   error,
   sourcePath,
+  curveTools,
   capabilities,
   onChange,
   operationScope = "active",
@@ -102,7 +113,9 @@ export const FilmEditingPanel = ({
   const [probeMessage, setProbeMessage] = useState<string | null>(null)
   const [probeLoading, setProbeLoading] = useState(false)
   useEffect(() => { setLinearConfirmed(false); setProbeMessage(null) }, [sourcePath])
-  const [curveChannel, setCurveChannel] = useState<"master" | "red" | "green" | "blue">("master")
+  const [localCurveChannel, setLocalCurveChannel] = useState<CurveChannel>("master")
+  const curveChannel = curveTools?.channel ?? localCurveChannel
+  const setCurveChannel = curveTools?.setChannel ?? setLocalCurveChannel
   const [syncFields, setSyncFields] = useState<readonly FilmSyncField[]>([
     "lightSource", "filmBase", "density", "positive", "curves"
   ])
@@ -126,8 +139,10 @@ export const FilmEditingPanel = ({
       ? "真实 RAW 需要随包 LibRaw helper；当前组件不可用"
       : (capability?.reason ?? "底片处理可用")
   const enabled = config !== null && config !== undefined
+  const linearTiff = isLinearTiffPath(sourcePath)
   const disabled = !available || !capable
   const negative = config?.negative ?? null
+  const pendingBase = isFilmBasePending(config)
   const positive: PositiveAdjustments = config?.positive ?? {}
 
   const startColorGrading = async (): Promise<void> => {
@@ -161,7 +176,7 @@ export const FilmEditingPanel = ({
       ...config,
       filmPolarity: polarity,
       negative: polarity === "color-negative"
-        ? (config.negative ?? defaults?.negative ?? null)
+        ? (config.negative ?? awaitFilmBase(defaults)?.negative ?? null)
         : null
     }, { description: polarity === "positive" ? "切换为正片校色" : "切换为彩负转正" })
   }
@@ -190,52 +205,100 @@ export const FilmEditingPanel = ({
 
   return (
     <section className="filmEditingPanel" aria-label="底片数字化">
-      {!isV2 && !sensorRaw && !enabled && <fieldset className="filmSection"><legend>线性输入确认</legend>
-        <label className="filmField"><span>输入空间</span><select value={linearSpace} onChange={(e) => setLinearSpace(e.target.value === "linear-srgb" ? "linear-srgb" : "linear-rec2020")}>
-          <option value="linear-rec2020">线性 Rec.2020</option><option value="linear-srgb">线性 sRGB</option></select></label>
-        <label><input type="checkbox" checked={linearConfirmed} onChange={(e) => setLinearConfirmed(e.target.checked)} />我确认这是 16-bit 线性 TIFF，且输入空间与上方一致</label>
-        <p className="settingsCapabilityHint">普通已编码 TIFF 不能按线性负片解释。带 ICC 时，引擎还会核对其基色与传递函数。</p>
-      </fieldset>}
-      <div className="filmPanelHeader">
+      <div className="filmPanelHeader" data-enabled={enabled}>
         <div>
-          <h2 className="filmPanelTitle">底片数字化</h2>
-          <p className="settingsCapabilityHint">
+          <h2 className="filmPanelTitle">胶片校色</h2>
+          {enabled && <p className="settingsCapabilityHint">
             {isV2
               ? `${config?.inputSource === "flextight-fff" ? "Flextight FFF RGB16 扫描"
                 : config?.inputSource === "camera-raw" ? "真实传感器 RAW"
                   : "已编码扫描/数码正片"} · ${config?.filmPolarity === "color-negative" ? "彩色负片转正" : "正片校色（跳过反相）"}`
               : `${sensorRaw ? "真实传感器 RAW" : "线性 16-bit TIFF 测试输入"} · 通用彩负（未校准）`}
-          </p>
+          </p>}
         </div>
         <div className="filmEnableActions">
           {!enabled && (
-            <button type="button" className="ghostButton" disabled={disabled || !capable || probeLoading}
+            <button type="button" className="primaryButton" disabled={disabled || probeLoading}
               onClick={() => void startColorGrading()}>
               {probeLoading ? "探测输入…" : "开启胶片校色（正片）"}
             </button>
           )}
-          <button
+          {(enabled || sensorRaw || linearTiff) && <button
             type="button"
-            className={enabled ? "dangerButton filmEnableButton" : "primaryButton filmEnableButton"}
+            className={enabled ? "ghostButton filmEnableButton" : "ghostButton"}
             disabled={(disabled || (!sensorRaw && !linearConfirmed)) && !enabled}
             onClick={() => {
               if (enabled) {
                 onChange(null, { description: "关闭底片处理" })
               } else {
-                const next = createDefaultFilmProcessing(sourcePath)
+                const next = awaitFilmBase(createDefaultFilmProcessing(sourcePath))
                 onChange(next?.inputMode === "linear-tiff" ? { ...next,
                   linearInput: { ...next.linearInput!, colorSpace: linearSpace } } : next, { description: "开启底片处理" })
               }
             }}
           >
             {enabled ? "关闭底片处理" : "开启底片处理"}
-          </button>
+          </button>}
         </div>
       </div>
       {!available && <p className="filmCapabilityWarning" role="status">{reason}</p>}
       {!capable && <p className="filmCapabilityWarning" role="status">该文件格式不能进入胶片校色；请选择受支持的图片。</p>}
       {probeMessage !== null && <p className="filmCapabilityWarning" role="status">{probeMessage}</p>}
       {error !== null && <p className="filmCapabilityWarning" role="alert">{error}</p>}
+      {linearTiff && !enabled && <fieldset className="filmSection" disabled={disabled}><legend>线性输入确认</legend>
+        <label className="filmField"><span>输入空间</span><select value={linearSpace} onChange={(e) => setLinearSpace(e.target.value === "linear-srgb" ? "linear-srgb" : "linear-rec2020")}>
+          <option value="linear-rec2020">线性 Rec.2020</option><option value="linear-srgb">线性 sRGB</option></select></label>
+        <label><input type="checkbox" checked={linearConfirmed} onChange={(e) => setLinearConfirmed(e.target.checked)} />我确认这是 16-bit 线性 TIFF，且输入空间与上方一致</label>
+        <p className="settingsCapabilityHint">普通已编码 TIFF 不能按线性负片解释。带 ICC 时，引擎还会核对其基色与传递函数。</p>
+      </fieldset>}
+      {pendingBase && <p role="status" className="settingsCapabilityHint">请在完整负片上框选未曝光片边，或选用同卷校准。</p>}
+      {enabled && !pendingBase && (
+        <CurveEditor
+          key={sourcePath}
+          label={curveChannel === "master" ? "总曲线" : `${curveChannel[0]!.toUpperCase()} 曲线`}
+          channel={curveChannel}
+          onChannelChange={setCurveChannel}
+          histogram={curveTools?.histogram}
+          sampledTones={curveTools?.sampledTones}
+          pickingTone={curveTools?.picking}
+          onPickTone={curveTools?.togglePicking}
+          curve={curve}
+          onChange={updateCurve}
+          disabled={disabled}
+        />
+      )}
+      {enabled && !pendingBase && (
+        <fieldset className="filmSection filmBasicSection" disabled={disabled}>
+          <legend>基础调整</legend>
+          <div className="filmSliderRows">
+            <NumberField label="曝光 EV" value={positive.exposureEv ?? 0} min={-5} max={5} step={0.01} disabled={disabled} slider onChange={(value) => config !== null && onChange(updatePositive(config, { exposureEv: value }), { historyTag: "positive:exposure", description: "调整曝光" })} />
+            {(["R", "G", "B"] as const).map((channel, index) => (
+              <NumberField
+                key={channel}
+                label={`${channel} 平衡 EV`}
+                value={positive.rgbBalanceEv?.[index] ?? 0}
+                min={-4}
+                max={4}
+                step={0.01}
+                disabled={disabled} slider
+                onChange={(value) => {
+                  if (config === null) return
+                  const balance = [...(positive.rgbBalanceEv ?? [0, 0, 0])]
+                  balance[index] = value
+                  onChange(updatePositive(config, { rgbBalanceEv: [balance[0]!, balance[1]!, balance[2]!] as [number, number, number] }), { historyTag: `positive:balance:${channel}`, description: "调整 RGB 平衡" })
+                }}
+              />
+            ))}
+            <NumberField label="黑点" value={positive.blackPoint ?? 0} min={0} max={Math.min(0.99, (positive.whitePoint ?? 1) - 0.001)} disabled={disabled} slider onChange={(value) => config !== null && onChange(updatePositive(config, { blackPoint: value }), { historyTag: "positive:black", description: "调整黑点" })} />
+            <NumberField label="白点" value={positive.whitePoint ?? 1} min={Math.max(0.01, (positive.blackPoint ?? 0) + 0.001)} max={1} disabled={disabled} slider onChange={(value) => config !== null && onChange(updatePositive(config, { whitePoint: value }), { historyTag: "positive:white", description: "调整白点" })} />
+            <NumberField label="饱和度" value={positive.saturation ?? 1} min={0} max={2} step={0.01} disabled={disabled} slider onChange={(value) => config !== null && onChange(updatePositive(config, { saturation: value }), { historyTag: "positive:saturation", description: "调整饱和度" })} />
+          </div>
+          <button type="button" className="ghostButton" disabled={disabled}
+            onClick={() => config !== null && onChange(updatePositive(config, {
+              exposureEv: 0, rgbBalanceEv: [0, 0, 0], blackPoint: 0, whitePoint: 1, saturation: 1
+            }), { description: "重置基础调整" })}>重置基础调整</button>
+        </fieldset>
+      )}
       {isV2 && config !== null && (
         <fieldset className="filmSection">
           <legend>胶片性质</legend>
@@ -294,7 +357,7 @@ export const FilmEditingPanel = ({
                 raw: { ...config.raw, whiteBalance: event.target.value === "daylight" ? "daylight" : "camera" } }, { description: "修改 RAW 白平衡" })}>
                 <option value="camera">相机记录</option><option value="daylight">固定日光</option>
               </select></label>}
-          {(!isV2 || v2ColorNegative) && <>
+          {!pendingBase && (!isV2 || v2ColorNegative) && <>
           <fieldset className="filmSection" disabled={disabled}>
             <legend>输入与光源</legend>
 
@@ -400,113 +463,72 @@ export const FilmEditingPanel = ({
           </fieldset>
           </>}
 
-          <fieldset className="filmSection" disabled={disabled}>
-            <legend>基础调整</legend>
-            <div className="filmFieldGrid">
-              <NumberField label="曝光 EV" value={positive.exposureEv ?? 0} min={-5} max={5} step={0.01} disabled={disabled} slider onChange={(value) => config !== null && onChange(updatePositive(config, { exposureEv: value }), { historyTag: "positive:exposure", description: "调整曝光" })} />
-              {(["R", "G", "B"] as const).map((channel, index) => (
-                <NumberField
-                  key={channel}
-                  label={`${channel} 平衡 EV`}
-                  value={positive.rgbBalanceEv?.[index] ?? 0}
-                  min={-4}
-                  max={4}
-                  step={0.01}
-                  disabled={disabled} slider
-                  onChange={(value) => {
-                    if (config === null) return
-                    const balance = [...(positive.rgbBalanceEv ?? [0, 0, 0])]
-                    balance[index] = value
-                    onChange(updatePositive(config, { rgbBalanceEv: [balance[0]!, balance[1]!, balance[2]!] as [number, number, number] }), { historyTag: `positive:balance:${channel}`, description: "调整 RGB 平衡" })
-                  }}
-                />
-              ))}
-              <NumberField label="黑点" value={positive.blackPoint ?? 0} min={0} max={Math.min(0.99, (positive.whitePoint ?? 1) - 0.001)} disabled={disabled} slider onChange={(value) => config !== null && onChange(updatePositive(config, { blackPoint: value }), { historyTag: "positive:black", description: "调整黑点" })} />
-              <NumberField label="白点" value={positive.whitePoint ?? 1} min={Math.max(0.01, (positive.blackPoint ?? 0) + 0.001)} max={1} disabled={disabled} slider onChange={(value) => config !== null && onChange(updatePositive(config, { whitePoint: value }), { historyTag: "positive:white", description: "调整白点" })} />
-              <NumberField label="饱和度" value={positive.saturation ?? 1} min={0} max={2} step={0.01} disabled={disabled} slider onChange={(value) => config !== null && onChange(updatePositive(config, { saturation: value }), { historyTag: "positive:saturation", description: "调整饱和度" })} />
-            </div>
-            <button type="button" className="ghostButton" disabled={disabled}
-              onClick={() => config !== null && onChange(updatePositive(config, {
-                exposureEv: 0, rgbBalanceEv: [0, 0, 0], blackPoint: 0, whitePoint: 1, saturation: 1
-              }), { description: "重置基础调整" })}>重置基础调整</button>
-          </fieldset>
-
-          <fieldset className="filmSection" disabled={disabled}>
-            <legend>曲线</legend>
-            <label className="filmField">
-              <span>通道</span>
-              <select value={curveChannel} onChange={(event) => setCurveChannel(event.target.value as typeof curveChannel)} disabled={disabled}>
-                <option value="master">总曲线</option>
-                <option value="red">R</option>
-                <option value="green">G</option>
-                <option value="blue">B</option>
-              </select>
-            </label>
-            <CurveEditor label={curveChannel === "master" ? "总曲线" : `${curveChannel.toUpperCase()} 曲线`} curve={curve} onChange={updateCurve} disabled={disabled} />
-          </fieldset>
-
-          <fieldset className="filmSection" disabled={disabled}>
-            <legend>源图裁切与校平</legend>
-            <div className="filmFieldGrid">
-              <NumberField label="裁切 X" value={geometry.crop?.x ?? 0} min={0} max={1 - (geometry.crop?.width ?? 1)} disabled={disabled} onChange={(value) => config !== null && onChange(updateGeometry(config, { crop: { ...(geometry.crop ?? { x: 0, y: 0, width: 1, height: 1 }), x: value } }), { description: "调整源图裁切" })} />
-              <NumberField label="裁切 Y" value={geometry.crop?.y ?? 0} min={0} max={1 - (geometry.crop?.height ?? 1)} disabled={disabled} onChange={(value) => config !== null && onChange(updateGeometry(config, { crop: { ...(geometry.crop ?? { x: 0, y: 0, width: 1, height: 1 }), y: value } }), { description: "调整源图裁切" })} />
-              <NumberField label="裁切宽" value={geometry.crop?.width ?? 1} min={0.01} max={1 - (geometry.crop?.x ?? 0)} disabled={disabled} onChange={(value) => config !== null && onChange(updateGeometry(config, { crop: { ...(geometry.crop ?? { x: 0, y: 0, width: 1, height: 1 }), width: value } }), { description: "调整源图裁切" })} />
-              <NumberField label="裁切高" value={geometry.crop?.height ?? 1} min={0.01} max={1 - (geometry.crop?.y ?? 0)} disabled={disabled} onChange={(value) => config !== null && onChange(updateGeometry(config, { crop: { ...(geometry.crop ?? { x: 0, y: 0, width: 1, height: 1 }), height: value } }), { description: "调整源图裁切" })} />
-              <NumberField label="校平角度" value={geometry.rotationDegrees ?? 0} min={-45} max={45} step={0.1} disabled={disabled} onChange={(value) => config !== null && onChange(updateGeometry(config, { rotationDegrees: value }), { historyTag: "geometry:rotation", description: "调整校平" })} />
-            </div>
-          </fieldset>
-
-          {onSync !== undefined && onOperationScopeChange !== undefined && (
-            <fieldset className="filmSection" disabled={disabled}>
-              <legend>同卷同步</legend>
-              <label className="filmField">
-                <span>范围</span>
-                <select value={operationScope} onChange={(event) => onOperationScopeChange(event.target.value as OperationScope)} disabled={disabled}>
-                  <option value="active">当前图片</option>
-                  <option value="checked">已选图片</option>
-                  <option value="all">全部图片</option>
-                </select>
-              </label>
-              <div className="filmFieldGrid" role="group" aria-label="同步字段">
-                {([
-                  ["lightSource", "光源"],
-                  ["filmBase", "片基"],
-                  ["density", "密度"],
-                  ["positive", "基础调整"],
-                  ["curves", "曲线"],
-                  ["sourceGeometry", "裁切/校平"]
-                ] as const).map(([field, label]) => (
-                  <label key={field} className="filmField filmCheckboxField">
-                    <input
-                      type="checkbox"
-                      checked={syncFields.includes(field)}
-                      disabled={disabled}
-                      onChange={(event) => setSyncFields((previous) => event.target.checked
-                        ? [...previous, field]
-                        : previous.filter((candidate) => candidate !== field))}
-                    />
-                    <span>{label}</span>
-                  </label>
-                ))}
+          <details className="filmDisclosure">
+            <summary>源图裁切与校平</summary>
+            <fieldset className="filmSection" disabled={disabled} aria-label="源图裁切与校平">
+              <div className="filmFieldGrid">
+                <NumberField label="裁切 X" value={geometry.crop?.x ?? 0} min={0} max={1 - (geometry.crop?.width ?? 1)} disabled={disabled} onChange={(value) => config !== null && onChange(updateGeometry(config, { crop: { ...(geometry.crop ?? { x: 0, y: 0, width: 1, height: 1 }), x: value } }), { description: "调整源图裁切" })} />
+                <NumberField label="裁切 Y" value={geometry.crop?.y ?? 0} min={0} max={1 - (geometry.crop?.height ?? 1)} disabled={disabled} onChange={(value) => config !== null && onChange(updateGeometry(config, { crop: { ...(geometry.crop ?? { x: 0, y: 0, width: 1, height: 1 }), y: value } }), { description: "调整源图裁切" })} />
+                <NumberField label="裁切宽" value={geometry.crop?.width ?? 1} min={0.01} max={1 - (geometry.crop?.x ?? 0)} disabled={disabled} onChange={(value) => config !== null && onChange(updateGeometry(config, { crop: { ...(geometry.crop ?? { x: 0, y: 0, width: 1, height: 1 }), width: value } }), { description: "调整源图裁切" })} />
+                <NumberField label="裁切高" value={geometry.crop?.height ?? 1} min={0.01} max={1 - (geometry.crop?.y ?? 0)} disabled={disabled} onChange={(value) => config !== null && onChange(updateGeometry(config, { crop: { ...(geometry.crop ?? { x: 0, y: 0, width: 1, height: 1 }), height: value } }), { description: "调整源图裁切" })} />
+                <NumberField label="校平角度" value={geometry.rotationDegrees ?? 0} min={-45} max={45} step={0.1} disabled={disabled} onChange={(value) => config !== null && onChange(updateGeometry(config, { rotationDegrees: value }), { historyTag: "geometry:rotation", description: "调整校平" })} />
               </div>
-              <button
-                type="button"
-                className="primaryButton"
-                disabled={disabled || syncing || syncFields.length === 0}
-                onClick={() => {
-                  const controller = new AbortController(); syncController.current = controller; setSyncing(true)
-                  void onSync(operationScope, config!, syncFields, { signal: controller.signal, onProgress: (done, total) => setSyncStatus(`已检查 ${done}/${total}`) })
-                    .then(result => setSyncStatus(result.cancelled ? "已取消，未提交变更" : `已同步 ${result.applied.length} · 未变化 ${result.unchanged.length} · 跳过 ${result.skipped.length} · 失败 ${result.failed.length}。${[...result.skipped, ...result.failed].map(item => item.reason).join("；")}`))
-                    .catch(error => setSyncStatus(error instanceof Error ? error.message : "同步失败"))
-                    .finally(() => setSyncing(false))
-                }}
-              >
-                同步到{operationScope === "active" ? "当前图片" : operationScope === "checked" ? "已选图片" : "全部图片"}
-              </button>
-              {syncing && <button type="button" onClick={() => syncController.current?.abort()}>取消同步</button>}
-              <p role="status">{syncStatus}</p>
-              <p className="settingsCapabilityHint">只复制勾选字段组；跳过不同输入类型的图片。参考帧按内容指纹解析，相机、白平衡和输入空间须匹配。</p>
             </fieldset>
+          </details>
+
+          {!pendingBase && onSync !== undefined && onOperationScopeChange !== undefined && (
+            <details className="filmDisclosure">
+              <summary>同卷同步</summary>
+              <fieldset className="filmSection" disabled={disabled} aria-label="同卷同步">
+                <label className="filmField">
+                  <span>范围</span>
+                  <select value={operationScope} onChange={(event) => onOperationScopeChange(event.target.value as OperationScope)} disabled={disabled}>
+                    <option value="active">当前图片</option>
+                    <option value="checked">已选图片</option>
+                    <option value="all">全部图片</option>
+                  </select>
+                </label>
+                <div className="filmFieldGrid" role="group" aria-label="同步字段">
+                  {([
+                    ["lightSource", "光源"],
+                    ["filmBase", "片基"],
+                    ["density", "密度"],
+                    ["positive", "基础调整"],
+                    ["curves", "曲线"],
+                    ["sourceGeometry", "裁切/校平"]
+                  ] as const).map(([field, label]) => (
+                    <label key={field} className="filmField filmCheckboxField">
+                      <input
+                        type="checkbox"
+                        checked={syncFields.includes(field)}
+                        disabled={disabled}
+                        onChange={(event) => setSyncFields((previous) => event.target.checked
+                          ? [...previous, field]
+                          : previous.filter((candidate) => candidate !== field))}
+                      />
+                      <span>{label}</span>
+                    </label>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  className="primaryButton"
+                  disabled={disabled || syncing || syncFields.length === 0}
+                  onClick={() => {
+                    const controller = new AbortController(); syncController.current = controller; setSyncing(true)
+                    void onSync(operationScope, config!, syncFields, { signal: controller.signal, onProgress: (done, total) => setSyncStatus(`已检查 ${done}/${total}`) })
+                      .then(result => setSyncStatus(result.cancelled ? "已取消，未提交变更" : `已同步 ${result.applied.length} · 未变化 ${result.unchanged.length} · 跳过 ${result.skipped.length} · 失败 ${result.failed.length}。${[...result.skipped, ...result.failed].map(item => item.reason).join("；")}`))
+                      .catch(error => setSyncStatus(error instanceof Error ? error.message : "同步失败"))
+                      .finally(() => setSyncing(false))
+                  }}
+                >
+                  同步到{operationScope === "active" ? "当前图片" : operationScope === "checked" ? "已选图片" : "全部图片"}
+                </button>
+                {syncing && <button type="button" onClick={() => syncController.current?.abort()}>取消同步</button>}
+                <p role="status">{syncStatus}</p>
+                <p className="settingsCapabilityHint">只复制勾选字段组；跳过不同输入类型的图片。参考帧按内容指纹解析，相机、白平衡和输入空间须匹配。</p>
+              </fieldset>
+            </details>
           )}
         </div>
       )}

@@ -49,16 +49,17 @@ public interface ImageRenderService {
     }
 
     /**
-     * 读取本地图片并按 recipe 合成最终图像。
-     * 预览传入 maxWidth/maxHeight 做等比缩小；导出传 0/0 表示用原图尺寸不缩放。
+     * 读取本地图片并按 recipe 合成预览，允许在解码阶段按尺寸上限采样。
      *
      * @throws com.camborder.app.exception.PreviewGenerationException 当图片不存在、不可读、不是支持的图片、颜色非法或 placement 不支持时抛出
      */
     ComposeOutcome compose(RenderRecipe recipe, int maxWidth, int maxHeight);
 
+    /** 以完整有向源图为几何基准合成普通图导出，0/0 表示放置后不缩小。 */
+    ComposeOutcome composeForExport(RenderRecipe recipe, int maxWidth, int maxHeight);
+
     /**
      * 使用已经完成底片处理的 sRGB 栅格继续做版式合成（T10 预览）。
-     * 普通模式仍走 compose(recipe,...) 的源图读取路径。
      */
     default ComposeOutcome composeProcessed(final BufferedImage image, final RenderRecipe recipe,
                                             final int maxWidth, final int maxHeight,

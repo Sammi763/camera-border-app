@@ -122,6 +122,7 @@ export type SourceDecode = {
 }
 
 export type RenderRecipe = {
+  readonly layoutScale?: "photo-short-edge"
   readonly imagePath: string
   readonly border: BorderConfig | null
   readonly gradient: GradientConfig | null
@@ -134,6 +135,8 @@ export type RenderRecipe = {
   readonly borderStyle?: BorderStyleConfig | null
   /** 底片数字化处理；缺省/null 时保持普通模式。 */
   readonly imageProcessing?: ImageProcessingConfig | null
+  /** 底片当前结果与导出共用的装饰开关，缺省继续接受旧版导出设置。 */
+  readonly borderlessMaster?: boolean
 }
 
 export type PreviewRequest = {
@@ -149,6 +152,8 @@ export type PreviewRequest = {
 }
 
 export type PreviewResponse = {
+  /** 已绘制文字的归一化边界，索引对应本次请求中的 texts。 */
+  readonly textBounds?: readonly { index: number; x: number; y: number; width: number; height: number }[] | null
   readonly previewQuality?: "interactive" | "exact"
   readonly status: string
   readonly message: string

@@ -156,3 +156,16 @@ export const createDefaultFilmProcessing = (sourcePath: string): ImageProcessing
     }
   }
 }
+
+/** 新建彩负在确认片基前仅查看完整源图。旧会话保留已经保存的取样。 */
+export const awaitFilmBase = (config: ImageProcessingConfig | null | undefined): ImageProcessingConfig | null =>
+  config?.negative == null ? config ?? null
+    : { ...config, negative: { ...config.negative, enabled: false, filmBase: null } }
+
+export const isFilmBasePending = (config: ImageProcessingConfig | null | undefined): boolean =>
+  config?.negative?.enabled === false && config.negative.filmBase == null
+
+/** 未校准的界面配方只用于本地会话。发送给引擎时仅声明源图解码。 */
+export const filmSourceOnly = (config: ImageProcessingConfig): ImageProcessingConfig => ({
+  ...config, negative: null, ...(config.schemaVersion === 2 ? { filmPolarity: "positive" as const } : {})
+})

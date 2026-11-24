@@ -29,6 +29,9 @@ export type PreviewState =
       readonly currentImage: HTMLImageElement | null
       /** 引擎预览的可加载 URL，引擎未就绪时为 null。 */
       readonly engineDisplayUrl: string | null
+      readonly lastExactDisplayUrl?: string | null | undefined
+      readonly showingUncalibratedSource?: boolean
+      readonly retry?: () => void
       /** 引擎同步状态。 */
       readonly engineSyncStatus: EngineSyncStatus
       /** 引擎预览的原始响应，引擎未就绪时为 null。 */

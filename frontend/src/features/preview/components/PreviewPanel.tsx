@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react"
-import { FilmWorkspacePreview } from "../../editing/components/FilmWorkspacePreview"
+import { FilmWorkspacePreview, type FilmCurveTools } from "../../editing/components/FilmWorkspacePreview"
 import type { ImageProcessingConfig } from "../../../types/imageProcessing"
 import { Panel } from "../../../components/layout/Panel"
 import {
   calculateCompositionLayout,
+  decorationScaleFor,
   calculateFocalFromPointer,
   drawBorderStyle,
   drawImageGridOverlay,
@@ -32,6 +33,8 @@ export { sourceDecodeLabel } from "../hooks/useExportController"
 export type { ResolvedQueueItem } from "../hooks/useExportController"
 
 type PreviewPanelProps = {
+  readonly onEditText?: ((id: string) => void) | undefined
+  readonly curveTools?: FilmCurveTools | undefined
   readonly imageProcessing?: ImageProcessingConfig | null
   readonly onUpdateImageProcessing?: (config: ImageProcessingConfig, options?: { historyTag?: string; description?: string }) => void
   readonly onSourceVersion?: (version: string) => void
@@ -245,7 +248,8 @@ const CanvasPreview = ({
   previewBackground = "gray",
   activeTemplateId = null,
   outputSourceDimensions = null,
-  onUpdateImagePlacement
+  onUpdateImagePlacement,
+  onEditText
 }: {
   readonly state: Extract<PreviewState, { kind: "active" }>
   readonly settings: RenderSettings
@@ -253,9 +257,11 @@ const CanvasPreview = ({
   readonly previewBackground?: PreviewBackground
   readonly activeTemplateId?: string | null
   readonly outputSourceDimensions?: SourcePixelDimensions | null
+  readonly onEditText?: ((id: string) => void) | undefined
   readonly onUpdateImagePlacement?: ((patch: Partial<RenderSettings>, options?: SettingsUpdateOptions) => void) | undefined
 }): JSX.Element => {
   const containerRef = useRef<HTMLDivElement>(null)
+  const [textHits, setTextHits] = useState<readonly { id: string; index: number; rect: PreviewRect }[]>([])
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const drawFnRef = useRef<(() => void) | null>(null)
   const dragStartRef = useRef<{ x: number; y: number } | null>(null)
@@ -368,33 +374,16 @@ const CanvasPreview = ({
    * 源尺寸未知（引擎事实缺失）时退化为代理图尺寸，与旧几何语义一致。
    */
   const naturalCanvasDimensions = useCallback((currentSettings: RenderSettings): { width: number; height: number } => {
-    const source = outputSourceDimensions
-    if (source === null) {
-      const image = state.currentImage
-      if (image === null) return { width: 0, height: 0 }
-      const geometry = calculateImagePlacementGeometry(
-        image.naturalWidth,
-        image.naturalHeight,
-        imagePlacementFromSettings(currentSettings)
-      )
-      return geometry === null
-        ? { width: 0, height: 0 }
-        : {
-          width: Math.max(1, Math.round(geometry.targetWidth + currentSettings.borderLeft + currentSettings.borderRight)),
-          height: Math.max(1, Math.round(geometry.targetHeight + currentSettings.borderTop + currentSettings.borderBottom))
-        }
-    }
-    const geometry = calculateImagePlacementGeometry(
-      source.width,
-      source.height,
-      imagePlacementFromSettings(currentSettings)
-    )
-    if (geometry === null) {
-      return { width: 0, height: 0 }
-    }
+    const source = outputSourceDimensions ?? (state.currentImage === null ? null : {
+      width: state.currentImage.naturalWidth, height: state.currentImage.naturalHeight
+    })
+    if (source === null) return { width: 0, height: 0 }
+    const geometry = calculateImagePlacementGeometry(source.width, source.height, imagePlacementFromSettings(currentSettings))
+    if (geometry === null) return { width: 0, height: 0 }
+    const scale = decorationScaleFor(currentSettings, geometry.targetWidth, geometry.targetHeight)
     return {
-      width: Math.max(1, Math.round(geometry.targetWidth + currentSettings.borderLeft + currentSettings.borderRight)),
-      height: Math.max(1, Math.round(geometry.targetHeight + currentSettings.borderTop + currentSettings.borderBottom))
+      width: Math.max(1, Math.round(geometry.targetWidth + (currentSettings.borderLeft + currentSettings.borderRight) * scale)),
+      height: Math.max(1, Math.round(geometry.targetHeight + (currentSettings.borderTop + currentSettings.borderBottom) * scale))
     }
   }, [outputSourceDimensions, state.currentImage])
 
@@ -459,8 +448,10 @@ const CanvasPreview = ({
       if (!canDrawPhoto) {
         // 尺寸不足时清空旧帧，不能把上一次的纯边框误认为本次成功预览。
         canvas.width = canvas.width
+        setTextHits(previous => previous.length > 0 ? [] : previous)
         return
       }
+      const hits: { id: string; index: number; rect: PreviewRect }[] = []
       drawPreviewToCanvas(
         canvas,
         currentImage,
@@ -468,8 +459,10 @@ const CanvasPreview = ({
         logoImageRef.current,
         renderDimensions,
         sourceDimensions,
-        { mode: viewportStateRef.current.mode, offsetX: viewportStateRef.current.offsetX, offsetY: viewportStateRef.current.offsetY }
+        { mode: viewportStateRef.current.mode, offsetX: viewportStateRef.current.offsetX, offsetY: viewportStateRef.current.offsetY },
+        onEditText === undefined ? undefined : (id, index, rect) => hits.push({ id, index, rect })
       )
+      setTextHits(previous => JSON.stringify(previous) === JSON.stringify(hits) ? previous : hits)
       if (gridEnabledRef.current && layout !== null) {
         drawGridOverlayOnCanvas(canvas, layout, renderDimensions.pixelRatio)
       }
@@ -657,6 +650,13 @@ const CanvasPreview = ({
           className="previewCanvas"
           style={{ position: "absolute", left: 0, top: 0 }}
         />
+        {!showOriginal && onEditText !== undefined && textHits.map(({ id, index, rect }) => (
+          <button key={id} type="button" className="previewTextHit"
+            aria-label={index === 0 ? "编辑主文字" : `编辑文字 ${index + 1}`}
+            style={{ left: rect.x, top: rect.y - 4, width: rect.width, height: Math.max(16, rect.height + 8) }}
+            onMouseDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}
+            onClick={() => onEditText(id)} />
+        ))}
         {activeTemplateId === "polaroid" && targetRect !== null && (
           <div
             className="polaroidImageGuide"
@@ -775,6 +775,8 @@ export const PreviewPanel = ({
   imageProcessing = null,
   onUpdateImageProcessing,
   onSourceVersion,
+  curveTools,
+  onEditText,
   showExportControls = true
 }: PreviewPanelProps): JSX.Element => {
   const resolvedSettings = buildResolvedRenderSettings(settings, resolvedTextOverride, resolvedTextLayers, resolvedBrand)
@@ -807,7 +809,7 @@ export const PreviewPanel = ({
         {state.kind === "idle" && <IdleView />}
         {state.kind === "active" && state.filmMode === true && (
           <FilmWorkspacePreview state={state} settings={resolvedSettings} config={imageProcessing}
-            onChange={onUpdateImageProcessing} onSourceVersion={onSourceVersion} viewportCommand={viewportCommand} />
+            onChange={onUpdateImageProcessing} onSourceVersion={onSourceVersion} viewportCommand={viewportCommand} curveTools={curveTools} onEditText={onEditText} />
         )}
         {state.kind === "active" && state.filmMode !== true && state.currentImage === null && <LoadingView filePath={state.filePath} />}
         {state.kind === "active" && state.filmMode !== true && state.currentImage !== null && (
@@ -819,6 +821,7 @@ export const PreviewPanel = ({
             activeTemplateId={activeTemplateId}
             outputSourceDimensions={knownSourceDimensions}
             onUpdateImagePlacement={onUpdateImagePlacement}
+            onEditText={onEditText}
           />
         )}
       </div>

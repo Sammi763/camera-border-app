@@ -148,12 +148,17 @@ cd java-engine && mvn test -Dtest='FilmRawDecoderTest,FilmRawDecoderNativeTest'
 - `Java2DImageRenderService.compose` 计算渲染比例：`renderScale = 当前照片宽度 / 全分辨率目标宽度`；
   预览（maxWidth/maxHeight 约束）与档位导出（ExportSettings 尺寸约束）按该比例缩放全部装饰参数；
   原图尺寸导出（0/0）固定为 1，行为与历史版本一致。
+- 普通图导出先解码完整有向图像，再按裁切、旋转和尺寸上限绘制到目标照片区域。通常直接绘制到目标尺寸，
+  极小的适应画幅输出会保留照片与留白的边缘混合。预检和导出共用 `ImagePlacementRenderer.calculateOutputLayout` 的几何和边距取整。
 - 由此保证：同一配方在任意预览尺寸、任意输出档位下，「边框:照片」「文字:照片」构图比例恒定。
   真实渲染的几何一致性由 `PreviewGeometryConsistencyTest`（像素级）与 `ImagePlacementRendererGoldenTest` 验证。
 - 实现入口：`util/BorderComposer.insets(border, renderScale)`、`util/TextRenderer.draw(…, renderScale)`、
   `util/LogoRenderer.draw(…, renderScale)`、`util/BorderStyleRenderer.draw(…, renderScale)`。
 
 ## 存储语义
+
+- 导出在目标目录中暂存已编码文件，再以硬链接或系统排他改名发布。写盘期间出现同名目标时，该项报告路径冲突并保留已有文件。目标卷缺少排他发布能力时，该项报错。
+- 底片不带框母版由共享配方 `recipe.borderlessMaster` 控制当前结果、预检尺寸和导出。旧导出请求省略此字段时继续读取 `export.borderlessMaster`。
 
 - `RenderJobStore`：内存任务状态表，默认最多保留 256 条终态任务，终态首次被观察到后保留
   30 分钟；每次存取/登记时执行清理，queued/running 任务不会被淘汰。达到容量或 TTL 后，
@@ -204,3 +209,6 @@ mvn package              # 打包 target/camera-border-engine.jar（托管模式
 - `POST /api/film-reference-libraries` / `GET /api/film-references` 只读索引本机 FilmArchive：SHA 相同合并来源、不同修订保留、上游文档 ID 不作为胶片 ID、未知来源不视为官方。
 
 厂商特性曲线的可复现提取入口为 `scripts/extract-film-characteristic-curves.py`，数值与来源指纹见 `docs/film-characteristic-curves.json`，随内置资料索引离线分发。点集保留 logH/Status M 密度域与测量条件，`modelReady=false`；不作为现有像素处理的 LUT 或负片模型。真实 FFF 配对实验见 [补充验收记录](../docs/film-color-review-20261112.md)。
+
+普通和底片合成接受可选的 `RenderRecipe.layoutScale = "photo-short-edge"`。装饰单位为目标照片区域短边的千分之一，预检报告包括预计成品尺寸。缺省配方继续使用原尺寸像素。
+当前底片成品的精确预览可以返回 `textBounds`，用于定位已绘制文字。索引对应请求中的 `texts`，坐标按当前预览成品归一化。

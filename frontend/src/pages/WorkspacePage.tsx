@@ -22,10 +22,14 @@ import { HelpPanel } from "../components/layout/HelpPanel"
 import { QueuePanel } from "../features/queue/components/QueuePanel"
 import { PreviewPanel } from "../features/preview/components/PreviewPanel"
 import type { PreviewBackground, PreviewViewportCommand } from "../features/preview/components/PreviewPanel"
+import { BatchDeliveryReview } from "../features/preview/components/BatchDeliveryReview"
 import { ExportDock } from "../features/preview/components/ExportDock"
 import { calculateOutputPixelDimensions } from "../features/settings/utils/imageArea"
-import { buildNamingPreview, effectiveExportFormat } from "../features/preview/hooks/useExportController"
+import { resolveOutputSizeFromSettings } from "../features/settings/utils/outputSizePresets"
+import { buildNamingPreview, effectiveExportFormat, effectiveFilmOutput } from "../features/preview/hooks/useExportController"
 import { SettingsPanel } from "../features/settings/components/SettingsPanel"
+import type { CurveChannel } from "../features/editing/components/CurveEditor"
+import type { FilmCurveAnalysis } from "../features/editing/components/FilmWorkspacePreview"
 import { FilmEditingPanel } from "../features/editing/components/FilmEditingPanel"
 import { FilmReferencePanel } from "../features/editing/components/FilmReferencePanel"
 import { ShootingPresetPanel } from "../features/metadata/components/ShootingPresetPanel"
@@ -163,7 +167,7 @@ const applyLayoutSettings = (
   current: RenderSettings,
   incoming: Partial<RenderSettings>
 ): Partial<RenderSettings> => {
-  const layout = normalizeTemplateSettings(incoming)
+  const layout = normalizeTemplateSettings({ layoutScale: "pixels", ...incoming })
   return {
     ...layout,
     exportFormat: current.exportFormat,
@@ -194,8 +198,23 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
   const [activePresetId, setActivePresetId] = useState<string | null>(null)
   const [theme, setTheme] = useState<StudioTheme>(readTheme)
   const [previewBackground, setPreviewBackground] = useState<PreviewBackground>(readPreviewBackground)
+  const [curveChannel, setCurveChannel] = useState<CurveChannel>("master")
+  const [curveAnalysis, setCurveAnalysis] = useState<FilmCurveAnalysis | null>(null)
+  const [pickingTone, setPickingTone] = useState(false)
+  const finishTonePicking = useCallback(() => setPickingTone(false), [])
+  const updateCurveAnalysis = useCallback((result: FilmCurveAnalysis) => {
+    setCurveAnalysis(previous => previous?.filePath === result.filePath && previous.channel === result.channel
+      && previous.generation === result.generation ? { ...previous, ...result } : result)
+  }, [])
+  useEffect(() => { setPickingTone(false); setCurveAnalysis(null) }, [queue.activeItemId])
   const [activeTab, setActiveTab] = useState<WorkspaceTabId>("style")
-  const [drawer, setDrawer] = useState<"templates" | "presets" | "assets" | "help" | null>(null)
+  const [drawer, setDrawer] = useState<"gallery" | "templates" | "presets" | "assets" | "help" | null>(null)
+  const [textFocus, setTextFocus] = useState<{ id: string; sequence: number } | null>(null)
+  const editPreviewText = useCallback((id: string) => {
+    setRightCollapsed(false)
+    setActiveTab("style")
+    setTextFocus(previous => ({ id, sequence: (previous?.sequence ?? 0) + 1 }))
+  }, [])
   const [shortcutOverlayOpen, setShortcutOverlayOpen] = useState(false)
   const [viewportCommand, setViewportCommand] = useState<PreviewViewportCommand | null>(null)
   /** 所有批量行为共享同一个根级操作范围，不在各面板各自维护。 */
@@ -331,7 +350,7 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
     if (userModifiedRef.current || defaultTemplateAppliedRef.current) {
       return
     }
-    settings.update(normalizeTemplatePatch(PHOTO_INFO_CARD_DEFAULT_PATCH))
+    settings.update({ layoutScale: "pixels", ...normalizeTemplatePatch(PHOTO_INFO_CARD_DEFAULT_PATCH) })
     setActivePresetId(PHOTO_INFO_CARD_TEMPLATE_IDS.centerWhite)
   }, [queue.items.length, settings])
 
@@ -339,7 +358,7 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
   // 内置模板可能含旧单段字段（textContent 等），统一走 normalizeTemplatePatch 迁移。
   const handleApplyPreset = useCallback((patch: Partial<RenderSettings>): void => {
     userModifiedRef.current = true
-    settings.update(normalizeTemplatePatch(patch))
+    settings.update({ layoutScale: "pixels", ...normalizeTemplatePatch(patch) })
     const matched = BUILT_IN_TEMPLATES.find((t) => t.settingsPatch === patch)
     setActivePresetId(matched?.id ?? null)
   }, [settings.update])
@@ -351,7 +370,7 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
       return
     }
     userModifiedRef.current = true
-    settings.update(normalizeTemplatePatch(template.settingsPatch))
+    settings.update({ layoutScale: "pixels", ...normalizeTemplatePatch(template.settingsPatch) })
     setActivePresetId(variantId)
   }, [settings.update])
 
@@ -564,6 +583,9 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
     queue.activeImageProcessing
   )
 
+  const currentCurve = preview.kind === "active" && curveAnalysis?.filePath === preview.filePath
+    && curveAnalysis.channel === curveChannel && curveAnalysis.generation === preview.engineGeneration ? curveAnalysis : null
+
   // 缩略图几何的原图事实：与主预览同源（引擎解码/预检），缺省时退化为代理图语义。
   const gallerySourceDimensions = useMemo(() => {
     if (preview.kind !== "active") {
@@ -725,6 +747,7 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
     state: preview,
     settings: settings.settings,
     queueItems: queue.items,
+    activeItemId: queue.activeItemId,
     batchExportItems,
     resolveQueueItem,
     prepareExifForExport: exif.ensureExifForExport,
@@ -734,7 +757,7 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
   })
 
   // 输出摘要（U04）：从实际档位/格式设置与已知源图事实生成，展示在 Dock。
-  // 源图尺寸未知时省略尺寸，不猜测；快速分享档位不使用「原图尺寸」等误导文案。
+  // 底片裁切和批量范围的最终像素由引擎确定，提交前展示实际使用的长边限制。
   const exportSummary = useMemo(() => {
     const currentSettings = settings.settings
     const tierLabels: Record<string, string> = {
@@ -743,33 +766,40 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
       "high-fidelity-archive": "高保真归档",
       custom: "自定义"
     }
-    const filmMode = queue.activeImageProcessing != null
-    const tierLabel = filmMode ? (currentSettings.borderlessMaster ? "底片无框母版" : "底片带框输出") : tierLabels[currentSettings.tier ?? "standard-delivery"] ?? "标准交付"
-    const formatLabel = filmMode
-      ? ({ "srgb-jpeg": "sRGB JPEG · 8-bit", "tiff16-srgb": "sRGB TIFF · 16-bit", "tiff16-rec2020": "线性 Rec.2020 TIFF · 16-bit" }[currentSettings.filmOutput ?? (currentSettings.exportFormat === "tiff" ? "tiff16-srgb" : "srgb-jpeg")])
-      : currentSettings.exportFormat.toUpperCase()
+    const activeScope = operationScope === "active"
+    const hasFilm = activeScope ? queue.activeImageProcessing != null : batchExportItems.some(item => item.imageProcessing != null)
+    const hasPlain = activeScope ? !hasFilm : !hasFilm || batchExportItems.some(item => item.imageProcessing == null)
+    const filmTier = currentSettings.borderlessMaster ? "底片无框母版" : "底片带框输出"
+    const plainTier = tierLabels[currentSettings.tier ?? "standard-delivery"] ?? "标准交付"
+    const tierLabel = hasFilm && hasPlain ? "混合输出" : hasFilm ? filmTier : plainTier
+    const filmFormat = {
+      "srgb-jpeg": "sRGB JPEG · 8-bit",
+      "tiff16-srgb": "sRGB TIFF · 16-bit",
+      "tiff16-rec2020": "线性 Rec.2020 TIFF · 16-bit"
+    }[effectiveFilmOutput(currentSettings)]
+    const formatLabel = [
+      ...(hasPlain ? [currentSettings.exportFormat.toUpperCase()] : []),
+      ...(hasFilm ? [filmFormat] : [])
+    ].join(" / ")
     const locationLabel = currentSettings.metadataPolicy === "strip"
       ? "移除全部元数据"
       : currentSettings.metadataPolicy === "remove-location"
         ? "移除位置信息"
         : "保留元数据"
-    const sourceItem = exportController.lastPreflight?.items[0]?.report?.source ?? null
+    const sourceItem = exportController.lastPreflight?.items
+      .find(item => item.imagePath === queue.activeFilePath)?.report?.source ?? null
     const decode = preview.kind === "active" ? preview.engineResponse?.sourceDecode ?? null : null
     const sourceWidth = sourceItem?.orientedWidth ?? sourceItem?.width ?? decode?.fullWidth ?? null
     const sourceHeight = sourceItem?.orientedHeight ?? sourceItem?.height ?? decode?.fullHeight ?? null
-    const dimensions = !filmMode && sourceWidth !== null && sourceHeight !== null && sourceWidth > 0 && sourceHeight > 0
+    const dimensions = !hasFilm && activeScope
+      && sourceWidth !== null && sourceHeight !== null && sourceWidth > 0 && sourceHeight > 0
       ? calculateOutputPixelDimensions(sourceWidth, sourceHeight, currentSettings)
       : null
-    const sizeLabel = dimensions === null
-      ? null
-      : `${dimensions.width}×${dimensions.height} px`
-    return [
-      tierLabel,
-      formatLabel,
-      ...(sizeLabel === null ? [] : [sizeLabel]),
-      locationLabel
-    ].join(" · ")
-  }, [exportController.lastPreflight, preview, settings.settings, queue.activeImageProcessing])
+    const { maxWidth } = resolveOutputSizeFromSettings(currentSettings)
+    const sizeLimit = maxWidth > 0 ? `照片区域长边 ≤ ${maxWidth} px` : "照片区域不限长边"
+    const size = dimensions === null ? sizeLimit : `${dimensions.width}×${dimensions.height} px`
+    return { formatLabel, size, text: [tierLabel, formatLabel, size, locationLabel].join(" · ") }
+  }, [batchExportItems, exportController.lastPreflight, operationScope, preview, settings.settings, queue.activeFilePath, queue.activeImageProcessing])
 
 
   // ---- 全局撤销协调（U05） ----------------------------------------------------
@@ -821,7 +851,8 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
       "[role='button']",
       "[role='tab']",
       "[role='menuitem']",
-      "[role='separator']"
+      "[role='separator']",
+      "[role='slider']"
     ].join(", ")
     const isInteractiveTarget = (target: EventTarget | null): boolean => {
       if (!(target instanceof Element)) {
@@ -834,7 +865,7 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
       return target.closest(INTERACTIVE_TARGET_SELECTOR) !== null
     }
     const handleKeyDown = (event: KeyboardEvent): void => {
-      if (isEditableTarget(event.target) || (event.target instanceof HTMLElement && event.target.closest('[role="dialog"]') !== null)) {
+      if (event.defaultPrevented || isEditableTarget(event.target) || (event.target instanceof Element && event.target.closest('[role="dialog"]') !== null)) {
         return
       }
       // 快捷键速查面板打开时暂停工作台快捷键；关闭行为由面板自身处理（Esc 或 ?）。
@@ -977,6 +1008,22 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
       label: "样式",
       content: (
         <div className="workspaceTabStack">
+          <div className="workspaceCurrentLayout">
+            <div><span>当前版式</span><strong>{BUILT_IN_TEMPLATES.find(template => template.id === activePresetId)?.name ?? "自定义版式"}</strong></div>
+            <button type="button" className="ghostButton" onClick={() => setDrawer("gallery")}>更换版式</button>
+          </div>
+          <SettingsPanel
+            controller={settingsController}
+            hasSelectedImage={queue.activeFilePath !== null}
+            selectedFilePath={queue.activeFilePath}
+            textOverride={queue.activeTextOverride}
+            setTextOverride={queue.setActiveTextOverride}
+            detectedBrandLabel={detectedBrand?.label ?? null}
+            capabilities={capabilities}
+            showOutputSettings={false}
+            compactStyle
+            textFocus={textFocus}
+          />
           <fieldset className="workspacePreviewBackground">
             <legend className="settingLabel">预览背景</legend>
             <div className="workspacePreviewBackgroundButtons" role="group" aria-label="预览背景">
@@ -993,28 +1040,9 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
               ))}
             </div>
           </fieldset>
-          <TemplateGallery
-            activePresetId={activePresetId}
-            recommendedTemplateId={recommendedTemplateId}
-            currentImage={preview.kind === "active" ? preview.currentImage : null}
-            currentSettings={resolvedGallerySettings}
-            sourceDimensions={gallerySourceDimensions}
-            onApply={handleApplyPreset}
-            onApplyInfoCardVariant={handleApplyInfoCardVariant}
-          />
           <button type="button" className="ghostButton workspaceManagementButton" onClick={() => setDrawer("templates")}>
             管理用户版式
           </button>
-          <SettingsPanel
-            controller={settingsController}
-            hasSelectedImage={queue.activeFilePath !== null}
-            selectedFilePath={queue.activeFilePath}
-            textOverride={queue.activeTextOverride}
-            setTextOverride={queue.setActiveTextOverride}
-            detectedBrandLabel={detectedBrand?.label ?? null}
-            capabilities={capabilities}
-            showOutputSettings={false}
-          />
         </div>
       )
     },
@@ -1059,6 +1087,10 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
       content: (
         <div className="workspaceFilmTab">
           <FilmEditingPanel
+            curveTools={{ channel: curveChannel, setChannel: setCurveChannel, picking: pickingTone,
+              togglePicking: () => setPickingTone(previous => !previous),
+              ...(currentCurve?.histogram === undefined ? {} : { histogram: currentCurve.histogram }),
+              ...(currentCurve?.sampledTones === undefined ? {} : { sampledTones: currentCurve.sampledTones }) }}
             config={queue.activeImageProcessing}
             error={queue.activeImageProcessingError}
             sourcePath={queue.activeItem?.sourcePath ?? null}
@@ -1068,7 +1100,10 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
             onOperationScopeChange={setOperationScope}
             onSync={queue.syncImageProcessing}
           />
-          <FilmReferencePanel />
+          <details className="filmDisclosure">
+            <summary>胶片资料</summary>
+            <FilmReferencePanel />
+          </details>
         </div>
       )
     },
@@ -1077,11 +1112,9 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
       label: "输出",
       content: (
         <div className="workspaceOutputTab">
-          <h2 className="workspaceOutputTitle">输出</h2>
-          <p className="settingsCapabilityHint">提交按钮固定在底部 Dock；这里的设置用于生成导出文件。</p>
           <dl className="workspaceOutputSummary">
-            <div><dt>格式</dt><dd>{settings.settings.exportFormat.toUpperCase()}</dd></div>
-            <div><dt>尺寸</dt><dd>{settings.settings.outputSizePreset === "original" ? "原图尺寸" : settings.settings.outputSizePreset}</dd></div>
+            <div><dt>格式</dt><dd>{exportSummary.formatLabel}</dd></div>
+            <div><dt>尺寸</dt><dd>{exportSummary.size}</dd></div>
             <div><dt>范围</dt><dd>{operationScope === "active" ? "当前图片" : operationScope === "checked" ? `已选 ${queue.checkedCount} 张` : `全部 ${queue.items.length} 张`}</dd></div>
           </dl>
           {queue.activeImageProcessing !== null && (
@@ -1131,14 +1164,17 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
             filmMode={queue.activeImageProcessing != null}
             showStyleSettings={false}
           />
+          {operationScope !== "active" && !queue.isBrowserMode && <button type="button" className="ghostButton"
+            disabled={!engineAvailable || exportController.isBatchExporting || exportController.isExporting || batchExportItems.length === 0}
+            onClick={() => void exportController.inspectBatch?.()}>检查交付清单</button>}
           <p className="settingsCapabilityHint">快捷键：⌘/Ctrl + Enter 导出当前范围。</p>
         </div>
       )
     }
   ], [
-    activeItem, activePresetId, assets, detectedBrand, handleApplyInfoCardVariant, handleApplyPreset,
+    activeItem, activePresetId, assets, detectedBrand, exportSummary, handleApplyInfoCardVariant, handleApplyPreset,
     handlePreviewBackgroundChange, identitySources, operationScope, presets, selectedIdentity,
-    preview, previewBackground, queue, recommendedTemplateId, settings, settingsController, capabilities
+    exportController, batchExportItems.length, engineAvailable, preview, previewBackground, textFocus, curveChannel, currentCurve, pickingTone, queue, recommendedTemplateId, settings, settingsController, capabilities
   ])
 
   const workspaceStyle = {
@@ -1178,6 +1214,7 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
           <div className="workspaceCenter">
             <PreviewPanel
               state={preview}
+              curveTools={activeTab === "film" ? { channel: curveChannel, picking: pickingTone, onSampled: updateCurveAnalysis, finishPicking: finishTonePicking } : undefined}
               settings={settings.settings}
               hasSelectedImage={queue.activeFilePath !== null}
               batchExportLabel={batchExportLabel}
@@ -1195,6 +1232,7 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
               onSourceVersion={(version) => { if (queue.activeItemId !== null) queue.recordSourceVersion(queue.activeItemId, version) }}
               showExportControls={false}
               onUpdateImagePlacement={handleUpdateImagePlacement}
+              onEditText={editPreviewText}
             />
           </div>
           <div className="workspaceRight">
@@ -1212,11 +1250,7 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
               </div>
             ) : (
               <div className="workspaceInspector">
-                <header className="workspaceInspectorHeader">
-                  <div>
-                    <span className="workspaceInspectorKicker">WORKSPACE</span>
-                    <h2 className="workspaceInspectorTitle">工作台</h2>
-                  </div>
+                <WorkspaceTabs tabs={workspaceTabs} activeTab={activeTab} onChange={setActiveTab} headerAction={(
                   <button
                     type="button"
                     className="inspectorCollapseButton"
@@ -1224,10 +1258,9 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
                     aria-label="折叠工作台面板"
                     title="折叠工作台面板"
                   >
-                    收起
+                    <span aria-hidden="true">›</span>
                   </button>
-                </header>
-                <WorkspaceTabs tabs={workspaceTabs} activeTab={activeTab} onChange={setActiveTab} />
+                )} />
               </div>
             )}
           </div>
@@ -1273,7 +1306,7 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
               onOperationScopeChange={setOperationScope}
               checkedCount={queue.checkedCount}
               queueCount={queue.items.length}
-              exportSummary={exportSummary}
+              exportSummary={exportSummary.text}
               tierUnavailableReason={tierUnavailableReason}
             />
           </div>
@@ -1289,6 +1322,30 @@ export const WorkspacePage = ({ runtime }: WorkspacePageProps): JSX.Element => {
         onSave={handleDropSave}
       />
 
+      <ModalDrawer open={exportController.batchReview != null} title="批量交付清单"
+        onClose={() => exportController.dismissBatchReview?.()}>
+        {exportController.batchReview != null && exportController.resolveBatchReview !== undefined && (
+          <BatchDeliveryReview rows={exportController.batchReview}
+            onConfirm={exportController.resolveBatchReview} onCancel={() => exportController.dismissBatchReview?.()}
+            onRepair={id => {
+              exportController.dismissBatchReview?.()
+              queue.setActive(id)
+              setRightCollapsed(false)
+              setActiveTab("film")
+            }} />
+        )}
+      </ModalDrawer>
+      <ModalDrawer open={drawer === "gallery"} title="更换版式" onClose={() => setDrawer(null)}>
+          <TemplateGallery
+            activePresetId={activePresetId}
+            recommendedTemplateId={recommendedTemplateId}
+            currentImage={preview.kind === "active" ? preview.currentImage : null}
+            currentSettings={resolvedGallerySettings}
+            sourceDimensions={gallerySourceDimensions}
+            onApply={patch => { handleApplyPreset(patch); setDrawer(null) }}
+            onApplyInfoCardVariant={id => { handleApplyInfoCardVariant(id); setDrawer(null) }}
+          />
+      </ModalDrawer>
       <ModalDrawer open={drawer === "templates"} title="管理用户版式" onClose={() => setDrawer(null)}>
         <TemplatePanel
           templateController={templates}

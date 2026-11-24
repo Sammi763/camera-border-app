@@ -23,6 +23,9 @@ public final class RenderRecipeValidator {
     /** 普通模式与底片模式共用的完整配方结构校验（不含能力可用性）。 */
     public static void validateRecipe(final RenderRecipe recipe, final String prefix) {
         validateImagePlacement(recipe, prefix);
+        if (recipe.getLayoutScale() != null && !"photo-short-edge".equals(recipe.getLayoutScale())) {
+            throw new ApiException(prefix + "layoutScale is invalid", HttpStatus.BAD_REQUEST);
+        }
         ImageProcessingValidator.validate(recipe.getImageProcessing(), prefix);
     }
 

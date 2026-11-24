@@ -12,7 +12,7 @@ import type { PhotoAssetStore, PhotoIdentity, ShootingPreset } from "../../metad
 import type { PhotoMetadata } from "../../../types/preview"
 import type { ImportResult, OperationScope, QueueController, QueueItem, FilmSyncField, FilmSyncResult, FilmSyncOptions } from "../types"
 import type { ImageProcessingConfig, MonotonicCurve } from "../../../types/imageProcessing"
-import { createDefaultFilmColorProcessing, createDefaultFilmProcessing } from "../../editing/defaults"
+import { awaitFilmBase, createDefaultFilmColorProcessing, createDefaultFilmProcessing, filmSourceOnly, isFilmBasePending } from "../../editing/defaults"
 import { cloneImageProcessing, migrateImageProcessing } from "../imageProcessingSession"
 import { nextHistorySeq, type HistoryEntryMeta } from "../../../utils/historySequence"
 import { resolveIdentityFieldSources } from "../../metadata/utils/resolveIdentityFieldSources"
@@ -176,7 +176,8 @@ const mergeFilmProcessing = (
           ? { lightSource: JSON.parse(JSON.stringify(sourceNegative.lightSource)) }
           : {}),
         ...(fields.has("filmBase") && sourceNegative.filmBase !== undefined
-          ? { filmBase: JSON.parse(JSON.stringify(sourceNegative.filmBase)) }
+          ? { filmBase: JSON.parse(JSON.stringify(sourceNegative.filmBase)),
+            ...(sourceNegative.enabled && sourceNegative.filmBase !== null ? { enabled: true } : {}) }
           : {}),
         ...(fields.has("density") && sourceNegative.density !== undefined
           ? { density: JSON.parse(JSON.stringify(sourceNegative.density)) }
@@ -299,14 +300,20 @@ export const useQueue = (): QueueController => {
     if (checkImagePaths === undefined || snapshotRef.current.items.length === 0) return
     let active = true
     void (async () => {
-      const originalPaths = snapshotRef.current.items.map((item) => item.sourcePath)
+      const originalItems = snapshotRef.current.items
+      const originalPaths = originalItems.map((item) => item.sourcePath)
+      const indexes = new Map(originalItems.map((item, index) => [item.id, index]))
       try {
         const exists = await checkImagePaths(originalPaths)
         if (!active) return
         const converted = await resolveHeicPaths(originalPaths)
         if (!active) return
         commit((previous) => {
-          const restoredItems = previous.items.map((item, index) => {
+          const restoredItems = previous.items.map((item) => {
+            const index = indexes.get(item.id)
+            const original = index === undefined ? undefined : originalItems[index]
+            if (index === undefined || original?.sourcePath !== item.sourcePath
+              || original.filePath !== item.filePath) return item
             const sourceExists = exists[index] === true
             const resolved = converted[index]
             const resolvedPath = resolved?.resolved
@@ -628,6 +635,10 @@ export const useQueue = (): QueueController => {
     const ids = new Set(resolveScopeIds(scope, frozen))
     const targets = frozen.items.filter(item => ids.has(item.id))
     const sourceClone = cloneImageProcessing(source)!
+    if (isFilmBasePending(sourceClone)) {
+      result.skipped.push(...targets.map(item => ({ id: item.id, reason: `${item.fileName}：请先确认参考片基` })))
+      return result
+    }
     const selected = new Set(fields)
     const needsSpace = sourceClone.negative != null && fields.some(f => ["lightSource", "filmBase", "density"].includes(f))
     const clientId = `film_sync_${crypto.randomUUID()}`
@@ -655,7 +666,7 @@ export const useQueue = (): QueueController => {
             if (base === null) {
               if (sourceClone.schemaVersion !== 2) { result.skipped.push({ id: item.id, reason: `${item.fileName}：旧版目标须先开启校色或使用 v2` }); continue }
               const probe = await probeImage({ imagePath: item.filePath }, undefined, options?.signal)
-              base = createDefaultFilmColorProcessing(item.filePath, sourceClone.filmPolarity ?? "positive", probe)
+              base = awaitFilmBase(createDefaultFilmColorProcessing(item.filePath, sourceClone.filmPolarity ?? "positive", probe))
             }
             if (base === null || base.schemaVersion !== sourceClone.schemaVersion
               || (base.inputSource ?? base.inputMode) !== (sourceClone.inputSource ?? sourceClone.inputMode)
@@ -663,8 +674,9 @@ export const useQueue = (): QueueController => {
               result.skipped.push({ id: item.id, reason: `${item.fileName}：版本、输入来源或正负性质不兼容` }); continue
             }
             if (needsSpace) {
-              const targetClient = `${clientId}_${item.id}`; clients.add(targetClient)
-              const facts = await analyzeImage({ recipe: { imagePath: item.filePath, border: null, gradient: null, texts: [], imagePlacement: { mode: "fit", focalX: 0.5, focalY: 0.5, rotation: 0, targetAspectRatio: null }, imageProcessing: base }, stage: "raw-linear", clientId: targetClient, generation: 1 }, undefined, options?.signal)
+              const targetClient = `film_sync_${crypto.randomUUID()}`
+              clients.add(targetClient)
+              const facts = await analyzeImage({ recipe: { imagePath: item.filePath, border: null, gradient: null, texts: [], imagePlacement: { mode: "fit", focalX: 0.5, focalY: 0.5, rotation: 0, targetAspectRatio: null }, imageProcessing: isFilmBasePending(base) ? filmSourceOnly(base) : base }, stage: "raw-linear", clientId: targetClient, generation: 1 }, undefined, options?.signal)
               if (facts.calibrationSpaceKey !== sourceSpace) { result.skipped.push({ id: item.id, reason: `${item.fileName}：校准空间不兼容` }); continue }
             }
             prepared.set(item.id, mergeFilmProcessing(sourceClone, base, selected))
@@ -720,10 +732,16 @@ export const useQueue = (): QueueController => {
    */
   const relocateItem = useCallback(async (id: string, newPath: string): Promise<boolean> => {
     if (newPath.trim().length === 0) return false
-    if (!snapshotRef.current.items.some((item) => item.id === id)) return false
+    const original = snapshotRef.current.items.find((item) => item.id === id)
+    if (original === undefined) return false
+    const targetKey = normalizeSourcePath(newPath)
+    const occupiedByAnother = (items: readonly QueueItem[]): boolean =>
+      items.some(item => item.id !== id && !item.missing && normalizeSourcePath(item.sourcePath) === targetKey)
+    if (occupiedByAnother(snapshotRef.current.items)) return false
     const [resolved] = await resolveHeicPaths([newPath])
     const working = resolved?.resolved ?? null
-    if (working === null) return false
+    if (working === null || occupiedByAnother(snapshotRef.current.items) || !snapshotRef.current.items.some((item) => item.id === id
+      && item.sourcePath === original.sourcePath && item.missing === original.missing)) return false
     commit((previous) => ({
       ...previous,
       items: previous.items.map((item) => item.id === id
@@ -758,7 +776,7 @@ export const useQueue = (): QueueController => {
       return { relocated: 0, ambiguous: [], unresolved: [] }
     }
     const byName = new Map<string, string[]>()
-    for (const candidate of candidatePaths) {
+    for (const candidate of new Set(candidatePaths)) {
       const name = candidate.replaceAll("\\", "/").split("/").pop() ?? candidate
       const bucket = byName.get(name)
       if (bucket === undefined) {
@@ -767,6 +785,10 @@ export const useQueue = (): QueueController => {
         bucket.push(candidate)
       }
     }
+    const sourceCounts = new Map<string, number>()
+    const occupied = new Set(snapshotRef.current.items.filter((item) => !item.missing)
+      .map((item) => normalizeSourcePath(item.sourcePath)))
+    for (const item of missingItems) sourceCounts.set(item.fileName, (sourceCounts.get(item.fileName) ?? 0) + 1)
     const resolved = new Map<string, string>()
     const ambiguous: { itemId: string; fileName: string; candidates: string[] }[] = []
     const unresolved: string[] = []
@@ -774,16 +796,22 @@ export const useQueue = (): QueueController => {
       const candidates = byName.get(item.fileName)
       if (candidates === undefined) {
         unresolved.push(item.fileName)
-      } else if (candidates.length === 1) {
+      } else if (candidates.length === 1 && sourceCounts.get(item.fileName) === 1
+        && !occupied.has(normalizeSourcePath(candidates[0]!))) {
         resolved.set(item.id, candidates[0]!)
       } else {
         ambiguous.push({ itemId: item.id, fileName: item.fileName, candidates })
       }
     }
+    let relocated = 0
     for (const [id, newPath] of resolved) {
-      await relocateItem(id, newPath)
+      const original = missingItems.find((item) => item.id === id)!
+      if (!snapshotRef.current.items.some((item) => item.id === id && item.missing
+        && item.sourcePath === original.sourcePath)) continue
+      if (await relocateItem(id, newPath)) relocated++
+      else unresolved.push(original.fileName)
     }
-    return { relocated: resolved.size, ambiguous, unresolved }
+    return { relocated, ambiguous, unresolved }
   }, [relocateItem])
 
   /** 更新单条目到用户明确选择的重定位候选（同名冲突时的人工确认入口）。 */

@@ -136,6 +136,15 @@ export const submitAndWaitForRenderJob = async (
   onStatus?: (status: RenderJobStatusResponse) => void
 ): Promise<RenderJobStatusResponse> => {
   const result = await submitRenderJob(request)
+  return waitForRenderJob(result, pollTimeoutMs, onStatus)
+}
+
+/** 从已有任务状态继续查询，恢复时不会重发 POST。 */
+export const waitForRenderJob = async (
+  result: RenderJobStatusResponse,
+  pollTimeoutMs: number = RENDER_JOB_POLL_TIMEOUT_MS,
+  onStatus?: (status: RenderJobStatusResponse) => void
+): Promise<RenderJobStatusResponse> => {
   onStatus?.(result)
 
   if (isTerminalStatus(result.status)) {

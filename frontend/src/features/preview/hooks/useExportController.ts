@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useRef, useState } from "react"
-import { cancelRenderJob, fetchRenderJobStatus, submitAndWaitForRenderJob } from "../../../services/engine/renderJobsApi"
+import { cancelRenderJob, fetchRenderJobStatus, submitAndWaitForRenderJob, waitForRenderJob } from "../../../services/engine/renderJobsApi"
 import { EngineHttpError } from "../../../services/engine/engineClient"
 import { preflightExport } from "../../../services/engine/exportPreflightApi"
 import { toExportFileName } from "../../../utils/fileName"
@@ -23,10 +23,11 @@ import type {
   FidelityReport,
   ExportPreflightResponse
 } from "../../../types/preview"
-import type { ImageProcessingConfig } from "../../../types/imageProcessing"
+import type { FilmOutput, ImageProcessingConfig } from "../../../types/imageProcessing"
 import { buildRecipeFromSettings } from "../../settings/utils/buildRecipe"
 import { resolveOutputSizeFromSettings } from "../../settings/utils/outputSizePresets"
 import type { RenderSettings } from "../../settings/types"
+import { isFilmBasePending } from "../../editing/defaults"
 import type { QueueItem } from "../../queue/types"
 import type { PreviewState } from "../types"
 
@@ -71,17 +72,83 @@ export type BatchExportState =
   /** 批量任务状态待确认：保留冻结批次与目录，支持重新查询原任务或核对输出目录。 */
   | { readonly kind: "unconfirmed"; readonly message: string; readonly jobId: string | null; readonly total: number; readonly dirPath: string; readonly results: readonly BatchExportItemResult[] }
 
+/** 每次单图提交持有自己的状态，轮询与取消响应只能更新所属任务。 */
+type SingleRun = {
+  readonly fileName: string
+  readonly format: RenderSettings["exportFormat"]
+  readonly cancellation: AbortController
+  outputPath: string | null
+  jobId: string | null
+  busy: boolean
+  cancelRequest: "idle" | "sent" | "failed"
+}
+
 type FrozenBatch = {
   readonly request: RenderJobRequest
+  readonly settings: RenderSettings
   readonly items: readonly QueueItem[]
   readonly dirPath: string
-  readonly results: readonly BatchExportItemResult[]
+  readonly results: (BatchExportItemResult | undefined)[]
+}
+
+export type BatchReviewRow = {
+  readonly index: number
+  readonly itemId: string
+  readonly sourcePath: string
+  readonly outputPath: string
+  readonly format: string
+  readonly dimensions: string | null
+  readonly reasons: readonly string[]
+  readonly canRepair: boolean
+  readonly canRename: boolean
+  readonly canExportPlain: boolean
+}
+export type BatchReviewAction = "export" | "skip" | "rename" | "plain"
+
+type BatchReview = {
+  readonly frozen: FrozenBatch
+  readonly rows: readonly BatchReviewRow[]
+}
+
+const recipeIssue = (item: QueueItem | null): string | null =>
+  item?.imageProcessingError ?? (isFilmBasePending(item?.imageProcessing) ? "请先完成片基校准" : null)
+
+const MISSING_SOURCE = "源照片缺失，请在队列中重新定位文件"
+export const BATCH_SKIPPED = "已按选择跳过"
+
+type BatchRun = {
+  readonly frozen: FrozenBatch
+  readonly chunks: readonly (readonly number[])[]
+  cursor: number
+}
+
+// 与引擎 RenderJobController.MAX_SNAPSHOTS_PER_JOB 一致。
+const MAX_BATCH_CHUNK_SIZE = 100
+const BATCH_CANCELLED = "任务已取消，未执行"
+
+const isTerminalJob = (status: RenderJobStatusResponse): boolean =>
+  status.status === "completed" || status.status === "failed" || status.status === "cancelled"
+
+const batchCounts = (results: readonly (BatchExportItemResult | undefined)[]) => {
+  let success = 0
+  let failed = 0
+  let cancelled = 0
+  let skipped = 0
+  for (const result of results) {
+    if (result === undefined) continue
+    if (result.success) success++
+    else if (result.error === BATCH_CANCELLED) cancelled++
+    else if (result.error === BATCH_SKIPPED) skipped++
+    else failed++
+  }
+  return { success, failed, cancelled, skipped }
 }
 
 type UseExportControllerArgs = {
   readonly state: PreviewState
   readonly settings: RenderSettings
   readonly queueItems: readonly QueueItem[]
+  readonly activeItemId?: string | null
   /** 根级 operationScope 已解析后的图片范围。 */
   readonly batchExportItems: readonly QueueItem[]
   /** 解析时显式传入冻结设置，避免 EXIF 等待期间的编辑污染已启动的导出。 */
@@ -104,6 +171,10 @@ export type ExportController = {
   readonly notice: string | null
   readonly startSingleExport: () => Promise<void>
   readonly startBatchExport: () => Promise<void>
+  readonly inspectBatch?: () => Promise<void>
+  readonly batchReview?: readonly BatchReviewRow[] | null
+  readonly resolveBatchReview?: (actions: Readonly<Record<number, BatchReviewAction>>) => Promise<void>
+  readonly dismissBatchReview?: () => void
   readonly retryFailed: () => Promise<void>
   readonly cancelActiveExport: () => Promise<void>
   /** 重新查询「状态待确认」任务的原 jobId；引擎记录已失效时如实解释。 */
@@ -112,9 +183,12 @@ export type ExportController = {
 }
 
 /** 底片组合决定真实扩展名，避免旧会话的普通格式字段与输出内容冲突。 */
+export const effectiveFilmOutput = (settings: RenderSettings): FilmOutput =>
+  settings.filmOutput ?? (settings.exportFormat === "tiff" ? "tiff16-srgb" : "srgb-jpeg")
+
 export const effectiveExportFormat = (settings: RenderSettings, processing: ImageProcessingConfig | null | undefined): RenderSettings["exportFormat"] =>
   processing == null ? settings.exportFormat
-    : (settings.filmOutput ?? (settings.exportFormat === "tiff" ? "tiff16-srgb" : "srgb-jpeg")) === "srgb-jpeg" ? "jpeg" : "tiff"
+    : effectiveFilmOutput(settings) === "srgb-jpeg" ? "jpeg" : "tiff"
 
 /** 从设置构建导出设置；尺寸预设在提交前收敛为引擎使用的像素上限。 */
 const buildExportSettings = (
@@ -124,8 +198,6 @@ const buildExportSettings = (
 ): ExportSettings => {
   const size = resolveOutputSizeFromSettings(settings)
   const filmMode = imageProcessing !== null && imageProcessing !== undefined
-  const resolvedFilmOutput = settings.filmOutput
-    ?? (settings.exportFormat === "tiff" ? "tiff16-srgb" : "srgb-jpeg")
   return {
     format: effectiveExportFormat(settings, imageProcessing),
     outputPath,
@@ -142,8 +214,7 @@ const buildExportSettings = (
     ...(filmMode
       ? {
         tier: "custom" as const,
-        filmOutput: resolvedFilmOutput as import("../../../types/imageProcessing").FilmOutput,
-        borderlessMaster: settings.borderlessMaster ?? false
+        filmOutput: effectiveFilmOutput(settings)
       }
       : {})
   }
@@ -178,11 +249,11 @@ const buildUniqueExportPath = (
   const stem = withSuffix ? `${baseName}-border` : baseName
   let candidate = `${stem}.${ext}`
   let counter = 1
-  while (usedNames.has(candidate)) {
+  while (usedNames.has(candidate.toLowerCase())) {
     candidate = `${stem}-${counter}.${ext}`
     counter++
   }
-  usedNames.add(candidate)
+  usedNames.add(candidate.toLowerCase())
   return `${dirPath}/${candidate}`
 }
 
@@ -210,9 +281,14 @@ export const buildNamingPreview = (
   items: readonly Pick<QueueItem, "fileName">[],
   naming: { readonly mode: "original-suffix" | "prefix-index"; readonly prefix: string },
   extension: string | ((item: Pick<QueueItem, "fileName">, index: number) => string)
-): readonly string[] =>
-  items.slice(0, 3).map((item, index) =>
-    `${buildBatchOutputName(item, index, naming)}${naming.mode === "original-suffix" ? "-border" : ""}.${typeof extension === "function" ? extension(item, index) : extension}`)
+): readonly string[] => {
+  const usedNames = new Set<string>()
+  return items.slice(0, 3).map((item, index) => buildUniqueExportPath(
+    "", buildBatchOutputName(item, index, naming),
+    typeof extension === "function" ? extension(item, index) : extension,
+    usedNames, naming.mode === "original-suffix"
+  ).slice(1))
+}
 
 const extensionFor = (format: RenderSettings["exportFormat"]): string =>
   format === "jpeg" ? "jpg" : format === "tiff" ? "tif" : "png"
@@ -285,6 +361,7 @@ export const useExportController = ({
   state,
   settings,
   queueItems,
+  activeItemId,
   batchExportItems,
   resolveQueueItem,
   prepareExifForExport,
@@ -296,14 +373,21 @@ export const useExportController = ({
   const [batch, setBatch] = useState<BatchExportState>({ kind: "idle" })
   const [lastPreflight, setLastPreflight] = useState<ExportPreflightResponse | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
-  const activeJobRef = useRef<{ readonly kind: "single" | "batch"; readonly jobId: string } | null>(null)
+  const [batchReview, setBatchReview] = useState<BatchReview | null>(null)
+  const reviewRef = useRef<BatchReview | null>(null)
+  const setReview = useCallback((value: BatchReview | null) => {
+    reviewRef.current = value
+    setBatchReview(value)
+  }, [])
+  const activeBatchJobIdRef = useRef<string | null>(null)
   const frozenBatchRef = useRef<FrozenBatch | null>(null)
+  const batchRunRef = useRef<BatchRun | null>(null)
+  const requeryingBatchRef = useRef(false)
   // 准备阶段（尚未取得 jobId）的本地取消令牌：置位后，EXIF/选择器/预检等异步
   // 结果返回时不得再提交任务；jobId 产生后改走引擎 DELETE 取消。
-  const singleCancelRequestedRef = useRef(false)
+  const singleRunRef = useRef<SingleRun | null>(null)
   const batchCancelRequestedRef = useRef(false)
   // 准备阶段 EXIF 等待的中止器：取消时立即中断批量读取，不等到自然结束。
-  const singleExifAbortRef = useRef<AbortController | null>(null)
   const batchExifAbortRef = useRef<AbortController | null>(null)
 
   const openExportDirectory = useCallback((dirPath: string): void => {
@@ -322,23 +406,27 @@ export const useExportController = ({
     })
   }, [])
 
-  const applySingleStatus = useCallback((status: RenderJobStatusResponse): void => {
-    activeJobRef.current = { kind: "single", jobId: status.jobId }
-    if (status.status === "completed" || status.status === "failed" || status.status === "cancelled") {
-      activeJobRef.current = null
+  const applySingleStatus = useCallback((run: SingleRun, status: RenderJobStatusResponse): void => {
+    if (singleRunRef.current !== run) return
+    run.jobId = status.jobId
+    if (isTerminalJob(status)) {
+      singleRunRef.current = null
       const result = asItemStatus(status, 0)
       if (status.status === "completed" && result.status === "completed") {
         setSingle({
           kind: "completed",
-          outputPath: result.outputPath ?? "",
-          actualFormat: result.actualFormat ?? "",
+          outputPath: result.outputPath ?? run.outputPath ?? "",
+          actualFormat: result.actualFormat ?? run.format,
           summary: buildExportSummary(result),
           report: result.fidelityReport ?? null
         })
+        notifySystem("导出完成", run.fileName)
       } else if (status.status === "cancelled") {
         setSingle({ kind: "cancelled", message: result.error ?? "导出任务已取消。" })
       } else {
-        setSingle({ kind: "error", message: result.error ?? status.error ?? "导出失败，未知错误。" })
+        const message = result.error ?? status.error ?? "导出失败，未知错误。"
+        setSingle({ kind: "error", message })
+        notifySystem("导出失败", `${run.fileName}（${message}）`)
       }
       return
     }
@@ -351,7 +439,29 @@ export const useExportController = ({
         currentItem: status.currentItem ?? null
       })
     }
-  }, [])
+  }, [notifySystem])
+
+  const sendSingleCancel = useCallback(async (run: SingleRun, retry = false): Promise<void> => {
+    if (singleRunRef.current !== run || run.jobId === null || run.cancelRequest === "sent"
+      || (run.cancelRequest === "failed" && !retry)) return
+    run.cancelRequest = "sent"
+    if (retry) setNotice(null)
+    try {
+      const status = await cancelRenderJob(run.jobId)
+      // 已开始写盘时 DELETE 可能返回运行中，继续以轮询结果为准。
+      if (isTerminalJob(status)) applySingleStatus(run, status)
+    } catch (error: unknown) {
+      if (singleRunRef.current === run) {
+        run.cancelRequest = "failed"
+        setNotice(`取消请求失败：${toErrorMessage(error, "引擎不可达")}。任务可能仍在执行，可稍后在结果中确认。`)
+      }
+    }
+  }, [applySingleStatus])
+
+  const observeSingleStatus = useCallback((run: SingleRun, status: RenderJobStatusResponse): void => {
+    applySingleStatus(run, status)
+    if (run.cancellation.signal.aborted && !isTerminalJob(status)) void sendSingleCancel(run)
+  }, [applySingleStatus, sendSingleCancel])
 
   const ensurePreflightReady = useCallback(async (request: RenderJobRequest): Promise<void> => {
     // production WorkspacePage always passes capabilities (including null on failure).
@@ -365,35 +475,52 @@ export const useExportController = ({
     throw new Error(`导出预检未通过：${reasons.length > 0 ? reasons.join("；") : "当前档位不可用"}`)
   }, [capabilities])
 
-  const applyBatchStatus = useCallback((status: RenderJobStatusResponse, total: number): void => {
-    activeJobRef.current = { kind: "batch", jobId: status.jobId }
+  const applyBatchStatus = useCallback((status: RenderJobStatusResponse, run: BatchRun): void => {
+    activeBatchJobIdRef.current = status.jobId
     if (status.status === "queued" || status.status === "pending" || status.status === "running") {
+      const counts = batchCounts(run.frozen.results)
       setBatch({
         kind: "running",
         jobId: status.jobId,
-        total: status.total ?? total,
-        current: status.processed ?? 0,
-        success: status.completed ?? 0,
-        failed: status.failed ?? 0,
-        cancelled: status.cancelled ?? 0
+        total: run.frozen.items.length,
+        current: counts.success + counts.failed + counts.cancelled + counts.skipped + (status.processed ?? 0),
+        success: counts.success + (status.completed ?? 0),
+        failed: counts.failed + (status.failed ?? 0),
+        cancelled: counts.cancelled + (status.cancelled ?? 0)
       })
     }
   }, [])
 
   const startSingleExport = useCallback(async (): Promise<void> => {
+    if (singleRunRef.current?.busy || reviewRef.current !== null || isBusy(single) || isBusy(batch) || requeryingBatchRef.current) return
+    if (state.kind !== "active") return
     if (!engineAvailable) {
       setSingle({ kind: "error", message: "Java 引擎不可用，恢复后再导出。" })
       return
     }
-    if (state.kind !== "active" || isBusy(single) || isBusy(batch)) return
 
     const frozenSettings = freezeSettings(settings)
-    const selectedItem = queueItems.find((item) => item.filePath === state.filePath)
+    const selectedItem = queueItems.find((item) => activeItemId === undefined ? item.filePath === state.filePath : item.id === activeItemId)
+    if (activeItemId != null && selectedItem?.filePath !== state.filePath) return
     const frozenItem = selectedItem === undefined ? null : freezeQueueItem(selectedItem)
+    const issue = recipeIssue(frozenItem)
+    if (issue !== null) {
+      setSingle({ kind: "error", message: `${state.fileName}：${issue}。请在底片页处理后再导出。` })
+      return
+    }
     // 每次新任务都从当前请求重新生成预检摘要，避免把上一次路径冲突或失败原因
     // 留在 Dock 中，误导用户以为它属于当前导出。
-    singleCancelRequestedRef.current = false
-    singleExifAbortRef.current = new AbortController()
+    const run: SingleRun = {
+      fileName: state.fileName,
+      format: effectiveExportFormat(frozenSettings, frozenItem?.imageProcessing),
+      cancellation: new AbortController(),
+      outputPath: null,
+      jobId: null,
+      busy: true,
+      cancelRequest: "idle"
+    }
+    singleRunRef.current = run
+    batchRunRef.current = null
     setNotice(null)
     setLastPreflight(null)
     setBatch({ kind: "idle" })
@@ -401,13 +528,14 @@ export const useExportController = ({
 
     /** 准备阶段取消：不再提交，也不把取消伪装成失败。 */
     const abortIfCancelled = (): boolean => {
-      if (!singleCancelRequestedRef.current) return false
+      if (!run.cancellation.signal.aborted) return false
+      singleRunRef.current = null
       setSingle({ kind: "cancelled", message: "导出已在准备阶段取消。" })
       return true
     }
 
     try {
-      await prepareExifForExport([frozenItem?.filePath ?? state.filePath], singleExifAbortRef.current.signal)
+      await prepareExifForExport([frozenItem?.filePath ?? state.filePath], run.cancellation.signal)
       if (abortIfCancelled()) return
       const resolved = frozenItem === null
         ? { textOverride: null, resolvedLayers: [], brand: null }
@@ -420,17 +548,19 @@ export const useExportController = ({
         resolved.brand,
         frozenItem?.imageProcessing ?? null
       )
-      const exportFileName = toExportFileName(state.fileName, effectiveExportFormat(frozenSettings, frozenItem?.imageProcessing))
+      const exportFileName = toExportFileName(state.fileName, run.format)
       const outputPath = window.desktop !== undefined
         ? await window.desktop.selectExportPath(exportFileName)
         : deriveBrowserExportPath(state.filePath, exportFileName)
+      if (abortIfCancelled()) return
       if (outputPath === null) {
+        singleRunRef.current = null
         setSingle(window.desktop === undefined
           ? { kind: "error", message: "浏览器降级模式无法选择保存位置，请启动桌面应用导出。" }
           : { kind: "idle" })
         return
       }
-      if (abortIfCancelled()) return
+      run.outputPath = outputPath
 
       const request: RenderJobRequest = {
         items: [{ recipe, sourceVersion: frozenItem?.sourceVersion ?? null,
@@ -440,51 +570,24 @@ export const useExportController = ({
       if (abortIfCancelled()) return
       setSingle({ kind: "submitting" })
       // 提交一旦发出，结果即未知：断线/超时进入「状态待确认」，绝不自动重发。
-      let submittedJobId: string | null = null
       try {
-        const terminal = await submitAndWaitForRenderJob(request, undefined, (status) => {
-          submittedJobId = status.jobId
-          applySingleStatus(status)
-          // 提交竞速期间用户已请求取消：此时 jobId 已产生，走引擎取消，
-          // 轮询会自然返回 cancelled 终态。
-          if (singleCancelRequestedRef.current && !activeJobRef.current) {
-            void cancelRenderJob(status.jobId).catch(() => {
-              setNotice("取消请求失败：引擎不可达。任务可能仍在执行，可稍后重新查询。")
-            })
-          }
-        })
-        const result = asItemStatus(terminal, 0)
-        activeJobRef.current = null
-        if (terminal.status === "completed" && result.status === "completed") {
-          setSingle({
-            kind: "completed",
-            outputPath: result.outputPath ?? outputPath,
-            actualFormat: result.actualFormat ?? frozenSettings.exportFormat,
-            summary: buildExportSummary(result),
-            report: result.fidelityReport ?? null
-          })
-          notifySystem("导出完成", state.fileName)
-        } else if (terminal.status === "cancelled") {
-          setSingle({ kind: "cancelled", message: result.error ?? "导出任务已取消。" })
-        } else {
-          const message = result.error ?? terminal.error ?? "导出失败，未知错误。"
-          setSingle({ kind: "error", message })
-          notifySystem("导出失败", `${state.fileName}（${message}）`)
-        }
+        await submitAndWaitForRenderJob(request, undefined, status => observeSingleStatus(run, status))
       } catch (submitError: unknown) {
-        activeJobRef.current = null
+        if (singleRunRef.current !== run) return
+        run.busy = false
         const message = toErrorMessage(submitError, "导出请求失败")
-        if (submittedJobId !== null) {
+        if (run.jobId !== null) {
           // 已取得 jobId 后查询断线/超时：结果未知，优先重新查询原任务。
           setSingle({
             kind: "unconfirmed",
             message: `查询中断，结果未知：${message}。可重新查询原任务确认状态。`,
-            jobId: submittedJobId,
+            jobId: run.jobId,
             outputPath
           })
           notifySystem("导出状态待确认", `${state.fileName}（${message}）`)
         } else if (submitError instanceof EngineHttpError) {
           // 引擎给出了确定的拒绝响应（未接受任务）：按普通失败处理。
+          singleRunRef.current = null
           setSingle({ kind: "error", message })
           notifySystem("导出失败", `${state.fileName}（${message}）`)
         } else {
@@ -499,17 +602,14 @@ export const useExportController = ({
         }
       }
     } catch (error: unknown) {
-      activeJobRef.current = null
       // 准备阶段被本地取消令牌中止（AbortError）：视为已取消而非失败。
-      if (singleCancelRequestedRef.current) {
-        setSingle({ kind: "cancelled", message: "导出已在准备阶段取消。" })
-        return
-      }
+      if (abortIfCancelled()) return
+      singleRunRef.current = null
       const message = toErrorMessage(error, "导出请求失败")
       setSingle({ kind: "error", message })
       notifySystem("导出失败", `${state.fileName}（${message}）`)
     }
-  }, [applySingleStatus, batch, capabilities, engineAvailable, ensurePreflightReady, notifySystem, prepareExifForExport, queueItems, resolveQueueItem, settings, single, state])
+  }, [activeItemId, batch, engineAvailable, ensurePreflightReady, notifySystem, observeSingleStatus, prepareExifForExport, queueItems, resolveQueueItem, settings, single, state])
 
   const buildBatchRequest = useCallback((items: readonly QueueItem[], frozenSettings: RenderSettings, dirPath: string): RenderJobRequest => {
     const usedNames = new Set<string>()
@@ -536,61 +636,188 @@ export const useExportController = ({
     return { items: snapshots }
   }, [resolveQueueItem])
 
-  const finishBatch = useCallback((
-    terminal: RenderJobStatusResponse,
-    frozen: FrozenBatch,
-    targetIndexes: readonly number[] = frozen.items.map((_, index) => index)
-  ): void => {
-    activeJobRef.current = null
-    const results = frozen.items.map((item, index): BatchExportItemResult => {
-      const localIndex = targetIndexes.indexOf(index)
-      if (localIndex < 0) {
-        const prior = frozen.results[index]
-        if (prior !== undefined) {
-          return prior
-        }
-        return { fileName: item.fileName, success: false, actualFormat: null, summary: [], error: "任务未执行" }
-      }
+  const finishBatch = useCallback((run: BatchRun, tailError?: string): void => {
+    if (batchRunRef.current !== run) return
+    batchRunRef.current = null
+    activeBatchJobIdRef.current = null
+    const { items, dirPath } = run.frozen
+    const results = items.map((item, index): BatchExportItemResult =>
+      run.frozen.results[index] ?? {
+        fileName: item.fileName, success: false, actualFormat: null, summary: [],
+        error: tailError ?? BATCH_CANCELLED
+      })
+    frozenBatchRef.current = { ...run.frozen, results }
+    const { success, failed, cancelled, skipped } = batchCounts(results)
+    if (cancelled > 0) {
+      setBatch({ kind: "cancelled", total: results.length, success, failed, cancelled, results, dirPath })
+      return
+    }
+    setBatch({ kind: "completed", total: results.length, success, failed, results, dirPath })
+    const skippedSummary = skipped > 0 ? `，跳过 ${skipped} 张` : ""
+    if (failed === 0) {
+      notifySystem("批量导出完成", `成功导出 ${success} 张${skippedSummary}`)
+    } else {
+      notifySystem("批量导出部分失败", `成功 ${success} 张，失败 ${failed} 张${skippedSummary}`)
+    }
+    if (autoOpenExportDirectory && success > 0) openExportDirectory(dirPath)
+  }, [autoOpenExportDirectory, notifySystem, openExportDirectory])
+
+  const acceptBatchChunk = useCallback((run: BatchRun, terminal: RenderJobStatusResponse): void => {
+    const indexes = run.chunks[run.cursor]!
+    indexes.forEach((index, localIndex) => {
       const status = asItemStatus(terminal, localIndex)
-      return {
-        fileName: item.fileName,
+      run.frozen.results[index] = {
+        fileName: run.frozen.items[index]!.fileName,
         success: status.status === "completed",
         actualFormat: status.actualFormat ?? null,
         summary: buildExportSummary(status),
-        error: status.status === "completed" ? null : (status.error ?? terminal.error ?? "导出失败"),
+        error: status.status === "completed" ? null
+          : status.status === "cancelled" ? BATCH_CANCELLED
+            : (status.error ?? terminal.error ?? "导出失败"),
         report: status.fidelityReport ?? null
       }
     })
-    const success = results.filter((result) => result.success).length
-    const failed = results.filter((result) => !result.success && result.error !== "任务已取消，未执行").length
-    const cancelled = results.length - success - failed
-    const nextFrozen: FrozenBatch = { ...frozen, results }
-    frozenBatchRef.current = nextFrozen
+    run.cursor++
+    activeBatchJobIdRef.current = null
+    if (terminal.status === "cancelled" || batchCancelRequestedRef.current || run.cursor === run.chunks.length) {
+      finishBatch(run)
+    }
+  }, [finishBatch])
 
-    if (terminal.status === "cancelled") {
-      setBatch({ kind: "cancelled", total: results.length, success, failed, cancelled, results, dirPath: frozen.dirPath })
+  const cancelBatchJob = useCallback(async (run: BatchRun, jobId: string): Promise<void> => {
+    const cursor = run.cursor
+    try {
+      const status = await cancelRenderJob(jobId)
+      if (batchRunRef.current !== run || cursor !== run.cursor) return
+      if (isTerminalJob(status)) acceptBatchChunk(run, status)
+      else applyBatchStatus(status, run)
+    } catch (error: unknown) {
+      if (batchRunRef.current !== run || cursor !== run.cursor) return
+      setNotice(`取消请求失败：${toErrorMessage(error, "引擎不可达")}。任务可能仍在执行，可稍后在结果中确认。`)
+    }
+  }, [acceptBatchChunk, applyBatchStatus])
+
+  const runBatchChunks = useCallback(async (run: BatchRun, existingJob?: RenderJobStatusResponse): Promise<void> => {
+    while (batchRunRef.current === run) {
+      // 取消后仍须查清已提交的任务，剩余分组不会继续提交。
+      if (batchCancelRequestedRef.current && existingJob === undefined) {
+        finishBatch(run)
+        return
+      }
+      const cursor = run.cursor
+      const indexes = run.chunks[cursor]!
+      let jobId = existingJob?.jobId ?? null
+      const onStatus = (status: RenderJobStatusResponse): void => {
+        if (batchRunRef.current !== run || cursor !== run.cursor) return
+        const justSubmitted = jobId === null
+        jobId = status.jobId
+        applyBatchStatus(status, run)
+        if (justSubmitted && batchCancelRequestedRef.current && !isTerminalJob(status)) {
+          void cancelBatchJob(run, status.jobId)
+        }
+      }
+      try {
+        const terminal = existingJob === undefined
+          ? await submitAndWaitForRenderJob({ items: indexes.map(index => run.frozen.request.items[index]!) }, undefined, onStatus)
+          : await waitForRenderJob(existingJob, undefined, onStatus)
+        if (batchRunRef.current !== run || cursor !== run.cursor) return
+        acceptBatchChunk(run, terminal)
+        existingJob = undefined
+      } catch (error: unknown) {
+        if (batchRunRef.current !== run || cursor !== run.cursor) return
+        activeBatchJobIdRef.current = null
+        const message = toErrorMessage(error, "批量导出失败")
+        if (jobId === null && error instanceof EngineHttpError) {
+          if (batchCancelRequestedRef.current) finishBatch(run)
+          else if (run.cursor > 0) finishBatch(run, `导出分组提交被拒绝，剩余文件未执行：${message}`)
+          else {
+            batchRunRef.current = null
+            setBatch({ kind: "error", message })
+          }
+          return
+        }
+        setBatch({
+          kind: "unconfirmed",
+          message: jobId !== null
+            ? `查询中断，结果未知：${message}。可重新查询原任务确认状态。`
+            : `提交结果未知：${message}。应用不会自动重复提交，请核对输出目录后决定是否重试。`,
+          jobId,
+          total: run.frozen.items.length,
+          dirPath: run.frozen.dirPath,
+          results: run.frozen.results.filter((result): result is BatchExportItemResult => result !== undefined)
+        })
+        return
+      }
+    }
+  }, [acceptBatchChunk, applyBatchStatus, cancelBatchJob, finishBatch])
+
+  const startFrozenBatch = useCallback(async (frozen: FrozenBatch, indexes: readonly number[], inspect = false): Promise<void> => {
+    const chunks = []
+    for (let offset = 0; offset < indexes.length; offset += MAX_BATCH_CHUNK_SIZE) {
+      chunks.push(indexes.slice(offset, offset + MAX_BATCH_CHUNK_SIZE))
+    }
+    const run: BatchRun = { frozen, chunks, cursor: 0 }
+    // 先检查全部分组，再提交第一个任务。
+    const rows: BatchReviewRow[] = []
+    for (const chunk of chunks) {
+      if (batchCancelRequestedRef.current) break
+      const valid = chunk.filter((index) => {
+        const item = frozen.items[index]!
+        return item.missing !== true && recipeIssue(item) === null
+      })
+      if (valid.length > 0 && capabilities === null) throw new Error("专业能力探测未完成，已阻止导出")
+      const response = valid.length === 0 || capabilities === undefined ? null
+        : await preflightExport({ items: valid.map((index) => frozen.request.items[index]!) })
+      const reports = new Map(response?.items.map(item => [valid[item.index], item]))
+      for (const index of chunk) {
+        const item = frozen.items[index]!
+        const snapshot = frozen.request.items[index]!
+        const missing = item.missing === true
+        const issue = missing ? null : recipeIssue(item)
+        const entry = reports.get(index)
+        const reasons = missing ? [MISSING_SOURCE] : issue !== null ? [issue] : entry?.blockingReasons ?? []
+        const output = entry?.report?.output
+        rows.push({
+          index, itemId: item.id, sourcePath: item.sourcePath, outputPath: snapshot.export.outputPath,
+          format: snapshot.export.format,
+          dimensions: output == null ? null : `${output.width} × ${output.height} px`,
+          reasons: reasons.length === 0 && (entry?.status === "blocked" || (response !== null && entry === undefined))
+            ? ["引擎未确认该项可导出"] : reasons,
+          canRepair: issue !== null,
+          canRename: issue === null && reasons.includes("输出路径已存在"),
+          canExportPlain: !missing && item.imageProcessingError != null
+        })
+      }
+      if (response?.status === "blocked" && !rows.slice(-chunk.length).some(row => row.reasons.length > 0)) {
+        throw new Error("导出预检未通过")
+      }
+    }
+    if (!batchCancelRequestedRef.current && (inspect || rows.some(row => row.reasons.length > 0))) {
+      setReview({ frozen, rows })
+      // 保留 Dock 的失败摘要及逐张解决入口。
+      setBatch(rows.some(row => row.reasons.length > 0)
+        ? { kind: "error", message: "部分照片需要在交付清单中处理后才能导出。" }
+        : { kind: "idle" })
       return
     }
-    setBatch({ kind: "completed", total: results.length, success, failed, results, dirPath: frozen.dirPath })
-    if (failed === 0) {
-      notifySystem("批量导出完成", `成功导出 ${success} 张`)
-    } else {
-      notifySystem("批量导出部分失败", `成功 ${success} 张，失败 ${failed} 张`)
-    }
-    if (autoOpenExportDirectory && success > 0) openExportDirectory(frozen.dirPath)
-  }, [autoOpenExportDirectory, notifySystem, openExportDirectory])
+    batchRunRef.current = run
+    await runBatchChunks(run)
+  }, [capabilities, runBatchChunks, setReview])
 
-  const startBatchExport = useCallback(async (): Promise<void> => {
+  const prepareBatch = useCallback(async (inspect = false): Promise<void> => {
     if (!engineAvailable) {
       setBatch({ kind: "error", message: "Java 引擎不可用，恢复后再导出。" })
       return
     }
-    if (batchExportItems.length === 0 || isBusy(single) || isBusy(batch)) return
+    if (batchExportItems.length === 0 || reviewRef.current !== null || singleRunRef.current?.busy || isBusy(single) || isBusy(batch) || requeryingBatchRef.current) return
     if (window.desktop === undefined) {
       setBatch({ kind: "error", message: "批量导出需要桌面模式。浏览器模式暂不支持。" })
       return
     }
 
+    batchRunRef.current = null
+    frozenBatchRef.current = null
+    singleRunRef.current = null
     const frozenItems = batchExportItems.map(freezeQueueItem)
     const frozenSettings = freezeSettings(settings)
     // 批量任务可能切换了输出目录或档位；旧摘要不能代表这次冻结的请求。
@@ -613,162 +840,153 @@ export const useExportController = ({
         return
       }
       if (abortIfCancelled()) return
-      await prepareExifForExport(frozenItems.map((item) => item.filePath), batchExifAbortRef.current.signal)
+      const exifPaths = frozenItems.filter(item => item.missing !== true).map(item => item.filePath)
+      if (exifPaths.length > 0) await prepareExifForExport(exifPaths, batchExifAbortRef.current.signal)
       if (abortIfCancelled()) return
       const request = buildBatchRequest(frozenItems, frozenSettings, dirPath)
-      await ensurePreflightReady(request)
-      if (abortIfCancelled()) return
-      const frozen: FrozenBatch = { request, items: frozenItems, dirPath, results: [] }
-      frozenBatchRef.current = frozen
-      let submittedJobId: string | null = null
-      try {
-        const terminal = await submitAndWaitForRenderJob(
-          request,
-          undefined,
-          (status) => {
-            submittedJobId = status.jobId
-            applyBatchStatus(status, frozenItems.length)
-            if (batchCancelRequestedRef.current && !activeJobRef.current) {
-              void cancelRenderJob(status.jobId).catch(() => {
-                setNotice("取消请求失败：引擎不可达。任务可能仍在执行，可稍后重新查询。")
-              })
-            }
-          }
-        )
-        finishBatch(terminal, frozen)
-      } catch (submitError: unknown) {
-        activeJobRef.current = null
-        const message = toErrorMessage(submitError, "批量导出失败")
-        if (submittedJobId !== null) {
-          setBatch({
-            kind: "unconfirmed",
-            message: `查询中断，结果未知：${message}。可重新查询原任务确认状态。`,
-            jobId: submittedJobId,
-            total: frozenItems.length,
-            dirPath,
-            results: []
-          })
-        } else if (submitError instanceof EngineHttpError) {
-          setBatch({ kind: "error", message })
-        } else {
-          setBatch({
-            kind: "unconfirmed",
-            message: `提交结果未知：${message}。应用不会自动重复提交，请核对输出目录后决定是否重试。`,
-            jobId: null,
-            total: frozenItems.length,
-            dirPath,
-            results: []
-          })
-        }
-      }
+      await startFrozenBatch(
+        { request, settings: frozenSettings, items: frozenItems, dirPath, results: Array.from({ length: frozenItems.length }) },
+        frozenItems.map((_, index) => index), inspect
+      )
     } catch (error: unknown) {
-      activeJobRef.current = null
+      activeBatchJobIdRef.current = null
       if (batchCancelRequestedRef.current) {
         setBatch({ kind: "cancelled", total: 0, success: 0, failed: 0, cancelled: 0, results: [], dirPath: "" })
         return
       }
       setBatch({ kind: "error", message: toErrorMessage(error, "批量导出失败") })
     }
-  }, [applyBatchStatus, batch, batchExportItems, buildBatchRequest, engineAvailable, ensurePreflightReady, finishBatch, prepareExifForExport, settings, single])
+  }, [batch, batchExportItems, buildBatchRequest, engineAvailable, prepareExifForExport, settings, single, startFrozenBatch])
+
+  const startBatchExport = useCallback(() => prepareBatch(), [prepareBatch])
+  const inspectBatch = useCallback(() => prepareBatch(true), [prepareBatch])
+  const dismissBatchReview = useCallback(() => {
+    setReview(null)
+    setBatch({ kind: "idle" })
+  }, [setReview])
+
+  const resolveBatchReview = useCallback(async (actions: Readonly<Record<number, BatchReviewAction>>): Promise<void> => {
+    const pending = reviewRef.current
+    if (pending === null) return
+    const choice = (row: BatchReviewRow) => actions[row.index] ?? "export"
+    if (pending.rows.every(row => choice(row) === "skip")) return
+    if (pending.rows.some(row => row.reasons.length > 0 && !(choice(row) === "skip"
+      || (choice(row) === "rename" && row.canRename) || (choice(row) === "plain" && row.canExportPlain)))) return
+    const frozen = pending.frozen
+    const items = [...frozen.items]
+    const snapshots = [...frozen.request.items]
+    const results = [...frozen.results]
+    const usedNames = new Set(snapshots.map(snapshot => snapshot.export.outputPath.split("/").at(-1)!.toLowerCase()))
+    const indexes: number[] = []
+    for (const row of pending.rows) {
+      const { index } = row
+      const action = choice(row)
+      if (action === "skip") {
+        results[index] = { fileName: items[index]!.fileName, success: false, actualFormat: null, summary: [], error: BATCH_SKIPPED }
+        continue
+      }
+      indexes.push(index)
+      if (action !== "rename" && action !== "plain") continue
+      const snapshot = snapshots[index]!
+      const item = items[index]!
+      const extension = extensionFor(snapshot.export.format)
+      const stem = snapshot.export.outputPath.split("/").at(-1)!.slice(0, -extension.length - 1)
+      if (action === "rename") {
+        const outputPath = buildUniqueExportPath(frozen.dirPath, stem, extension, usedNames, false)
+        snapshots[index] = { ...snapshot, export: { ...snapshot.export, outputPath } }
+      } else {
+        const plainExtension = extensionFor(frozen.settings.exportFormat)
+        const outputPath = extension === plainExtension ? snapshot.export.outputPath
+          : buildUniqueExportPath(frozen.dirPath, stem, plainExtension, usedNames, false)
+        items[index] = { ...item, imageProcessing: null, imageProcessingError: null }
+        snapshots[index] = { ...snapshot, recipe: { ...snapshot.recipe, imageProcessing: null, borderlessMaster: false },
+          sourceVersion: null, export: buildExportSettings(frozen.settings, outputPath, null) }
+      }
+    }
+    setReview(null)
+    batchCancelRequestedRef.current = false
+    setBatch({ kind: "preparing", total: indexes.length })
+    try {
+      await startFrozenBatch({ ...frozen, items, request: { items: snapshots }, results }, indexes, indexes.length > 0
+        && pending.rows.some(row => choice(row) === "rename" || choice(row) === "plain"))
+    } catch (error) {
+      setBatch({ kind: "error", message: toErrorMessage(error, "批量导出失败") })
+    }
+  }, [setReview, startFrozenBatch])
 
   const retryFailed = useCallback(async (): Promise<void> => {
     const frozen = frozenBatchRef.current
-    if (frozen === null || (batch.kind !== "completed" && batch.kind !== "cancelled")) return
-    const failedIndexes = frozen.results
-      .map((result, index) => ({ result, index }))
-      .filter(({ result }) => !result.success)
-      .map(({ index }) => index)
-    if (failedIndexes.length === 0) return
-
-    const retryRequest: RenderJobRequest = { items: failedIndexes.map((index) => frozen.request.items[index]!) }
-    setBatch({ kind: "preparing", total: failedIndexes.length })
+    if (!engineAvailable || frozen === null || (batch.kind !== "completed" && batch.kind !== "cancelled")) return
+    const indexes = frozen.results.flatMap((result, index) => result?.success === false && result.error !== BATCH_SKIPPED ? [index] : [])
+    if (indexes.length === 0) return
+    batchCancelRequestedRef.current = false
+    batchExifAbortRef.current = null
+    setNotice(null)
+    setLastPreflight(null)
+    setBatch({ kind: "preparing", total: indexes.length })
+    const results = frozen.results.slice()
+    for (const index of indexes) results[index] = undefined
     try {
-      const terminal = await submitAndWaitForRenderJob(retryRequest, undefined, (status) => applyBatchStatus(status, failedIndexes.length))
-      finishBatch(terminal, frozen, failedIndexes)
+      await startFrozenBatch({ ...frozen, results }, indexes)
     } catch (error: unknown) {
-      activeJobRef.current = null
-      setBatch({ kind: "error", message: toErrorMessage(error, "重试导出失败") })
+      setBatch(batch)
+      if (!batchCancelRequestedRef.current) setNotice(toErrorMessage(error, "重试导出失败"))
     }
-  }, [applyBatchStatus, batch, finishBatch])
+  }, [batch, engineAvailable, startFrozenBatch])
 
   const cancelActiveExport = useCallback(async (): Promise<void> => {
-    const active = activeJobRef.current
-    if (active === null) {
-      // 尚未取得 jobId：置本地取消令牌，阻止准备阶段的后续异步结果提交任务，
-      // 并立即中止进行中的批量 EXIF 等待。
-      if (isBusy(single)) {
-        singleCancelRequestedRef.current = true
-        singleExifAbortRef.current?.abort()
-      }
-      if (isBusy(batch)) {
-        batchCancelRequestedRef.current = true
-        batchExifAbortRef.current?.abort()
-      }
+    if (isBusy(batch)) {
+      batchCancelRequestedRef.current = true
+      batchExifAbortRef.current?.abort()
+      const run = batchRunRef.current
+      const jobId = activeBatchJobIdRef.current
+      if (run !== null && jobId !== null) await cancelBatchJob(run, jobId)
       return
     }
-    try {
-      const status = await cancelRenderJob(active.jobId)
-      if (active.kind === "single") {
-        applySingleStatus(status)
-      } else {
-        const total = frozenBatchRef.current?.items.length ?? status.total ?? 0
-        if (status.status === "completed" || status.status === "failed" || status.status === "cancelled") {
-          const frozen = frozenBatchRef.current
-          if (frozen !== null) {
-            finishBatch(status, frozen)
-          } else if (status.status === "cancelled") {
-            activeJobRef.current = null
-            setBatch({
-              kind: "cancelled",
-              total,
-              success: status.completed ?? 0,
-              failed: status.failed ?? 0,
-              cancelled: status.cancelled ?? total,
-              results: [],
-              dirPath: ""
-            })
-          }
-        } else {
-          applyBatchStatus(status, total)
-        }
-      }
-    } catch (error: unknown) {
-      // 取消请求失败 ≠ 任务结束：轮询仍在进行，保留任务状态并给出可解释提示。
-      setNotice(`取消请求失败：${toErrorMessage(error, "引擎不可达")}。任务可能仍在执行，可稍后在结果中确认。`)
-    }
-  }, [applyBatchStatus, applySingleStatus, batch, finishBatch, single])
+    const run = singleRunRef.current
+    if (!run?.busy) return
+    run.cancellation.abort()
+    await sendSingleCancel(run, run.cancelRequest === "failed")
+  }, [batch, cancelBatchJob, sendSingleCancel])
 
   const requeryUnconfirmed = useCallback(async (): Promise<void> => {
     const singleUnconfirmed = single.kind === "unconfirmed" ? single : null
     const batchUnconfirmed = batch.kind === "unconfirmed" ? batch : null
     const jobId = singleUnconfirmed?.jobId ?? batchUnconfirmed?.jobId ?? null
-    if (jobId === null) return
+    const run = batchRunRef.current
+    const singleRun = singleRunRef.current
+    if (jobId === null || requeryingBatchRef.current) return
+    if (singleUnconfirmed !== null) {
+      if (singleRun === null || singleRun.busy || singleRun.jobId !== jobId) return
+      singleRun.busy = true
+    }
+    if (batchUnconfirmed !== null) requeryingBatchRef.current = true
     try {
       const status = await fetchRenderJobStatus(jobId)
-      setNotice(null)
-      if (singleUnconfirmed !== null) {
-        applySingleStatus(status)
+      if (singleUnconfirmed !== null && singleRun !== null) {
+        if (singleRunRef.current !== singleRun) return
+        setNotice(null)
+        await waitForRenderJob(status, undefined, next => observeSingleStatus(singleRun, next))
         return
       }
-      const frozen = frozenBatchRef.current
-      if (frozen !== null && (status.status === "completed" || status.status === "failed" || status.status === "cancelled")) {
-        finishBatch(status, frozen)
-      } else {
-        applyBatchStatus(status, frozen?.items.length ?? batchUnconfirmed?.total ?? 0)
-      }
+      setNotice(null)
+      if (run !== null && batchRunRef.current === run) await runBatchChunks(run, status)
     } catch (error: unknown) {
       // 引擎重启后内存任务记录失效（404）：如实解释，不伪装成可以续跑。
       const notFound = error instanceof EngineHttpError && error.status === 404
       const explanation = notFound
         ? "引擎中没有该任务记录（可能已重启）。任务记录仅保存在引擎内存中，请打开输出目录核对已生成的文件。"
         : `查询失败：${toErrorMessage(error, "引擎不可达")}。任务状态仍未知，可稍后重试查询。`
-      if (singleUnconfirmed !== null) {
+      if (singleUnconfirmed !== null && singleRun !== null && singleRunRef.current === singleRun) {
+        singleRun.busy = false
         setSingle({ ...singleUnconfirmed, message: explanation })
-      } else if (batchUnconfirmed !== null) {
+      } else if (batchUnconfirmed !== null && batchRunRef.current === run) {
         setBatch({ ...batchUnconfirmed, message: explanation })
       }
+    } finally {
+      if (batchUnconfirmed !== null) requeryingBatchRef.current = false
     }
-  }, [applyBatchStatus, applySingleStatus, batch, finishBatch, single])
+  }, [batch, observeSingleStatus, runBatchChunks, single])
 
   return {
     single,
@@ -779,6 +997,10 @@ export const useExportController = ({
     notice,
     startSingleExport,
     startBatchExport,
+    inspectBatch,
+    batchReview: batchReview?.rows ?? null,
+    resolveBatchReview,
+    dismissBatchReview,
     retryFailed,
     cancelActiveExport,
     requeryUnconfirmed,

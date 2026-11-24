@@ -86,6 +86,8 @@ type SettingsPanelProps = {
   /** 当前图片识别到的品牌文字（如 "NIKON"），null 表示未识别。 */
   readonly detectedBrandLabel?: string | null
   /** 是否渲染样式控制组；输出页签复用本组件时关闭。 */
+  readonly compactStyle?: boolean
+  readonly textFocus?: { readonly id: string; readonly sequence: number } | null
   readonly showStyleSettings?: boolean
   /** 是否渲染输出控制组；样式页签复用本组件时关闭。 */
   readonly showOutputSettings?: boolean
@@ -170,6 +172,8 @@ export const SettingsPanel = ({
   textOverride,
   setTextOverride,
   detectedBrandLabel,
+  compactStyle = false,
+  textFocus = null,
   showStyleSettings = true,
   showOutputSettings = true,
   filmMode = false,
@@ -365,20 +369,92 @@ export const SettingsPanel = ({
     }
   }, [firstLayer, updateTextLayer])
 
-  return (
-    <div className="settingsPanelInner">
-      {showStyleSettings && (
-        <>
-          <div className="presetActions" aria-label="渲染设置历史">
-            <button type="button" className="ghostButton" disabled={!canUndo} onClick={undo} title={topUndo === null ? undefined : `撤销：${topUndo.description}`}>撤销设置</button>
-            <button type="button" className="ghostButton" disabled={!canRedo} onClick={redo} title={topRedo === null ? undefined : `重做：${topRedo.description}`}>重做设置</button>
-          </div>
-          {!hasSelectedImage && (
-            <p className="settingsCapabilityHint">
-              请先加载并选择一张图片，设置将自动生效。
-            </p>
-          )}
+  const relativeBorder = settings.layoutScale === "photo-short-edge"
+  const borderSettings = (
+      <fieldset className={compactStyle ? "settingGroup workspaceBorderSettings" : "settingGroup"}>
+        <legend className="settingLabel">边框</legend>
 
+        <div className="settingRow">
+          <label className="settingFieldLabel">
+            边框颜色
+            <input
+              type="color"
+              className="settingColorInput"
+              value={settings.borderColor}
+              onChange={(e) => update({ borderColor: e.target.value })}
+            />
+          </label>
+        </div>
+
+        {compactStyle && <label className="settingFieldLabel">边框单位
+          <select className="settingSelect" value={settings.layoutScale ?? "pixels"}
+            onChange={event => update({ layoutScale: event.target.value === "photo-short-edge" ? "photo-short-edge" : "pixels" })}>
+            <option value="pixels">像素</option>
+            <option value="photo-short-edge">照片短边百分比</option>
+          </select>
+        </label>}
+        {compactStyle && relativeBorder && <span className="workspaceBorderUnitNote">文字和装饰也按短边缩放。</span>}
+        <div className={compactStyle ? "workspaceBorderSides" : undefined}>
+        <div className="settingRow">
+          <label className="settingFieldLabel">
+            上边框 ({relativeBorder ? "%" : "px"})
+            <NumberInput
+              className="settingNumberInput"
+              value={settings.borderTop / (relativeBorder ? 10 : 1)}
+              min={0}
+              max={relativeBorder ? 50 : 500}
+              precision={relativeBorder ? 1 : 0}
+              onCommit={(value) => handleNumberCommit("borderTop")(relativeBorder ? Math.round(value * 10) : value)}
+            />
+          </label>
+        </div>
+
+        <div className="settingRow">
+          <label className="settingFieldLabel">
+            下边框 ({relativeBorder ? "%" : "px"})
+            <NumberInput
+              className="settingNumberInput"
+              value={settings.borderBottom / (relativeBorder ? 10 : 1)}
+              min={0}
+              max={relativeBorder ? 50 : 500}
+              precision={relativeBorder ? 1 : 0}
+              onCommit={(value) => handleNumberCommit("borderBottom")(relativeBorder ? Math.round(value * 10) : value)}
+            />
+          </label>
+        </div>
+
+        <div className="settingRow">
+          <label className="settingFieldLabel">
+            左边框 ({relativeBorder ? "%" : "px"})
+            <NumberInput
+              className="settingNumberInput"
+              value={settings.borderLeft / (relativeBorder ? 10 : 1)}
+              min={0}
+              max={relativeBorder ? 50 : 500}
+              precision={relativeBorder ? 1 : 0}
+              onCommit={(value) => handleNumberCommit("borderLeft")(relativeBorder ? Math.round(value * 10) : value)}
+            />
+          </label>
+        </div>
+
+        <div className="settingRow">
+          <label className="settingFieldLabel">
+            右边框 ({relativeBorder ? "%" : "px"})
+            <NumberInput
+              className="settingNumberInput"
+              value={settings.borderRight / (relativeBorder ? 10 : 1)}
+              min={0}
+              max={relativeBorder ? 50 : 500}
+              precision={relativeBorder ? 1 : 0}
+              onCommit={(value) => handleNumberCommit("borderRight")(relativeBorder ? Math.round(value * 10) : value)}
+            />
+          </label>
+        </div>
+        </div>
+      </fieldset>
+
+  )
+  const advancedGeometry = <>
       {/* 拍摄画幅（U12 术语统一：与摄影信息中的「拍摄画幅」同名；只提供边框布局建议，不自动裁剪） */}
       <fieldset className="settingGroup">
         <legend className="settingLabel">拍摄画幅</legend>
@@ -578,75 +654,6 @@ export const SettingsPanel = ({
         )}
       </fieldset>
 
-      {/* 边框 */}
-      <fieldset className="settingGroup">
-        <legend className="settingLabel">边框</legend>
-
-        <div className="settingRow">
-          <label className="settingFieldLabel">
-            边框颜色
-            <input
-              type="color"
-              className="settingColorInput"
-              value={settings.borderColor}
-              onChange={(e) => update({ borderColor: e.target.value })}
-            />
-          </label>
-        </div>
-
-        <div className="settingRow">
-          <label className="settingFieldLabel">
-            上边框 (px)
-            <NumberInput
-              className="settingNumberInput"
-              value={settings.borderTop}
-              min={0}
-              max={500}
-              onCommit={handleNumberCommit("borderTop")}
-            />
-          </label>
-        </div>
-
-        <div className="settingRow">
-          <label className="settingFieldLabel">
-            下边框 (px)
-            <NumberInput
-              className="settingNumberInput"
-              value={settings.borderBottom}
-              min={0}
-              max={500}
-              onCommit={handleNumberCommit("borderBottom")}
-            />
-          </label>
-        </div>
-
-        <div className="settingRow">
-          <label className="settingFieldLabel">
-            左边框 (px)
-            <NumberInput
-              className="settingNumberInput"
-              value={settings.borderLeft}
-              min={0}
-              max={500}
-              onCommit={handleNumberCommit("borderLeft")}
-            />
-          </label>
-        </div>
-
-        <div className="settingRow">
-          <label className="settingFieldLabel">
-            右边框 (px)
-            <NumberInput
-              className="settingNumberInput"
-              value={settings.borderRight}
-              min={0}
-              max={500}
-              onCommit={handleNumberCommit("borderRight")}
-            />
-          </label>
-        </div>
-      </fieldset>
-
       {/* 渐变边框 */}
       <fieldset className="settingGroup">
         <legend className="settingLabel">渐变边框</legend>
@@ -757,175 +764,8 @@ export const SettingsPanel = ({
         )}
       </fieldset>
 
-      {/* 快捷文字（同步到文字图层 1） */}
-      <fieldset className="settingGroup">
-        <legend className="settingLabel">快捷文字</legend>
-        {firstLayer === null ? (
-          <div className="textLayerEmpty">
-            <p className="settingsCapabilityHint">
-              当前没有文字图层，快捷文字不可用。请先恢复文字图层。
-            </p>
-            <button
-              type="button"
-              className="ghostButton"
-              onClick={() => replaceTextLayers(createDefaultTextLayers())}
-            >
-              恢复默认 3 段
-            </button>
-          </div>
-        ) : (
-          <>
-            <p className="settingsCapabilityHint">
-              快捷编辑同步到文字图层 1。如需多段文字、背景条、阴影、描边，请在下方"文字图层"中设置。
-            </p>
-
-            <div className="settingRow">
-              <label className="settingFieldLabel">
-                文字放置区域
-                <select
-                  className="settingSelect"
-                  value={firstLayer.textArea}
-                  onChange={(e) => handleTextLayerTextAreaChange(e.target.value as "image" | "border")}
-                >
-                  <option value="image">图片上</option>
-                  <option value="border">边框上</option>
-                </select>
-              </label>
-            </div>
-
-            <div className="settingRow">
-              <label className="settingFieldLabel">
-                文字位置
-                <select
-                  className="settingSelect"
-                  value={normalizeTextPlacement(firstLayer.textArea, firstLayer.placement)}
-                  onChange={(e) => handleTextLayerPlacementChange(e.target.value)}
-                >
-                  {textPlacementOptions(firstLayer.textArea).map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-              </label>
-            </div>
-
-            <div className="settingRow">
-              <label className="settingFieldLabel">
-                {isTextOverridden ? "当前图片文字（已覆盖）" : "文字内容"}
-                <input
-                  type="text"
-                  className="settingTextInput"
-                  placeholder="留空则不绘制该图层"
-                  value={textLayerValue}
-                  onChange={(e) => handleTextLayerChange(e.target.value)}
-                />
-              </label>
-              {isTextOverridden && (
-                <button
-                  type="button"
-                  className="ghostButton settingRestoreButton"
-                  onClick={() => setTextOverride(null)}
-                >
-                  恢复使用全局文字
-                </button>
-              )}
-            </div>
-
-            <div className="settingRow">
-              <label className="settingFieldLabel">
-                字号
-                <NumberInput
-                  className="settingNumberInput"
-                  value={firstLayer.fontSize}
-                  min={8}
-                  max={200}
-                  onCommit={handleTextLayerFontSizeCommit}
-                />
-              </label>
-            </div>
-
-            <div className="settingRow">
-              <label className="settingFieldLabel">
-                文字颜色
-                <input
-                  type="color"
-                  className="settingColorInput"
-                  value={firstLayer.color}
-                  onChange={(e) => handleTextLayerColorChange(e.target.value)}
-                />
-              </label>
-            </div>
-
-            <div className="settingRow">
-              <label className="settingFieldLabel">
-                字体
-                <select
-                  className="settingSelect"
-                  value={selectedFont}
-                  onChange={(e) => handleTextLayerFontFamilyChange(e.target.value)}
-                >
-                  <optgroup label="内置字体">
-                    {availableFonts.filter((f) => f.source === "builtin").map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </optgroup>
-                  {availableFonts.some((f) => f.source === "system") && (
-                    <optgroup label="已验证系统字体">
-                      {availableFonts.filter((f) => f.source === "system").map((opt) => (
-                        <option key={opt.value} value={opt.value}>
-                          {opt.label}
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                </select>
-                {!availableFonts.some((f) => f.value === firstLayer.fontFamily) && (
-                  <span className="settingHint">
-                    当前保存的字体不在已验证清单中，本次导出将使用 SansSerif。
-                  </span>
-                )}
-              </label>
-            </div>
-
-            <div className="settingRow">
-              <button
-                type="button"
-                className="ghostButton"
-                disabled={selectedFilePath === null || exifStatus === "loading"}
-                onClick={() => void handleExifFill()}
-              >
-                {exifStatus === "loading" ? "读取 EXIF 中…" : "从 EXIF 填充"}
-              </button>
-              {exifStatus === "empty" && (
-                <p className="settingsCapabilityHint">该图片未包含可读取的 EXIF 信息。</p>
-              )}
-              {exifStatus === "error" && (
-                <p className="settingsCapabilityHint fieldHintError">
-                  EXIF 读取失败，请确认引擎正在运行。
-                </p>
-              )}
-            </div>
-
-            {/* 变量插入 */}
-            <VariableHelpPanel
-              currentText={textLayerValue}
-              onTextChange={handleTextLayerVariableInsert}
-            />
-          </>
-        )}
-      </fieldset>
-
-      {/* 文字图层（多段） */}
-      <fieldset className="settingGroup">
-        <legend className="settingLabel">文字图层</legend>
-        <p className="settingsCapabilityHint">
-          多段文字可独立设置内容、字号、颜色、位置和样式。变量在每段中独立解析。
-        </p>
-        <TextLayerEditor controller={controller} />
-      </fieldset>
-
-      {/* 品牌标识 */}
+  </>
+  const brandSettings = (
       <fieldset className="settingGroup">
         <legend className="settingLabel">品牌标识</legend>
 
@@ -1105,6 +945,202 @@ export const SettingsPanel = ({
         )}
       </fieldset>
 
+  )
+
+  return (
+    <div className="settingsPanelInner">
+      {showStyleSettings && (
+        <>
+          <div className="presetActions" aria-label="渲染设置历史">
+            <button type="button" className="ghostButton" disabled={!canUndo} onClick={undo} title={topUndo === null ? undefined : `撤销：${topUndo.description}`}>撤销设置</button>
+            <button type="button" className="ghostButton" disabled={!canRedo} onClick={redo} title={topRedo === null ? undefined : `重做：${topRedo.description}`}>重做设置</button>
+          </div>
+          {!hasSelectedImage && (
+            <p className="settingsCapabilityHint">
+              请先加载并选择一张图片，设置将自动生效。
+            </p>
+          )}
+
+      {borderSettings}
+      {compactStyle && <fieldset className="settingGroup workspaceTextSettings">
+        <legend className="settingLabel">文字图层</legend>
+        <TextLayerEditor controller={controller} compact focusRequest={textFocus}
+          primaryText={textLayerValue} onPrimaryTextChange={handleTextLayerChange}
+          primaryOverridden={isTextOverridden} onRestorePrimary={() => setTextOverride(null)} />
+      </fieldset>}
+      {compactStyle ? <details className="workspaceAdvancedStyles"><summary>高级版式设置</summary>{advancedGeometry}{brandSettings}</details> : advancedGeometry}
+
+      {!compactStyle && <>
+      {/* 快捷文字（同步到文字图层 1） */}
+      <fieldset className="settingGroup">
+        <legend className="settingLabel">快捷文字</legend>
+        {firstLayer === null ? (
+          <div className="textLayerEmpty">
+            <p className="settingsCapabilityHint">
+              当前没有文字图层，快捷文字不可用。请先恢复文字图层。
+            </p>
+            <button
+              type="button"
+              className="ghostButton"
+              onClick={() => replaceTextLayers(createDefaultTextLayers())}
+            >
+              恢复默认 3 段
+            </button>
+          </div>
+        ) : (
+          <>
+            <p className="settingsCapabilityHint">
+              快捷编辑同步到文字图层 1。如需多段文字、背景条、阴影、描边，请在下方"文字图层"中设置。
+            </p>
+
+            <div className="settingRow">
+              <label className="settingFieldLabel">
+                文字放置区域
+                <select
+                  className="settingSelect"
+                  value={firstLayer.textArea}
+                  onChange={(e) => handleTextLayerTextAreaChange(e.target.value as "image" | "border")}
+                >
+                  <option value="image">图片上</option>
+                  <option value="border">边框上</option>
+                </select>
+              </label>
+            </div>
+
+            <div className="settingRow">
+              <label className="settingFieldLabel">
+                文字位置
+                <select
+                  className="settingSelect"
+                  value={normalizeTextPlacement(firstLayer.textArea, firstLayer.placement)}
+                  onChange={(e) => handleTextLayerPlacementChange(e.target.value)}
+                >
+                  {textPlacementOptions(firstLayer.textArea).map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            <div className="settingRow">
+              <label className="settingFieldLabel">
+                {isTextOverridden ? "当前图片文字（已覆盖）" : "文字内容"}
+                <input
+                  type="text"
+                  className="settingTextInput"
+                  placeholder="留空则不绘制该图层"
+                  value={textLayerValue}
+                  onChange={(e) => handleTextLayerChange(e.target.value)}
+                />
+              </label>
+              {isTextOverridden && (
+                <button
+                  type="button"
+                  className="ghostButton settingRestoreButton"
+                  onClick={() => setTextOverride(null)}
+                >
+                  恢复使用全局文字
+                </button>
+              )}
+            </div>
+
+            <div className="settingRow">
+              <label className="settingFieldLabel">
+                字号
+                <NumberInput
+                  className="settingNumberInput"
+                  value={firstLayer.fontSize}
+                  min={8}
+                  max={200}
+                  onCommit={handleTextLayerFontSizeCommit}
+                />
+              </label>
+            </div>
+
+            <div className="settingRow">
+              <label className="settingFieldLabel">
+                文字颜色
+                <input
+                  type="color"
+                  className="settingColorInput"
+                  value={firstLayer.color}
+                  onChange={(e) => handleTextLayerColorChange(e.target.value)}
+                />
+              </label>
+            </div>
+
+            <div className="settingRow">
+              <label className="settingFieldLabel">
+                字体
+                <select
+                  className="settingSelect"
+                  value={selectedFont}
+                  onChange={(e) => handleTextLayerFontFamilyChange(e.target.value)}
+                >
+                  <optgroup label="内置字体">
+                    {availableFonts.filter((f) => f.source === "builtin").map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </optgroup>
+                  {availableFonts.some((f) => f.source === "system") && (
+                    <optgroup label="已验证系统字体">
+                      {availableFonts.filter((f) => f.source === "system").map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                </select>
+                {!availableFonts.some((f) => f.value === firstLayer.fontFamily) && (
+                  <span className="settingHint">
+                    当前保存的字体不在已验证清单中，本次导出将使用 SansSerif。
+                  </span>
+                )}
+              </label>
+            </div>
+
+            <div className="settingRow">
+              <button
+                type="button"
+                className="ghostButton"
+                disabled={selectedFilePath === null || exifStatus === "loading"}
+                onClick={() => void handleExifFill()}
+              >
+                {exifStatus === "loading" ? "读取 EXIF 中…" : "从 EXIF 填充"}
+              </button>
+              {exifStatus === "empty" && (
+                <p className="settingsCapabilityHint">该图片未包含可读取的 EXIF 信息。</p>
+              )}
+              {exifStatus === "error" && (
+                <p className="settingsCapabilityHint fieldHintError">
+                  EXIF 读取失败，请确认引擎正在运行。
+                </p>
+              )}
+            </div>
+
+            {/* 变量插入 */}
+            <VariableHelpPanel
+              currentText={textLayerValue}
+              onTextChange={handleTextLayerVariableInsert}
+            />
+          </>
+        )}
+      </fieldset>
+
+      {/* 文字图层（多段） */}
+      <fieldset className="settingGroup">
+        <legend className="settingLabel">文字图层</legend>
+        <p className="settingsCapabilityHint">
+          多段文字可独立设置内容、字号、颜色、位置和样式。变量在每段中独立解析。
+        </p>
+        <TextLayerEditor controller={controller} />
+      </fieldset>
+
+      </>}
+      {!compactStyle && brandSettings}
         </>
       )}
 

@@ -2,6 +2,7 @@ package com.camborder.app.util;
 
 import org.springframework.stereotype.Component;
 
+import java.awt.Dimension;
 import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 
@@ -17,31 +18,34 @@ import java.awt.image.BufferedImage;
 public final class ImageScaler {
 
     public BufferedImage scale(final BufferedImage source, final int maxWidth, final int maxHeight) {
-        int width = source.getWidth();
-        int height = source.getHeight();
+        final Dimension size = fitDimensions(source.getWidth(), source.getHeight(), maxWidth, maxHeight);
+        return scaleTo(source, size.width, size.height);
+    }
 
-        double scaleW = maxWidth > 0 ? (double) maxWidth / width : Double.POSITIVE_INFINITY;
-        double scaleH = maxHeight > 0 ? (double) maxHeight / height : Double.POSITIVE_INFINITY;
-        double scale = Math.min(scaleW, scaleH);
-
-        if (scale >= 1.0) {
-            // 不放大，直接使用原图
+    static BufferedImage scaleTo(final BufferedImage source, final int width, final int height) {
+        if (width == source.getWidth() && height == source.getHeight()) {
             return source;
         }
 
-        int newWidth = Math.max(1, (int) Math.round(width * scale));
-        int newHeight = Math.max(1, (int) Math.round(height * scale));
-        BufferedImage output = PixelBufferFactory.createLikeInSrgb(source, newWidth, newHeight);
+        BufferedImage output = PixelBufferFactory.createLikeInSrgb(source, width, height);
         Graphics2D graphics = output.createGraphics();
         try {
             graphics.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION,
                     java.awt.RenderingHints.VALUE_INTERPOLATION_BICUBIC);
             graphics.setRenderingHint(java.awt.RenderingHints.KEY_RENDERING,
                     java.awt.RenderingHints.VALUE_RENDER_QUALITY);
-            graphics.drawImage(source, 0, 0, newWidth, newHeight, null);
+            graphics.drawImage(source, 0, 0, width, height, null);
         } finally {
             graphics.dispose();
         }
         return output;
+    }
+
+    static Dimension fitDimensions(final int width, final int height, final int maxWidth, final int maxHeight) {
+        final double scaleW = maxWidth > 0 ? (double) maxWidth / width : Double.POSITIVE_INFINITY;
+        final double scaleH = maxHeight > 0 ? (double) maxHeight / height : Double.POSITIVE_INFINITY;
+        final double scale = Math.min(1, Math.min(scaleW, scaleH));
+        return new Dimension(Math.max(1, (int) Math.round(width * scale)),
+                Math.max(1, (int) Math.round(height * scale)));
     }
 }

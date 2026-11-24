@@ -2,15 +2,23 @@ package com.camborder.app.util;
 
 import com.camborder.app.exception.RenderExportException;
 import com.camborder.app.exception.RenderOutputConflictException;
+import com.sun.jna.Library;
+import com.sun.jna.Native;
+import com.sun.jna.Platform;
+import com.sun.jna.WString;
+import com.sun.jna.win32.StdCallLibrary;
 
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.InvalidPathException;
+import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.FileSystems;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 
 /**
- * 输出路径校验器（无状态纯函数工具）。
- * 单一职责：解析 outputPath、准备父目录并阻止覆盖已有文件，不关心图像编码。
+ * 输出路径校验与排他发布工具，负责准备父目录和防止覆盖已有文件。
  *
  * @throws RenderExportException outputPath 为空、父目录无法创建或不是目录时抛出
  * @throws RenderOutputConflictException outputPath 已存在时抛出
@@ -36,14 +44,14 @@ public final class OutputPathValidator {
         }
 
         // 编码器是最后一道防线：即使两个请求在校验后发生竞态，也不能覆盖已有文件。
-        if (outputFile.exists()) {
+        if (Files.exists(outputFile.toPath(), LinkOption.NOFOLLOW_LINKS)) {
             throw new RenderOutputConflictException("outputPath already exists");
         }
 
         File parent = outputFile.getParentFile();
         // 父目录不存在时尝试创建；创建失败或已存在但不是目录，视为不可写
         if (parent != null && !parent.exists()) {
-            if (!parent.mkdirs()) {
+            if (!parent.mkdirs() && !parent.isDirectory()) {
                 throw new RenderExportException("output directory is not writable");
             }
         }
@@ -51,6 +59,60 @@ public final class OutputPathValidator {
             throw new RenderExportException("output path is not a directory");
         }
         return outputFile;
+    }
+
+    /**
+     * 在同目录发布已编码文件。硬链接同一时刻暴露完整内容，且永远不会替换已存在的目录项。
+     * 系统排他改名覆盖不支持硬链接的卷；没有排他操作可用时保留导出失败。
+     */
+    static void publishNewFile(final Path staging, final Path target) throws IOException {
+        try {
+            Files.createLink(target, staging);
+        } catch (FileAlreadyExistsException exception) {
+            throw new RenderOutputConflictException("outputPath already exists");
+        } catch (IOException | UnsupportedOperationException exception) {
+            if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
+                throw new RenderOutputConflictException("outputPath already exists");
+            }
+            if (staging.getFileSystem() != FileSystems.getDefault()) {
+                throw new IOException("目标卷不支持排他发布", exception);
+            }
+            renameExclusive(staging.toAbsolutePath(), target.toAbsolutePath());
+        }
+    }
+
+    static void renameExclusive(final Path staging, final Path target) throws IOException {
+        final int error;
+        try {
+            if (Platform.isMac()) {
+                final int renameExcl = 0x00000004; // macOS SDK RENAME_EXCL
+                if (Native.load(Platform.C_LIBRARY_NAME, MacRename.class)
+                        .renamex_np(staging.toString(), target.toString(), renameExcl) == 0) return;
+                error = Native.getLastError();
+            } else if (Platform.isWindows()) {
+                // flags=0 保留现有目标，并禁止跨卷复制后删除。
+                if (Native.load("kernel32", WindowsMove.class)
+                        .MoveFileExW(new WString(staging.toString()), new WString(target.toString()), 0)) return;
+                error = Native.getLastError();
+            } else {
+                throw new IOException("目标卷不支持硬链接发布");
+            }
+        } catch (LinkageError exception) {
+            throw new IOException("系统不支持排他发布", exception);
+        }
+        if ((Platform.isWindows() ? error == 80 || error == 183 : error == 17)
+                || Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
+            throw new RenderOutputConflictException("outputPath already exists");
+        }
+        throw new IOException("排他发布失败，系统错误码 " + error);
+    }
+
+    private interface MacRename extends Library {
+        int renamex_np(String staging, String target, int flags);
+    }
+
+    private interface WindowsMove extends StdCallLibrary {
+        boolean MoveFileExW(WString staging, WString target, int flags);
     }
 
     /**

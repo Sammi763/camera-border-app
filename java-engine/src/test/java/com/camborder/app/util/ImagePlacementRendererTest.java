@@ -1,6 +1,7 @@
 package com.camborder.app.util;
 
 import com.camborder.app.model.ImagePlacement;
+import com.camborder.app.model.RenderRecipe;
 import org.junit.jupiter.api.Test;
 
 import java.awt.Color;
@@ -23,6 +24,22 @@ final class ImagePlacementRendererTest {
         assertThat(result.getHeight()).isEqualTo(200);
         assertThat(result.getRGB(100, 10)).isEqualTo(Color.WHITE.getRGB());
         assertThat(result.getRGB(100, 100)).isEqualTo(Color.RED.getRGB());
+    }
+
+    @Test
+    void preservesPhotoColorWhenFitProjectsToLessThanOnePixel() {
+        final BufferedImage source = solid(9, 3, Color.RED);
+        final RenderRecipe recipe = new RenderRecipe(null, null, null, null, false);
+        recipe.setImagePlacement(new ImagePlacement("fit", 0.5, 0.5, 0, 1.0));
+        final var layout = renderer.calculateOutputLayout(source.getWidth(), source.getHeight(), recipe, 2, 2);
+
+        final BufferedImage rendered = renderer.renderOutput(source, layout, Color.WHITE);
+
+        assertThat(rendered.getWidth()).isEqualTo(2);
+        assertThat(rendered.getHeight()).isEqualTo(2);
+        for (int y = 0; y < rendered.getHeight(); y++) {
+            assertThat(rendered.getRGB(0, y)).isNotEqualTo(Color.WHITE.getRGB());
+        }
     }
 
     @Test

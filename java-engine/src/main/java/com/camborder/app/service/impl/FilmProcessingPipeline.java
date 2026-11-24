@@ -261,7 +261,8 @@ public final class FilmProcessingPipeline {
 
     public Processed processInteractivePreview(final RenderRecipe recipe, final int maxWidth,
                                                final int maxHeight) {
-        return processInternal(recipe, "current-positive", maxWidth, maxHeight, false, true, true, null);
+        return processInternal(recipe, "current-positive", maxWidth, maxHeight,
+                Boolean.TRUE.equals(recipe.getBorderlessMaster()), true, true, null);
     }
 
     private Processed processInternal(final RenderRecipe recipe, final String stage,
@@ -481,6 +482,11 @@ public final class FilmProcessingPipeline {
                     + Math.max(0, border.getRight()));
             outputHeight = Math.max(1, outputHeight + Math.max(0, border.getTop())
                     + Math.max(0, border.getBottom()));
+        }
+        if (compose && "photo-short-edge".equals(recipe.getLayoutScale())) {
+            final int[] size = com.camborder.app.util.FilmCompositor.dimensions(sourceWidth, sourceHeight, recipe, maxWidth, maxHeight, borderless);
+            outputWidth = size[0];
+            outputHeight = size[1];
         }
         final com.camborder.app.model.ImagePlacement placement = recipe.getImagePlacement();
         final boolean placementTransform = placement != null && ("fill".equals(placement.getMode())

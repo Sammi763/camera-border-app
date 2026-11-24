@@ -222,3 +222,24 @@ describe("usePreview 底片模式（T10）", () => {
     }
   })
 })
+
+
+it("精算失败保留上一版，手动重试提交同一配方的新代次", async () => {
+  const response = (url: string): PreviewResponse => ({ status: "ok", message: "", previewAvailable: true, previewUrl: url })
+  requestPreviewMock.mockResolvedValue(response("/previews/old"))
+  const { result, rerender } = renderHook(({ exposure }) => usePreview("/photos/film.tif", settings, 1,
+    null, null, null, { ...processing, positive: { exposureEv: exposure } }), { initialProps: { exposure: 0 } })
+  await waitFor(() => expect(result.current).toMatchObject({ engineSyncStatus: "synced" }))
+  requestPreviewMock.mockRejectedValue(new Error("精算预算不足"))
+  rerender({ exposure: 0.5 })
+  await waitFor(() => expect(result.current).toMatchObject({
+    engineSyncStatus: "error", engineDisplayUrl: "/previews/old", engineResponse: { message: "精算预算不足" }
+  }))
+  const generation = result.current.kind === "active" ? result.current.engineGeneration ?? 0 : 0
+  requestPreviewMock.mockResolvedValue(response("/previews/new"))
+  act(() => { if (result.current.kind === "active") result.current.retry?.() })
+  await waitFor(() => expect(result.current).toMatchObject({
+    engineSyncStatus: "synced", engineDisplayUrl: "/previews/new",
+    engineGeneration: generation + 1
+  }))
+})

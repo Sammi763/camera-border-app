@@ -214,6 +214,7 @@ const readPersistedSettings = (): PersistedSettingsState => {
     const restored = {
       ...DEFAULT_SETTINGS,
       ...payload,
+      layoutScale: payload["layoutScale"] === "photo-short-edge" ? "photo-short-edge" : "pixels",
       imageArea: area,
       imagePlacement: imagePlacementFromArea(area, placement),
       logo,

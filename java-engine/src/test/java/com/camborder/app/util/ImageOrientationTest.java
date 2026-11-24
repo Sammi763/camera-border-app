@@ -1,7 +1,13 @@
 package com.camborder.app.util;
 
+import com.camborder.app.model.BorderConfig;
+import com.camborder.app.model.ImagePlacement;
+import com.camborder.app.model.RenderRecipe;
+import com.camborder.app.service.impl.Java2DImageRenderService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
@@ -119,6 +125,35 @@ final class ImageOrientationTest {
         assertThat(result.getSourceDecode().getFullHeight()).isEqualTo(3);
         // 再次应用同一方向会把图转回横向；渲染读取结果只能已经是一次有向图。
         assertThat(ImageOrientation.apply(result.getImage(), 1)).isSameAs(result.getImage());
+    }
+
+    @ParameterizedTest
+    @CsvSource({"6, pixels, 106, 183", "8, photo-short-edge, 93, 176"})
+    void exportFitsOddOrientedDimensionsWithOneSidedLimit(final int orientation, final String layoutScale,
+                                                           final int canvasWidth, final int canvasHeight) throws Exception {
+        final Path source = tempDir.resolve("portrait.jpg");
+        final var encoded = new ByteArrayOutputStream();
+        assertThat(ImageIO.write(new BufferedImage(621, 301, BufferedImage.TYPE_INT_RGB), "jpeg", encoded)).isTrue();
+        Files.write(source, insertAfterJpegSignature(encoded.toByteArray(), exifOrientation(orientation)));
+        final var recipe = new RenderRecipe(source.toString(), new BorderConfig(13, 20, 31, 35, "#FFFFFF"),
+                null, null, false);
+        recipe.setImagePlacement(new ImagePlacement("fit", 0.5, 0.5, 0, 0.5));
+        if ("photo-short-edge".equals(layoutScale)) recipe.setLayoutScale(layoutScale);
+        final var renderer = new Java2DImageRenderService(new ImageReader(new RawDecoder()), new ImageScaler(),
+                new BorderComposer(new GradientPainter()), new BorderStyleRenderer(), new TextRenderer(),
+                new ImageEncoder(), new LogoRenderer());
+
+        final var rendered = renderer.composeForExport(recipe, 0, 173);
+        assertThat(rendered.getSourceDecode().getOrientation()).isEqualTo(orientation);
+        assertThat(rendered.getSourceDecode().getFullWidth()).isEqualTo(301);
+        assertThat(rendered.getSourceDecode().getFullHeight()).isEqualTo(621);
+        assertThat(rendered.getImage().getWidth()).isEqualTo(canvasWidth);
+        assertThat(rendered.getImage().getHeight()).isEqualTo(canvasHeight);
+        assertThat(rendered.getImage().getRGB(canvasWidth / 2, canvasHeight / 2)).isEqualTo(0xff000000);
+        final var original = renderer.composeForExport(recipe, 0, 0).getImage();
+        final var largerLimit = renderer.composeForExport(recipe, 0, 2048).getImage();
+        assertThat(largerLimit.getWidth()).isEqualTo(original.getWidth());
+        assertThat(largerLimit.getHeight()).isEqualTo(original.getHeight());
     }
 
     @Test

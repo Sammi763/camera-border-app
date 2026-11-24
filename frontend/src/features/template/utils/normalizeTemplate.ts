@@ -165,6 +165,7 @@ export const normalizeTemplateSettings = (
 
   return {
     ...settings,
+    layoutScale: settings.layoutScale === "photo-short-edge" ? "photo-short-edge" : "pixels",
     borderColor: settings.borderColor ?? "#ffffff",
     borderTop: settings.borderTop ?? 20,
     borderBottom: settings.borderBottom ?? 20,

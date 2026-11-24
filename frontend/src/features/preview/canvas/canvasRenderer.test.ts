@@ -267,3 +267,13 @@ describe("calculateFocalFromPointer（构图焦点换算）", () => {
     expect(calculateFocalFromPointer({ x: 0, y: 0 }, { x: 0, y: 0, width: 0, height: 0 })).toBeNull()
   })
 })
+
+
+it("比例版式对不同方向和尺寸使用相同的照片区域短边比例", () => {
+  const settings = { ...DEFAULT_SETTINGS, layoutScale: "photo-short-edge" as const,
+    borderTop: 80, borderBottom: 80, borderLeft: 80, borderRight: 80 }
+  for (const [width, height] of [[8000, 6000], [2000, 3000]] as const) {
+    const layout = calculateCompositionLayout(600, 480, width, height, settings)!
+    expect(layout.borders.top / Math.min(layout.targetRect.width, layout.targetRect.height)).toBeCloseTo(0.08)
+  }
+})

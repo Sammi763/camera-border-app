@@ -194,25 +194,27 @@ public final class ImageEncoder {
                 ? ImageMetadataPayload.read(sourcePath)
                 : ImageMetadataPayload.empty();
 
-        if ("jpeg".equals(resolvedFormat)) {
-            writeJpeg(image, outputFile, export.getJpegQuality());
-            MetadataWriteResult metadataWrite = applyMetadata(outputFile, resolvedFormat, metadata,
-                    export.isPreserveMetadata(), export.isPreserveColorProfile());
+        final Path staging = createStaging(outputFile, resolvedFormat);
+        try {
+            final File file = staging.toFile();
+            final MetadataWriteResult metadataWrite;
+            if ("tiff".equals(resolvedFormat)) {
+                metadataWrite = writeTiff(image, file, metadata,
+                        export.isPreserveMetadata(), export.isPreserveColorProfile());
+            } else {
+                if ("jpeg".equals(resolvedFormat)) writeJpeg(image, file, export.getJpegQuality());
+                else writePng(image, file);
+                metadataWrite = applyMetadata(file, resolvedFormat, metadata,
+                        export.isPreserveMetadata(), export.isPreserveColorProfile());
+            }
+            OutputPathValidator.publishNewFile(staging, outputFile.toPath());
             return buildExportResult(outputFile.getAbsolutePath(), resolvedFormat, export,
                     image, metadata, metadataWrite);
-        } else if ("tiff".equals(resolvedFormat)) {
-            MetadataWriteResult metadataWrite = writeTiff(image, outputFile, metadata,
-                    export.isPreserveMetadata(), export.isPreserveColorProfile());
-            return buildExportResult(outputFile.getAbsolutePath(), resolvedFormat, export,
-                    image, metadata, metadataWrite);
-        } else {
-            writePng(image, outputFile);
+        } catch (IOException exception) {
+            throw new RenderExportException("导出文件写入失败：" + exception.getMessage());
+        } finally {
+            deleteStaging(staging);
         }
-
-        MetadataWriteResult metadataWrite = applyMetadata(outputFile, resolvedFormat, metadata,
-                export.isPreserveMetadata(), export.isPreserveColorProfile());
-        return buildExportResult(outputFile.getAbsolutePath(), resolvedFormat, export,
-                image, metadata, metadataWrite);
     }
 
     private ExportResult writeProfessional(final BufferedImage image, final String outputPath,
@@ -272,16 +274,7 @@ public final class ImageEncoder {
         final byte[] targetIcc = processedIcc == null ? targetIcc(export, sourceInfo) : processedIcc;
         final BufferedImage prepared = processedIcc == null ? prepareProfessionalImage(image, targetBitDepth, targetIcc) : image;
         final File outputFile = OutputPathValidator.resolveAndPrepare(outputPath);
-        final File parent = outputFile.getParentFile() == null
-                ? new File(".") : outputFile.getParentFile();
-        final String suffix = "." + ("jpeg".equals(format) ? "jpg" : format);
-        final Path staging;
-        try {
-            staging = Files.createTempFile(parent.toPath(), ".camborder-export-", suffix);
-        } catch (IOException exception) {
-            throw new RenderExportException("无法创建导出临时文件");
-        }
-        boolean moved = false;
+        final Path staging = createStaging(outputFile, format);
         try {
             if ("jpeg".equals(format)) {
                 writeJpeg(prepared, staging.toFile(), export.getJpegQuality());
@@ -313,23 +306,30 @@ public final class ImageEncoder {
                     export, format, sourceInfo, outputInspection, targetBitDepth, targetIcc,
                     prepared.getWidth(), prepared.getHeight());
             if (processedIcc != null) FilmSourceVersion.require(Path.of(sourcePath), expectedSourceVersion);
-            try {
-                Files.move(staging, outputFile.toPath(), java.nio.file.StandardCopyOption.ATOMIC_MOVE);
-            } catch (java.nio.file.AtomicMoveNotSupportedException exception) {
-                Files.move(staging, outputFile.toPath());
-            }
-            moved = true;
+            OutputPathValidator.publishNewFile(staging, outputFile.toPath());
             return new ExportResult(outputFile.getAbsolutePath(), format,
                     report.getFeatures().get("metadata"),
                     report.getFeatures().get("colorProfile"),
                     report.getFeatures().get("bitDepth"), report);
         } catch (IOException exception) {
-            throw new RenderExportException("导出文件写入失败");
+            throw new RenderExportException("导出文件写入失败：" + exception.getMessage());
         } finally {
-            if (!moved) {
-                try { Files.deleteIfExists(staging); } catch (IOException ignored) { }
-            }
+            deleteStaging(staging);
         }
+    }
+
+    private static Path createStaging(final File outputFile, final String format) {
+        final Path parent = outputFile.toPath().toAbsolutePath().getParent();
+        final String suffix = "." + ("jpeg".equals(format) ? "jpg" : format);
+        try {
+            return Files.createTempFile(parent, ".camborder-export-", suffix);
+        } catch (IOException exception) {
+            throw new RenderExportException("无法创建导出临时文件");
+        }
+    }
+
+    private static void deleteStaging(final Path staging) {
+        try { Files.deleteIfExists(staging); } catch (IOException ignored) { }
     }
 
     private int targetBitDepth(final ExportSettings export, final String format, final int sourceBitDepth) {

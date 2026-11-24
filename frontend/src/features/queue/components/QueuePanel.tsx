@@ -729,10 +729,10 @@ export const QueuePanel = ({ queue, showImportActions = true }: QueuePanelProps)
       {/* 同名冲突人工确认（U11）：不静默绑定，由用户逐个选择 */}
       {ambiguousRelocations.length > 0 && (
         <div className="queueAmbiguousRelocate" role="alert" data-testid="queue-ambiguous-relocate">
-          <p>以下文件在所选文件夹中存在多个同名候选，请逐个确认：</p>
+          <p>以下文件存在同名冲突，请逐个确认原路径和绑定目标。</p>
           {ambiguousRelocations.map((entry) => (
             <div key={entry.itemId} className="queueAmbiguousRow">
-              <span className="queueAmbiguousName">{entry.fileName}</span>
+              <span className="queueAmbiguousName">{queue.items.find((item) => item.id === entry.itemId)?.sourcePath ?? entry.fileName}</span>
               <span className="queueAmbiguousCandidates">
                 {entry.candidates.map((candidate) => (
                   <button
@@ -740,12 +740,15 @@ export const QueuePanel = ({ queue, showImportActions = true }: QueuePanelProps)
                     type="button"
                     className="ghostButton queueAmbiguousCandidate"
                     title={`绑定到 ${candidate}`}
+                    disabled={queue.items.some(item => item.id !== entry.itemId && !item.missing && item.sourcePath === candidate)}
                     onClick={() => {
                       // 绑定目标以 ambiguous 条目携带的条目 id 为准：
                       // 队列中可能存在多个同名丢失条目，不能按文件名回查。
                       void queue.relocateItemToCandidate(entry.itemId, candidate).then((ok) => {
                         if (ok) {
                           setAmbiguousRelocations((previous) => previous.filter((e) => e.itemId !== entry.itemId))
+                        } else {
+                          setRelocateHint("无法绑定：文件不可读取，或已绑定到其他照片。")
                         }
                       })
                     }}

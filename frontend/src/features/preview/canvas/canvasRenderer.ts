@@ -402,7 +402,7 @@ const drawTextLayer = (
   bl: number,
   br: number,
   scale: number
-): void => {
+): PreviewRect => {
   const fontSize = Math.max(8, layer.fontSize) * scale
   ctx.font = `${fontSize}px ${layer.fontFamily}`
   const align: CanvasTextAlign = "center"
@@ -485,6 +485,7 @@ const drawTextLayer = (
   // 4. 正文（阴影只是额外效果，不能替代正文）
   ctx.fillStyle = ensureColor(layer.color)
   drawSpacedTextLines(ctx, lines, pos.x, firstBaseline, lineHeight, pos.align, letterSpacing)
+  return { x: textLeft, y: textTop, width: Math.max(1, textWidth), height: Math.max(1, textHeight) }
 }
 
 const measureSpacedText = (
@@ -630,12 +631,18 @@ export type CompositionLayoutOptions = {
   readonly skipMinVisibleGuard?: boolean
 }
 
+export const decorationScaleFor = (
+  settings: Pick<RenderSettings, "layoutScale">,
+  width: number,
+  height: number
+): number => settings.layoutScale === "photo-short-edge" ? Math.min(width, height) / 1000 : 1
+
 export const calculateCompositionLayout = (
   canvasWidth: number,
   canvasHeight: number,
   sourceWidth: number,
   sourceHeight: number,
-  border: Pick<RenderSettings, "borderTop" | "borderBottom" | "borderLeft" | "borderRight">,
+  border: Pick<RenderSettings, "borderTop" | "borderBottom" | "borderLeft" | "borderRight" | "layoutScale">,
   imagePlacement?: Partial<ImagePlacement> | null,
   viewport?: CompositionViewport | null,
   options?: CompositionLayoutOptions
@@ -652,10 +659,11 @@ export const calculateCompositionLayout = (
   if (geometry === null) {
     return null
   }
-  const top = nonNegative(border.borderTop)
-  const bottom = nonNegative(border.borderBottom)
-  const left = nonNegative(border.borderLeft)
-  const right = nonNegative(border.borderRight)
+  const scale = decorationScaleFor(border, geometry.targetWidth, geometry.targetHeight)
+  const top = nonNegative(border.borderTop) * scale
+  const bottom = nonNegative(border.borderBottom) * scale
+  const left = nonNegative(border.borderLeft) * scale
+  const right = nonNegative(border.borderRight) * scale
   // 逻辑合成空间：目标照片区域 + 配方边框（原图像素语义，代理图不参与）
   const compositionWidth = geometry.targetWidth + left + right
   const compositionHeight = geometry.targetHeight + top + bottom
@@ -833,7 +841,8 @@ export const drawPreviewToCanvas = (
   logoImage?: CanvasDrawableSource | null,
   renderDimensions?: CanvasRenderDimensions,
   sourceDimensions?: { readonly width: number; readonly height: number } | null,
-  viewport?: CompositionViewport | null
+  viewport?: CompositionViewport | null,
+  onTextBounds?: (id: string, index: number, rect: PreviewRect) => void
 ): CompositionLayout | null => {
   const ctx = canvas.getContext("2d")
   if (ctx === null) {
@@ -944,17 +953,18 @@ export const drawPreviewToCanvas = (
   )
   ctx.restore()
 
+  const decorationScale = layout.viewScale * decorationScaleFor(settings, geometry.targetWidth, geometry.targetHeight)
   // 边框风格装饰：绘制在边框背景与图片之上、文字与品牌标识之下。
   // 未识别的风格 id / null / intensity=0 时保持原始行为（与引擎语义一致）。
   if (settings.borderStyle !== null && settings.borderStyle !== undefined) {
-    drawBorderStyle(ctx, settings.borderStyle, targetX, targetY, targetW, targetH, localWidth, localHeight, bt, bb, layout.viewScale)
+    drawBorderStyle(ctx, settings.borderStyle, targetX, targetY, targetW, targetH, localWidth, localHeight, bt, bb, decorationScale)
   }
 
   // 遍历 textLayers，每段独立绘制。
   // textLayers 是唯一的文字来源（normalizeTemplateSettings 已确保旧设置迁移）。
   // 如果 textLayers 为空数组，则不绘制任何文字。
   // 文字缩放 = viewScale：与边框/照片共用同一比例映射，替代旧的 cw/800 独立路径。
-  for (const layer of settings.textLayers) {
+  for (const [index, layer] of settings.textLayers.entries()) {
     if (!layer.enabled) {
       continue
     }
@@ -962,13 +972,16 @@ export const drawPreviewToCanvas = (
     if (content.length === 0) {
       continue
     }
-    drawTextLayer(ctx, layer, content, targetX, targetY, targetW, targetH, localWidth, localHeight, bt, bb, bl, br, layout.viewScale)
+    const bounds = drawTextLayer(ctx, layer, content, targetX, targetY, targetW, targetH, localWidth, localHeight, bt, bb, bl, br, decorationScale)
+    onTextBounds?.(layer.id, index, {
+      ...bounds, x: bounds.x + layout.compositionRect.x, y: bounds.y + layout.compositionRect.y
+    })
   }
 
   // 绘制品牌标识（Logo）
   if (settings.logo?.enabled) {
     if (settings.logo.imagePath && logoImage) {
-      drawLogoImage(ctx, logoImage, settings, localWidth, localHeight, bt, bb, bl, br, layout.viewScale)
+      drawLogoImage(ctx, logoImage, settings, localWidth, localHeight, bt, bb, bl, br, decorationScale)
     } else {
       let logoText: string
       if (settings.logo.mode === "brand-text") {
@@ -978,7 +991,7 @@ export const drawPreviewToCanvas = (
         logoText = (settings.logo.brand ?? "")
       }
       if (logoText.trim().length > 0) {
-        drawLogo(ctx, logoText.trim(), settings, localWidth, localHeight, bt, bb, bl, br, layout.viewScale)
+        drawLogo(ctx, logoText.trim(), settings, localWidth, localHeight, bt, bb, bl, br, decorationScale)
       }
     }
   }
@@ -1126,12 +1139,13 @@ export const exportPreviewAsPng = (
   if (geometry === null) {
     return
   }
+  const scale = decorationScaleFor(settings, geometry.targetWidth, geometry.targetHeight)
   const canvas = document.createElement("canvas")
   canvas.width = Math.max(1, Math.round(
-    geometry.targetWidth + Math.max(0, settings.borderLeft) + Math.max(0, settings.borderRight)
+    geometry.targetWidth + Math.max(0, settings.borderLeft) * scale + Math.max(0, settings.borderRight) * scale
   ))
   canvas.height = Math.max(1, Math.round(
-    geometry.targetHeight + Math.max(0, settings.borderTop) + Math.max(0, settings.borderBottom)
+    geometry.targetHeight + Math.max(0, settings.borderTop) * scale + Math.max(0, settings.borderBottom) * scale
   ))
 
   drawPreviewToCanvas(

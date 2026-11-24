@@ -109,19 +109,16 @@ describe("WorkspaceTabs", () => {
     expect(tabIndexes()).toEqual([0, -1, -1])
   })
 
-  it("选中底座随页签索引移动，内容面板标记当前页签", () => {
+  it("选中样式与内容面板一起切换", () => {
     const { container } = render(<Harness />)
 
-    const header = container.querySelector(".workspaceTabsHeader") as HTMLElement
-    const indicator = container.querySelector(".workspaceTabsIndicator") as HTMLElement
-    expect(indicator.getAttribute("aria-hidden")).toBe("true")
-    expect(header.style.getPropertyValue("--tab-index")).toBe("0")
-    expect(header.style.getPropertyValue("--tab-count")).toBe("3")
+    expect(tabByName("样式").classList.contains("workspaceTabActive")).toBe(true)
     expect(container.querySelector(".workspaceTabPanel")?.getAttribute("data-tab-id")).toBe("style")
 
     fireEvent.click(tabByName("输出"))
 
-    expect(header.style.getPropertyValue("--tab-index")).toBe("2")
+    expect(tabByName("输出").classList.contains("workspaceTabActive")).toBe(true)
+    expect(tabByName("样式").classList.contains("workspaceTabActive")).toBe(false)
     expect(container.querySelector(".workspaceTabPanel")?.getAttribute("data-tab-id")).toBe("output")
   })
 

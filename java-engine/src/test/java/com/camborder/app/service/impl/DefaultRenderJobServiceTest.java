@@ -5,15 +5,29 @@ import com.camborder.app.dto.RenderJobRequest;
 import com.camborder.app.dto.RenderJobSnapshot;
 import com.camborder.app.dto.RenderJobStatusResponse;
 import com.camborder.app.dto.SourceDecode;
+import com.camborder.app.model.ImagePlacement;
 import com.camborder.app.model.RenderRecipe;
 import com.camborder.app.repository.RenderJobStore;
 import com.camborder.app.service.ImageRenderService;
+import com.camborder.app.util.BorderComposer;
+import com.camborder.app.util.BorderStyleRenderer;
+import com.camborder.app.util.GradientPainter;
 import com.camborder.app.util.ImageEncoder;
+import com.camborder.app.util.ImageReader;
+import com.camborder.app.util.ImageScaler;
+import com.camborder.app.util.LogoRenderer;
+import com.camborder.app.util.RawDecoder;
+import com.camborder.app.util.TextRenderer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import javax.imageio.ImageIO;
+import java.awt.Color;
+import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -67,7 +81,7 @@ final class DefaultRenderJobServiceTest {
     @Test
     void fatalErrorTerminatesWholeBatchInsteadOfLeavingRunningStatus() throws Exception {
         final ImageRenderService renderer = mock(ImageRenderService.class);
-        when(renderer.compose(any(RenderRecipe.class), anyInt(), anyInt()))
+        when(renderer.composeForExport(any(RenderRecipe.class), anyInt(), anyInt()))
                 .thenThrow(new OutOfMemoryError("测试注入，不分配实际大数组"));
         final DefaultRenderJobService service = service(renderer);
         final RenderRecipe recipe = new RenderRecipe("/photos/test.png", null, null, null, false);
@@ -78,7 +92,7 @@ final class DefaultRenderJobServiceTest {
         assertThat(terminal.getStatus()).isEqualTo("failed");
         assertThat(terminal.getFailed()).isEqualTo(2);
         assertThat(terminal.getItems().get(0).getError()).contains("内存不足");
-        verify(renderer, times(1)).compose(any(RenderRecipe.class), anyInt(), anyInt());
+        verify(renderer, times(1)).composeForExport(any(RenderRecipe.class), anyInt(), anyInt());
     }
 
     @Test
@@ -86,7 +100,7 @@ final class DefaultRenderJobServiceTest {
         ImageRenderService imageRenderService = mock(ImageRenderService.class);
         CountDownLatch composeStarted = new CountDownLatch(1);
         CountDownLatch continueCompose = new CountDownLatch(1);
-        when(imageRenderService.compose(any(RenderRecipe.class), anyInt(), anyInt())).thenAnswer(invocation -> {
+        when(imageRenderService.composeForExport(any(RenderRecipe.class), anyInt(), anyInt())).thenAnswer(invocation -> {
             composeStarted.countDown();
             assertThat(continueCompose.await(2, TimeUnit.SECONDS)).isTrue();
             return new ImageRenderService.ComposeOutcome(
@@ -109,7 +123,7 @@ final class DefaultRenderJobServiceTest {
 
         RenderJobStatusResponse completed = waitForTerminal(service, accepted.getJobId());
         assertThat(completed.getStatus()).isEqualTo("completed");
-        verify(imageRenderService).compose(org.mockito.ArgumentMatchers.argThat(
+        verify(imageRenderService).composeForExport(org.mockito.ArgumentMatchers.argThat(
                 actual -> "/photos/original.png".equals(actual.getImagePath())), anyInt(), anyInt());
         verify(imageRenderService).writeToFile(any(BufferedImage.class), org.mockito.ArgumentMatchers.argThat(
                 actual -> "/exports/original.png".equals(actual.getOutputPath())), anyString());
@@ -120,7 +134,7 @@ final class DefaultRenderJobServiceTest {
         ImageRenderService imageRenderService = mock(ImageRenderService.class);
         CountDownLatch firstComposeStarted = new CountDownLatch(1);
         CountDownLatch releaseFirstCompose = new CountDownLatch(1);
-        when(imageRenderService.compose(any(RenderRecipe.class), anyInt(), anyInt())).thenAnswer(invocation -> {
+        when(imageRenderService.composeForExport(any(RenderRecipe.class), anyInt(), anyInt())).thenAnswer(invocation -> {
             firstComposeStarted.countDown();
             assertThat(releaseFirstCompose.await(2, TimeUnit.SECONDS)).isTrue();
             return new ImageRenderService.ComposeOutcome(
@@ -147,7 +161,43 @@ final class DefaultRenderJobServiceTest {
         assertThat(terminal.getCancelled()).isEqualTo(1);
         assertThat(terminal.getItems().get(0).getStatus()).isEqualTo("completed");
         assertThat(terminal.getItems().get(1).getError()).isEqualTo("任务已取消，未执行");
-        verify(imageRenderService, times(1)).compose(any(RenderRecipe.class), anyInt(), anyInt());
+        verify(imageRenderService, times(1)).composeForExport(any(RenderRecipe.class), anyInt(), anyInt());
+    }
+
+    @Test
+    void exportsCroppedJpegAtRequestedSizeWithTheSelectedFocalPoint(@TempDir final Path temp) throws Exception {
+        final Path source = temp.resolve("source.jpg");
+        final Path target = temp.resolve("crop.png");
+        final BufferedImage original = new BufferedImage(600, 300, BufferedImage.TYPE_INT_RGB);
+        final Graphics2D graphics = original.createGraphics();
+        try {
+            graphics.setColor(Color.RED);
+            graphics.fillRect(0, 0, 200, 300);
+            graphics.setColor(Color.GREEN);
+            graphics.fillRect(200, 0, 200, 300);
+            graphics.setColor(Color.BLUE);
+            graphics.fillRect(400, 0, 200, 300);
+        } finally {
+            graphics.dispose();
+        }
+        assertThat(ImageIO.write(original, "jpeg", source.toFile())).isTrue();
+        final RenderRecipe recipe = new RenderRecipe(source.toString(), null, null, null, false);
+        recipe.setImagePlacement(new ImagePlacement("fill", 1, 0.5, 0, 1.0));
+        final ExportSettings export = export(target.toString());
+        export.setMaxWidth(204);
+        export.setMaxHeight(204);
+        final DefaultRenderJobService service = service(new Java2DImageRenderService(
+                new ImageReader(new RawDecoder()), new ImageScaler(), new BorderComposer(new GradientPainter()),
+                new BorderStyleRenderer(), new TextRenderer(), new ImageEncoder(), new LogoRenderer()));
+
+        final RenderJobStatusResponse accepted = service.submitJob(new RenderJobRequest(recipe, export));
+
+        assertThat(waitForTerminal(service, accepted.getJobId()).getStatus()).isEqualTo("completed");
+        final BufferedImage output = ImageIO.read(target.toFile());
+        assertThat(output.getWidth()).isEqualTo(204);
+        assertThat(output.getHeight()).isEqualTo(204);
+        assertThat(new Color(output.getRGB(20, 102)).getGreen()).isGreaterThan(240);
+        assertThat(new Color(output.getRGB(180, 102)).getBlue()).isGreaterThan(240);
     }
 
     private DefaultRenderJobService service(final ImageRenderService imageRenderService) {
